@@ -12,7 +12,17 @@ class figFamInfo():
 		self.seq_accession=acc
 		self.org_id=oid
 		self.position=pos
-		
+
+##Class for storing all the figFamInfo in a particular node
+class kmerNode():
+	def __init__(self,nid):
+		self.infoList=[]
+		self.nodeID=nid
+		self.weightLabel=None
+		self.weight=None
+	def addInfo(self, info):
+		self.infoList.append(info)
+	
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
 
@@ -33,8 +43,8 @@ class figFamStorage():
 	def addKmer(self, prev, kmer_key, fig_info):
 		if not kmer_key in self.kmerLookup: 
 			#pair: array for storing the contig info and set for storing the next kmer
-			self.kmerLookup[kmer_key]=[[],set()]
-		self.kmerLookup[kmer_key][0].append(figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
+			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
+		self.kmerLookup[kmer_key][0].addInfo(figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -84,18 +94,37 @@ class figFamStorage():
 	def getOrgSummary(self, kmer):
 		result=set()
 		if kmer in self.kmerLookup:
-			for i in self.kmerLookup[kmer][0]:
+			for i in self.kmerLookup[kmer][0].infoList:
 				result.add(i.org_id)
 		return result
 	
 	def getTaxSummary(self,kmer):
 		result=set()
 		if kmer in self.kmerLookup:
-			for i in self.kmerLookup[kmer][0]:
+			for i in self.kmerLookup[kmer][0].infoList:
 				if(i.org_id in self.summaryLookup):
 					result.add(self.summaryLookup[i.org_id])
 		return result
+	#for a given node return a set of the organisms involved
+	def nodeOrgSummary(self,cnode):
+		result=set()
+		for i in cnode.infoList:
+			result.add(i.org_id)
+		return result
+	
+	def nodeTaxSummary(self,cnode):
+		result=set()
+		for i in cnode.infoList:
+			if(i.org_id in self.summaryLookup):
+				result.add(self.summaryLookup[i.org_id])
+		return result
 
+	#Get the total number of unique taxonomy labels 
+	def completeTaxSummary(self):
+		result=set()
+		for k in self.summaryLookup.keys():
+			result.add(self.summaryLookup[k])
+		return result
 
 	#expects summary taxid, tax level, and the taxpath comma seperated values
 	def parseSummary(self, summary_file):
@@ -113,7 +142,8 @@ class figFamStorage():
 # undirected weighted
 class pFamGraph(Graph):
 	def __init__(self, storage):
-		Graph.__init__(self, weighted=True)
+		#Graph.__init__(self, weighted=True)
+		Graph.__init__(self)
 		self.createGraph(storage)
 		
 						
@@ -121,18 +151,22 @@ class pFamGraph(Graph):
 	def createGraph(self, storage):
 		num_orgs=len(storage.summaryLookup.keys())
 		temp_size=len(storage.kmerLookup.keys())
+		total_tax=len(storage.completeTaxSummary())
 		for kmer in storage.kmerLookup.keys():
-			org_part1=storage.getOrgSummary(kmer)#a set of the organisms involved in this part of the graph
-			tax_ids=storage.getTaxSummary(kmer)#summarizes set of tax ids for this node 
+			cur_node=storage.kmerLookup[kmer][0]
+			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
+			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
+			cur_node.weightLabel="Percent genera"
+			cur_node.weight=len(tax_ids)/float(total_tax)
 			#add all the edges to the graph
-			for next_node in storage.kmerLookup[kmer][1]:
-				cur_orgs=storage.getOrgSummary(next_node)
+			for next_kmer in storage.kmerLookup[kmer][1]:
+				next_node=storage.kmerLookup[next_kmer][0]
+				cur_orgs=storage.nodeOrgSummary(next_node)
 				orgs_in_edge=len(cur_orgs.intersection(org_part1))
 				if(orgs_in_edge>2):
 					cur_weight=orgs_in_edge/float(num_orgs)
-					self.add_edge(kmer, next_node, weight=cur_weight)
-	def toGML(self, file_name):
-		readwrite.graphml.write_graphml(self, file_name)				
+					self.add_edge(cur_node, next_node, weight=cur_weight)
+						
 
 	def toXGMML(self, fhandle):
 		xml = DOMLight.XMLMaker()
@@ -143,11 +177,13 @@ class pFamGraph(Graph):
 		cur_ids = {}
 		for node in self.nodes_iter():
 			cur_ids[node] = cid
-			fhandle.write(str(xml.node({'id': cid, 'label': node})) + "\n")
+			fhandle.write(str(xml.node({'id': cid, 'label': node.nodeID}, '<att type="real" name="weight" value="'+str(node.weight)+'"/>')) + "\n")
 			cid += 1
 		count = 0
-		for edge in self.edges_iter():
-			fhandle.write(str(xml.edge({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight'], 'label': ""})) + "\n")
+		for edge in self.edges_weight_iter():
+			dom_edge=xml.edge()
+			dom_edge.set({'weight': edge[2]['weight'], 'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'label': ""}, '<att type="real" name="weight" value="'+str(edge[2]['weight'])+'"/>')
+			fhandle.write(str(dom_edge) + "\n")
 			#if count == 1000:
 			#	break
 			count += 1
@@ -155,16 +191,18 @@ class pFamGraph(Graph):
 																													
 
 	## Get weighted edgesD from this graph.
-	def edges(self):
+	#def edges(self):
 		# This is just the code from networkx.graph - except call our
-		return list(self.edges_iter())
+	#	return list(self.edges_iter())
 				
 
 	## Overwrite Graph edges_iter method so we get weight information too
-	def edges_iter(self, nbunch=None):
+	def edges_weight_iter(self, nbunch=None):
 		for edge in Graph.edges_iter(self, nbunch, data=True):
 			yield edge
 
+def toGML(cur_graph, file_name):
+		readwrite.graphml.write_graphml(cur_graph, file_name)	
 
 
 def main(init_args):
@@ -172,7 +210,7 @@ def main(init_args):
 	fstorage=figFamStorage(init_args[0], init_args[1], k_size)
 	pgraph=pFamGraph(fstorage)
 	csize=pgraph.order()
-	#pgraph.toGML("/home/anwarren/workspaces/py_dev/figfam_assembly/src/test_reverse.graphml")
+	toGML(pgraph, "/home/anwarren/workspaces/py_dev/figfam_assembly/src/test_reverse.gml")
 	result_handle=open("test_reverse.xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
