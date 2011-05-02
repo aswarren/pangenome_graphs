@@ -181,7 +181,7 @@ class pFamGraph(Graph):
 		cur_ids = {}
 		for cn in self.nodes_iter():
 			cur_ids[cn] = cid
-			fhandle.write(str(xml.cn({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(1)+'"/>')) + "\n")
+			fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(1)+'"/>')) + "\n")
 			cid += 1
 		count = 0
 		for edge in self.edges_weight_iter():
