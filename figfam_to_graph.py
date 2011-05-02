@@ -159,16 +159,18 @@ class pFamGraph(Graph):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
 			cur_node.weight=len(tax_ids)/float(total_tax)
+			node_added=False
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				next_node=storage.kmerLookup[next_kmer][0]
 				cur_orgs=storage.nodeOrgSummary(next_node)
 				orgs_in_edge=len(cur_orgs.intersection(org_part1))
 				if(orgs_in_edge>2):
+					node_added=True
 					cur_weight=orgs_in_edge/float(num_orgs)
 					self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
-			if(len(storage.kmerLookup[kmer][1])>0):
-				self.add_node(cur_node.nodeID, weight= cur_node.weight, ID=cur_node.nodeID)
+			if(node_added):
+				self.node[cur_node.nodeID]['weight']= cur_node.weight
 
 	def toXGMML(self, fhandle):
 		xml = DOMLight.XMLMaker()
