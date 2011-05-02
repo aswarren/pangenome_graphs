@@ -19,8 +19,6 @@ class kmerNode():
 	def __init__(self,nid):
 		self.infoList=[]
 		self.nodeID=nid
-		self.weightLabel=None
-		self.weight=None
 	def addInfo(self, info):
 		self.infoList.append(info)
 	
@@ -159,6 +157,7 @@ class pFamGraph(Graph):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
 			self.node[cur_node]['weight']= len(tax_ids)/float(total_tax)}
+			self.node[cur_node]['id']=cur_node.nodeID
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				next_node=storage.kmerLookup[next_kmer][0]
