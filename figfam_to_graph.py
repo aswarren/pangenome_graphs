@@ -19,6 +19,8 @@ class kmerNode():
 	def __init__(self,nid):
 		self.infoList=[]
 		self.nodeID=nid
+		self.weightLabel=None
+		self.weight=None
 	def addInfo(self, info):
 		self.infoList.append(info)
 	
@@ -156,8 +158,7 @@ class pFamGraph(Graph):
 			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
-			self.node[cur_node]['weight']= len(tax_ids)/float(total_tax)
-			self.node[cur_node]['id']=cur_node.nodeID
+			cur_node.weight=len(tax_ids)/float(total_tax)
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				next_node=storage.kmerLookup[next_kmer][0]
@@ -165,8 +166,9 @@ class pFamGraph(Graph):
 				orgs_in_edge=len(cur_orgs.intersection(org_part1))
 				if(orgs_in_edge>2):
 					cur_weight=orgs_in_edge/float(num_orgs)
-					self.add_edge(cur_node, next_node, weight=cur_weight)
-			
+					self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
+			if(len(storage.kmerLookup[kmer][1])>0):
+				self.add_node(cur_node.nodeID, weight= cur_node.weight, ID=cur_node.nodeID)
 
 	def toXGMML(self, fhandle):
 		xml = DOMLight.XMLMaker()
@@ -175,9 +177,9 @@ class pFamGraph(Graph):
 		""")
 		cid = 0
 		cur_ids = {}
-		for node in self.nodes_iter():
-			cur_ids[node] = cid
-			fhandle.write(str(xml.node({'id': cid, 'label': node.nodeID}, '<att type="real" name="weight" value="'+str(node.weight)+'"/>')) + "\n")
+		for cn in self.nodes_iter():
+			cur_ids[cn] = cid
+			fhandle.write(str(xml.cn({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(1)+'"/>')) + "\n")
 			cid += 1
 		count = 0
 		for edge in self.edges_weight_iter():
@@ -217,7 +219,7 @@ def main(init_args):
 	pgraph=pFamGraph(fstorage)
 	csize=pgraph.order()
 	toGML(pgraph, out_file+".graphml")
-	result_handle=open("out_file"+".xgmml", 'w')
+	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
 	
