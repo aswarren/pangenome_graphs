@@ -158,7 +158,7 @@ class pFamGraph(Graph):
 			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
-			cur_node.weight=len(tax_ids)/float(total_tax)
+			self.node[cur_node]['weight']= len(tax_ids)/float(total_tax)}
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				next_node=storage.kmerLookup[next_kmer][0]
@@ -167,7 +167,7 @@ class pFamGraph(Graph):
 				if(orgs_in_edge>2):
 					cur_weight=orgs_in_edge/float(num_orgs)
 					self.add_edge(cur_node, next_node, weight=cur_weight)
-						
+			
 
 	def toXGMML(self, fhandle):
 		xml = DOMLight.XMLMaker()
