@@ -156,7 +156,7 @@ class pFamGraph(Graph):
 			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
-			self.node[cur_node]['weight']= len(tax_ids)/float(total_tax)}
+			self.node[cur_node]['weight']= len(tax_ids)/float(total_tax)
 			self.node[cur_node]['id']=cur_node.nodeID
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
