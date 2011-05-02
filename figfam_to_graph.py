@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 import os, sys
 from networkx import Graph
 from networkx import readwrite
@@ -206,12 +207,18 @@ def toGML(cur_graph, file_name):
 
 
 def main(init_args):
+	if(len(init_args)<3):
+		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder\n")
+		sys.exit()
 	k_size=3
 	fstorage=figFamStorage(init_args[0], init_args[1], k_size)
+	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
+	out_folder=os.path.expanduser(init_args[2])
+	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage)
 	csize=pgraph.order()
-	toGML(pgraph, "/home/anwarren/workspaces/py_dev/figfam_assembly/src/test_reverse.gml")
-	result_handle=open("test_reverse.xgmml", 'w')
+	toGML(pgraph, out_file+".graphml")
+	result_handle=open("out_file"+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
 	
