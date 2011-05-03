@@ -3,7 +3,7 @@
 import os, sys
 from networkx import Graph
 from networkx import readwrite
-import DOMLight
+import DOMLight, json
 from collections import deque
 
 
@@ -159,18 +159,24 @@ class pFamGraph(Graph):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
 			cur_node.weight=len(tax_ids)/float(total_tax)
-			node_added=False
+			edge_added=False
 			#add all the edges to the graph
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				next_node=storage.kmerLookup[next_kmer][0]
-				cur_orgs=storage.nodeOrgSummary(next_node)
-				orgs_in_edge=len(cur_orgs.intersection(org_part1))
-				if(orgs_in_edge>2):
-					node_added=True
+				nxt_orgs=storage.nodeOrgSummary(next_node)
+				orgs_in_edge=len(nxt_orgs.intersection(org_part1))
+				if(orgs_in_edge>=2):
+					edge_added=True
 					cur_weight=orgs_in_edge/float(num_orgs)
 					self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
-			if(node_added):
+					#need to fix this so that KmerNode is stored instead of string
+					#work out write_graphml
+					next_node.weight=len(storage.nodeTaxSummary(next_node))/float(total_tax)
+					self.node[next_node.nodeID]['weight']=next_node.weight
+			if(edge_added):
 				self.node[cur_node.nodeID]['weight']= cur_node.weight
+
+
 
 	def toXGMML(self, fhandle):
 		xml = DOMLight.XMLMaker()
@@ -181,7 +187,7 @@ class pFamGraph(Graph):
 		cur_ids = {}
 		for cn in self.nodes_iter():
 			cur_ids[cn] = cid
-			fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(1)+'"/>')) + "\n")
+			fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(self.node[cn]['weight'])+'"/>')) + "\n")
 			cid += 1
 		count = 0
 		for edge in self.edges_weight_iter():
@@ -192,7 +198,24 @@ class pFamGraph(Graph):
 			#	break
 			count += 1
 		fhandle.write("</graph>")
-																													
+							
+	def toJSON(self, fhandle):
+		cid = 0
+		cur_ids = {}
+		fhandle.write("{\n\tnodes:[\n")
+		for cn in self.nodes_iter():
+			cur_ids[cn] = cid
+			fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
+			cid += 1
+		fhandle.write("\t],\n")
+		fhandle.write("\tlinks:[\n")
+		count = 0
+		for edge in self.edges_weight_iter():
+			fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
+			#if count == 1000:
+			#	break
+			count += 1
+		fhandle.write("\t]\n}")
 
 	## Get weighted edgesD from this graph.
 	#def edges(self):
@@ -224,7 +247,9 @@ def main(init_args):
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
-	
+	result_handle=open(out_file+".json", 'w')
+	pgraph.toJSON(result_handle)
+	result_handle.close()
 	
 if __name__ == "__main__":
 	main(sys.argv[1:])
