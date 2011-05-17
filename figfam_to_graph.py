@@ -202,20 +202,24 @@ class pFamGraph(Graph):
 	def toJSON(self, fhandle):
 		cid = 0
 		cur_ids = {}
-		fhandle.write("{\n\tnodes:[\n")
+		#fhandle.write("{\n\tnodes:[\n")
+		results={"nodes" : [], "links" :[]}
 		for cn in self.nodes_iter():
 			cur_ids[cn] = cid
-			fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
+			results["nodes"].append({'id': cid, 'label': cn, 'weight': self.node[cn]['weight']})
+			#fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
 			cid += 1
-		fhandle.write("\t],\n")
-		fhandle.write("\tlinks:[\n")
+		#fhandle.write("\t],\n")
+		#fhandle.write("\tlinks:[\n")
 		count = 0
 		for edge in self.edges_weight_iter():
-			fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
+			#fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
+			results["links"].append({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})
 			#if count == 1000:
 			#	break
 			count += 1
-		fhandle.write("\t]\n}")
+		#fhandle.write("\t]\n}")
+		fhandle.write(json.dumps(results, indent=1))
 
 	## Get weighted edgesD from this graph.
 	#def edges(self):
