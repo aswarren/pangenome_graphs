@@ -5,7 +5,14 @@ from networkx import Graph
 from networkx import readwrite
 import DOMLight, json
 from collections import deque
+##This script expects files which contain a list of consecutive protein family ID's for the replicons in an organism
+## and some kind of summary information about where the kmers come from
 
+##NCBI_TAX_ID     RANK    TAX_PATH
+##590     genus   220341,90370,59201,28901,590
+
+##NAME    NCBI_TAX_ID     ACCESSION       START_MIN
+##FIG01045527     946034  AERV01000001    507
 
 ##Class for storing information about the origin of a Kmer
 class figFamInfo():
