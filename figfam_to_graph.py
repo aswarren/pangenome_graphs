@@ -21,6 +21,7 @@ class kmerNode():
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
+	#each cell in list stores info[x]=figFamInfo()
 	def addInfo(self, info):
 		self.infoList.append(info)
 	
@@ -40,7 +41,8 @@ class figFamStorage():
 		
 
 	##This function checks whether the kmer is in the graph
-	#and links kmer graph data structure appropriately	
+	#and links kmer graph data structure appropriately
+	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
 	def addKmer(self, prev, kmer_key, fig_info):
 		if not kmer_key in self.kmerLookup: 
 			#pair: array for storing the contig info and set for storing the next kmer
