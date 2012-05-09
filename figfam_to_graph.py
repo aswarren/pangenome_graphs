@@ -108,7 +108,7 @@ class figFamStorage():
 		else:
 			self.figfamHash[fID]=[id_set]
 			matching_group=0
-		return matching_group
+		return str(fID)+':'+str(matching_group)
 					
 	##Separate the kmer back into its parts
 	def getParts(self, kmer):
@@ -235,9 +235,10 @@ class pFamGraph(Graph):
 			cur_node.weightLabel="Percent genera"
 			cur_node.weight=len(tax_ids)/float(total_tax)
 			if(len(org_part1)>=minOrg):
-				nodeSet1=storage.getParts(cur_node.nodeID)
-				self.add_path_cumul_attr(nodeSet1, orgs=org_part1)
-				for n in nodeSet1:
+				nodeList1=storage.getParts(cur_node.nodeID)
+				for idx, memID in enumerate(nodeList1): nodeList1[idx]=storage.storage.checkIdentity(memID, getHashSet(memID,cur_node.nodeID), 0.70)
+				self.add_path_cumul_attr(nodeList1, orgs=org_part1)
+				for n in nodeList1:
 					self.node[n]['weight']=cur_node.weight
 		self.update_edge_weight('orgs',divisor=float(total_tax))
 			#edge_added=False
