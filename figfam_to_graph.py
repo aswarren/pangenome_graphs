@@ -59,6 +59,8 @@ class figFamStorage():
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
 	##Create an ID for kmer
+	##In case directionality is flipped for entire genome I am flipping each kmer
+	##This shouldn't adversely affect inversions nor the overall result
 	def makeID(self, k_list):
 		id_sep="|"
 		result=None
@@ -66,6 +68,9 @@ class figFamStorage():
 			k_list.reverse()
 		result=id_sep.join(k_list)
 		return result
+	##Separate the kmer back into its parts
+	def getParts(self, kmer):
+		return(kmer.split('|'))
 			
 	def parseFigFam(self, figfam_file):
 		
@@ -151,14 +156,29 @@ class figFamStorage():
 
 # undirected weighted
 class pFamGraph(Graph):
-	def __init__(self, storage):
+	def __init__(self, storage, minOrg=2):
 		#Graph.__init__(self, weighted=True)
 		Graph.__init__(self)
-		self.createGraph(storage)
-		
+		self.createGraph(storage, minOrg)
+	def add_path_cumul_attr(self,nlist,**kwargs):
+		edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
+		for e in edges:
+			if self.has_edge(*e):
+				for k in kwargs:
+					try: self.adj[e[0]][e[1]][k]=kwargs[k] | self.adj[e[0]][e[1]][k]# union of attribute
+					except: 
+						try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
+						except: self.adj[e[0]][e[1]]=kwargs[k]
+			else: g.add_edge(e[0],e[1],kwargs)
+	def update_edge_weight(self, e_attr, divisor=1):
+		for e in self.edges():
+			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][e_attr])/float(divisor)
+			except:
+				try:self.adj[e[0]][e[1]]['weight']=0
+				except: pass
 						
 	##this function takes the storage class and constructs the graph from it
-	def createGraph(self, storage):
+	def createGraph(self, storage, minOrg):
 		num_orgs=len(storage.summaryLookup.keys())
 		temp_size=len(storage.kmerLookup.keys())
 		total_tax=len(storage.completeTaxSummary())
@@ -168,22 +188,30 @@ class pFamGraph(Graph):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
 			cur_node.weight=len(tax_ids)/float(total_tax)
-			edge_added=False
+			if(len(org_part1)>=minOrg):
+				nodeSet1=storage.getParts(cur_node.nodeID)
+				self.add_path_cumul_attr(nodeSet1, orgs=org_part1)
+				for n in nodeSet1:
+					self.node[n]['weight']=cur_node.weight
+		self.update_edge_weight('orgs',divisor=float(total_tax))
+			#edge_added=False
 			#add all the edges to the graph
-			for next_kmer in storage.kmerLookup[kmer][1]:
-				next_node=storage.kmerLookup[next_kmer][0]
-				nxt_orgs=storage.nodeOrgSummary(next_node)
-				orgs_in_edge=len(nxt_orgs.intersection(org_part1))
-				if(orgs_in_edge>=2):
-					edge_added=True
-					cur_weight=orgs_in_edge/float(num_orgs)
-					self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
+			#for next_kmer in storage.kmerLookup[kmer][1]:
+			#	next_node=storage.kmerLookup[next_kmer][0]
+			#	nxt_orgs=storage.nodeOrgSummary(next_node)
+			#	orgs_in_edge=len(nxt_orgs.intersection(org_part1))
+			#	if(orgs_in_edge>=2):
+			#		nodeSet1=storage.getParts(cur_node.nodeID)
+			#		nodeSet2=storage.getParts(next_node.nodeID)
+			#		edge_added=True
+			#		cur_weight=orgs_in_edge/float(num_orgs)
+			#		self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
 					#need to fix this so that KmerNode is stored instead of string
 					#work out write_graphml
-					next_node.weight=len(storage.nodeTaxSummary(next_node))/float(total_tax)
-					self.node[next_node.nodeID]['weight']=next_node.weight
-			if(edge_added):
-				self.node[cur_node.nodeID]['weight']= cur_node.weight
+			#		next_node.weight=len(storage.nodeTaxSummary(next_node))/float(total_tax)
+			#		self.node[next_node.nodeID]['weight']=next_node.weight
+			#if(edge_added):
+			#	self.node[cur_node.nodeID]['weight']= cur_node.weight
 
 
 
