@@ -24,13 +24,13 @@ class figFamInfo():
 ##Class for storing all the figFamInfo in a particular node
 class kmerNode():
 	def __init__(self,nid):
-		self.infoList=[]
+		self.infoList={}
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
 	#each cell in list stores info[x]=figFamInfo()
-	def addInfo(self, info):
-		self.infoList.append(info)
+	def addInfo(self, cur_key, info):
+		self.infoList[cur_key]=info
 	
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
@@ -39,6 +39,9 @@ class kmerNode():
 ##Parameters are filepaths and the size of kmer to use
 class figFamStorage():
 	def __init__(self, figfam_file, summary_file, ksize):
+		print figfam_file
+		print summary_file
+		print str(ksize)
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
 		self.summaryLookup={}
 		self.summary_level=None#taxon level at which to summarize
@@ -50,18 +53,22 @@ class figFamStorage():
 	##This function checks whether the kmer is in the graph
 	#and links kmer graph data structure appropriately
 	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
-	def addKmer(self, prev, kmer_key, fig_info):
+	def addKmer(self, prev, kmer_key, fig_list):
 		if not kmer_key in self.kmerLookup: 
 			#pair: array for storing the contig info and set for storing the next kmer
 			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
-		self.kmerLookup[kmer_key][0].addInfo(figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
+		for fig_info in fig_list:
+			self.kmerLookup[kmer_key][0].addInfo(fig_info[2], figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
 	##Create an ID for kmer
 	##In case directionality is flipped for entire genome I am flipping each kmer
 	##This shouldn't adversely affect inversions nor the overall result
-	def makeID(self, k_list):
+	def makeID(self, k_info_list):
+		k_list=[]
+		for k in k_info_list:
+			k_list.append(k[0])
 		id_sep="|"
 		result=None
 		if(k_list[0]> k_list[-1]):
@@ -90,12 +97,11 @@ class figFamStorage():
 				kmer_q=deque()#clear kmer stack because switching replicons
 				prev_kmer=None
 
-			kmer_q.append(fig_info[0])#append the figfam ID
-							
+			kmer_q.append(fig_info)#append the figfam ID
 			if(len(kmer_q)>self.ksize):
 				kmer_q.popleft()
 				kmer=self.makeID(list(kmer_q))#put IDs together to make kmer ID
-				self.addKmer(prev_kmer, kmer, fig_info)
+				self.addKmer(prev_kmer, kmer, list(kmer_q))
 			elif(len(kmer_q)== self.ksize):
 				kmer=self.makeID(list(kmer_q))#put IDs together to make kmer ID
 				self.addKmer(prev_kmer, kmer, fig_info)#right now only passing in the last figfams information
@@ -169,19 +175,24 @@ class pFamGraph(Graph):
 					except: 
 						try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
 						except: self.adj[e[0]][e[1]]=kwargs[k]
-			else: g.add_edge(e[0],e[1],kwargs)
+			else: self.add_edge(e[0],e[1],kwargs)
 	def update_edge_weight(self, e_attr, divisor=1):
 		for e in self.edges():
+			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
+			#except: pass
 			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][e_attr])/float(divisor)
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
 				except: pass
+			try: self.adj[e[0]][e[1]][e_attr]=",".join(self.adj[e[0]][e[1]][e_attr])
+			except: pass
 						
 	##this function takes the storage class and constructs the graph from it
 	def createGraph(self, storage, minOrg):
 		num_orgs=len(storage.summaryLookup.keys())
 		temp_size=len(storage.kmerLookup.keys())
 		total_tax=len(storage.completeTaxSummary())
+		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
 		for kmer in storage.kmerLookup.keys():
 			cur_node=storage.kmerLookup[kmer][0]
 			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
@@ -277,8 +288,8 @@ def main(init_args):
 	if(len(init_args)<4):
 		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size\n")
 		sys.exit()
-	#k_size=3
-	fstorage=figFamStorage(init_args[0], init_args[1], init_args[2])
+	k_size=int(init_args[3])
+	fstorage=figFamStorage(init_args[0], init_args[1], k_size)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[2])
 	out_file=os.path.join(out_folder,out_basename)
