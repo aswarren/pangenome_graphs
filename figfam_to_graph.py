@@ -31,7 +31,7 @@ class kmerNode():
 	#each cell in list stores info[x]=figFamInfo()
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
-		except: self.infoList[cur_key]=[]
+		except: self.infoList[cur_key]=[info]
 	
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
@@ -44,6 +44,7 @@ class figFamStorage():
 		print summary_file
 		print str(ksize)
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
+		self.figfamHash=[]#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
@@ -76,6 +77,39 @@ class figFamStorage():
 			k_list.reverse()
 		result=id_sep.join(k_list)
 		return result
+	##get the id_set used for degree of similarity for protein family
+	def getHashSet(self, fID, kmer):
+		result=set()
+		cur_info_list=[]
+		try:
+			cur_info_list=self.kmerLookup[kmer].infoList[fID]
+		except:
+			print "could not find "+fID+" in "+kmer
+			pass
+		for c in cur_info_list:
+			result.add(c.position)
+		return result
+				
+	##check to see if the figfam should be considered the same or not
+	def checkIdentity(self, fID, id_set, threshold):
+		matching_group=-1
+		if fID in self.figfamHash:
+			for idx, uid_set in enumerate(self.figfamHash[fID]):
+				bigset= id_set if len(id_set) > len(uid_set) else uid_set
+				score=len(id_set.intersection(uid_set))/float(len(bigset))
+				if(score>=threshold):
+					matching_group=idx
+					#store the bigest id_set as the identifying one for this figfam
+					if bigset != uid_set: self.figfamHash[fID][idx]=bigset.copy()
+					break
+			if matching_group == -1:
+				self.figfamHash[fID].append(id_set)
+				matching_group = len(self.figFamHash[fID])-1
+		else:
+			self.figfamHash[fID]=[id_set]
+			matching_group=0
+		return matching_group
+					
 	##Separate the kmer back into its parts
 	def getParts(self, kmer):
 		return(kmer.split('|'))
