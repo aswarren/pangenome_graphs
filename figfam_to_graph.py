@@ -30,7 +30,8 @@ class kmerNode():
 		self.weight=None
 	#each cell in list stores info[x]=figFamInfo()
 	def addInfo(self, cur_key, info):
-		self.infoList[cur_key]=info
+		try: self.infoList[cur_key].append(info)
+		except: self.infoList[cur_key]=[]
 	
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
