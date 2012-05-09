@@ -44,7 +44,7 @@ class figFamStorage():
 		print summary_file
 		print str(ksize)
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
-		self.figfamHash=[]#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
+		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
@@ -60,7 +60,8 @@ class figFamStorage():
 			#pair: array for storing the contig info and set for storing the next kmer
 			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
 		for fig_info in fig_list:
-			self.kmerLookup[kmer_key][0].addInfo(fig_info[2], figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
+			#print fig_info
+			self.kmerLookup[kmer_key][0].addInfo(fig_info[0], figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -82,9 +83,9 @@ class figFamStorage():
 		result=set()
 		cur_info_list=[]
 		try:
-			cur_info_list=self.kmerLookup[kmer].infoList[fID]
+			cur_info_list=self.kmerLookup[kmer][0].infoList[fID]
 		except:
-			print "could not find "+fID+" in "+kmer
+			print "could not find "+fID+" in "+self.kmerLookup[kmer][0].infoList.keys()
 			pass
 		for c in cur_info_list:
 			result.add(c.position)
@@ -104,7 +105,7 @@ class figFamStorage():
 					break
 			if matching_group == -1:
 				self.figfamHash[fID].append(id_set)
-				matching_group = len(self.figFamHash[fID])-1
+				matching_group = len(self.figfamHash[fID])-1
 		else:
 			self.figfamHash[fID]=[id_set]
 			matching_group=0
@@ -139,7 +140,7 @@ class figFamStorage():
 				self.addKmer(prev_kmer, kmer, list(kmer_q))
 			elif(len(kmer_q)== self.ksize):
 				kmer=self.makeID(list(kmer_q))#put IDs together to make kmer ID
-				self.addKmer(prev_kmer, kmer, fig_info)#right now only passing in the last figfams information
+				self.addKmer(prev_kmer, kmer, list(kmer_q))#right now only passing in the last figfams information
 			else:#kmer size is less than ksize
 				kmer=None
 			prev_seq=cur_seq # record which replicon we are on
@@ -150,27 +151,28 @@ class figFamStorage():
 	def getOrgSummary(self, kmer):
 		result=set()
 		if kmer in self.kmerLookup:
-			for i in self.kmerLookup[kmer][0].infoList:
+			for i in self.kmerLookup[kmer][0].infoList.values()[0]:
 				result.add(i.org_id)
 		return result
 	
 	def getTaxSummary(self,kmer):
 		result=set()
 		if kmer in self.kmerLookup:
-			for i in self.kmerLookup[kmer][0].infoList:
+			for i in self.kmerLookup[kmer][0].infoList.values()[0]:
 				if(i.org_id in self.summaryLookup):
 					result.add(self.summaryLookup[i.org_id])
 		return result
 	#for a given node return a set of the organisms involved
 	def nodeOrgSummary(self,cnode):
 		result=set()
-		for i in cnode.infoList:
+		#print cnode.infoList
+		for i in cnode.infoList.values()[0]:
 			result.add(i.org_id)
 		return result
 	
 	def nodeTaxSummary(self,cnode):
 		result=set()
-		for i in cnode.infoList:
+		for i in cnode.infoList.values()[0]:
 			if(i.org_id in self.summaryLookup):
 				result.add(self.summaryLookup[i.org_id])
 		return result
@@ -231,14 +233,16 @@ class pFamGraph(Graph):
 		for kmer in storage.kmerLookup.keys():
 			cur_node=storage.kmerLookup[kmer][0]
 			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
+			#print org_part1
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			cur_node.weightLabel="Percent genera"
 			cur_node.weight=len(tax_ids)/float(total_tax)
 			if(len(org_part1)>=minOrg):
 				nodeList1=storage.getParts(cur_node.nodeID)
-				for idx, memID in enumerate(nodeList1): nodeList1[idx]=storage.storage.checkIdentity(memID, getHashSet(memID,cur_node.nodeID), 0.70)
-				self.add_path_cumul_attr(nodeList1, orgs=org_part1)
-				for n in nodeList1:
+				nodeList2=[]
+				for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), 0.25))
+				self.add_path_cumul_attr(nodeList2, orgs=org_part1)
+				for n in nodeList2:
 					self.node[n]['weight']=cur_node.weight
 		self.update_edge_weight('orgs',divisor=float(total_tax))
 			#edge_added=False
