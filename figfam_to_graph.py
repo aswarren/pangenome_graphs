@@ -96,18 +96,18 @@ class figFamStorage():
 		matching_group=-1
 		if fID in self.figfamHash:
 			for idx, uid_set in enumerate(self.figfamHash[fID]):
-				bigset= id_set if len(id_set) > len(uid_set) else uid_set
-				score=len(id_set.intersection(uid_set))/float(len(bigset))
+				#bigset= id_set if len(id_set) > len(uid_set) else uid_set
+				score=len(id_set.intersection(uid_set))
 				if(score>=threshold):
 					matching_group=idx
 					#store the bigest id_set as the identifying one for this figfam
-					if bigset != uid_set: self.figfamHash[fID][idx]=bigset.copy()
+					self.figfamHash[fID][idx]=uid_set.union(id_set)
 					break
 			if matching_group == -1:
-				self.figfamHash[fID].append(id_set)
+				self.figfamHash[fID].append(id_set.copy())
 				matching_group = len(self.figfamHash[fID])-1
 		else:
-			self.figfamHash[fID]=[id_set]
+			self.figfamHash[fID]=[id_set.copy()]
 			matching_group=0
 		return str(fID)+':'+str(matching_group)
 					
@@ -240,7 +240,7 @@ class pFamGraph(Graph):
 			if(len(org_part1)>=minOrg):
 				nodeList1=storage.getParts(cur_node.nodeID)
 				nodeList2=[]
-				for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), 0.25))
+				for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), minOrg))
 				self.add_path_cumul_attr(nodeList2, orgs=org_part1)
 				for n in nodeList2:
 					self.node[n]['weight']=cur_node.weight
