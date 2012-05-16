@@ -223,7 +223,21 @@ class pFamGraph(Graph):
 				except: pass
 			try: self.adj[e[0]][e[1]][e_attr]=",".join(self.adj[e[0]][e[1]][e_attr])
 			except: pass
-						
+	def kmer_to_node(self, storage, kmer, total_tax, minOrg):
+		cur_node=storage.kmerLookup[kmer][0]
+		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
+		#print org_part1
+		tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
+		cur_node.weightLabel="Percent genera"
+		cur_node.weight=len(tax_ids)/float(total_tax)
+		if(len(org_part1)>=minOrg):
+			nodeList1=storage.getParts(cur_node.nodeID)
+			nodeList2=[]
+			for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), minOrg))
+			self.add_path_cumul_attr(nodeList2, orgs=org_part1)
+			for n in nodeList2:
+				self.node[n]['weight']=cur_node.weight
+			
 	##this function takes the storage class and constructs the graph from it
 	def createGraph(self, storage, minOrg):
 		num_orgs=len(storage.summaryLookup.keys())
@@ -231,19 +245,9 @@ class pFamGraph(Graph):
 		total_tax=len(storage.completeTaxSummary())
 		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
 		for kmer in storage.kmerLookup.keys():
-			cur_node=storage.kmerLookup[kmer][0]
-			org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
-			#print org_part1
-			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
-			cur_node.weightLabel="Percent genera"
-			cur_node.weight=len(tax_ids)/float(total_tax)
-			if(len(org_part1)>=minOrg):
-				nodeList1=storage.getParts(cur_node.nodeID)
-				nodeList2=[]
-				for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), minOrg))
-				self.add_path_cumul_attr(nodeList2, orgs=org_part1)
-				for n in nodeList2:
-					self.node[n]['weight']=cur_node.weight
+			self.kmer_to_node(storage,kmer,total_tax,minOrg)
+			for next_kmer in storage.kmerLookup[kmer][1]:
+				self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
 		self.update_edge_weight('orgs',divisor=float(total_tax))
 			#edge_added=False
 			#add all the edges to the graph
