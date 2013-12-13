@@ -24,7 +24,7 @@ class figFamInfo():
 ##Class for storing all the figFamInfo in a particular node
 class kmerNode():
 	def __init__(self,nid):
-		self.infoList={}
+		self.infoList={}#stores information about location of the figfams that make up kmer as figFamInfo objects infoList[figfam ID] = figFamInfo()
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
@@ -46,6 +46,7 @@ class figFamStorage():
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
+		self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
 		self.parseFigFam(figfam_file)
@@ -79,6 +80,8 @@ class figFamStorage():
 		result=id_sep.join(k_list)
 		return result
 	##get the id_set used for degree of similarity for protein family
+	#Parameters fID-figfamID; kmer-the kmer ID
+	#Return a hash value (set) of all the positions of a figfam
 	def getHashSet(self, fID, kmer):
 		result=set()
 		cur_info_list=[]
@@ -88,13 +91,51 @@ class figFamStorage():
 			print "could not find "+fID+" in "+self.kmerLookup[kmer][0].infoList.keys()
 			pass
 		for c in cur_info_list:
-			result.add(c.position)
+			result.add((c.seq_accession,c.position))
 		return result
+		
+		
+	#checks to see if the ID set that has changed now overlaps with any of the other sets
+	#function returns the number to adjust original idx by to account for emptied sets
+	def checkChainReaction(self, idx, fID, threshold, start=-1):
+		num_adjust=0
+		adjustment=True
+		id_set_list=self.figfamHash[fID]
+		while adjustment:
+			found=False
+			for idx2, test_set in enumerate(id_set_list):
+				if idx2 != idx and idx2 > start: #id_set_list[0:idx]+id_set_list[idx+1:]:
+					score=len(id_set_list[idx].intersection(test_set))
+					if(score>=threshold):
+						if fID == "FIG00003435":
+							pass
+						id_set_list[idx]=id_set_list[idx].union(test_set)
+						id_set_list[idx2]=set([])
+						found=True
+						if idx2 < idx:
+							num_adjust=num_adjust+1
+						start=idx2
+			adjustment= found
+		#remove empty sets
+		self.figfamHash[fID]= [y for y in id_set_list if len(y)]				
+		return (idx-num_adjust)
 				
 	##check to see if the figfam should be considered the same or not
-	def checkIdentity(self, fID, id_set, threshold):
+	#Parameters fID-figfam ID, id_set-
+	#The graph is composed of figfams that represent many positions in many genomes
+	#when expanding out from kmers to figfams the figfams need to be checked to see if they represent
+	#equivalent positions
+	#there is potentially a flaw if  the same figfam occurs at the same base in two different genomes
+	def checkIdentity(self, fID, kmer, threshold):
+		id_set = self.getHashSet(fID,kmer)				
 		matching_group=-1
+		#check if the figfam is in storage
 		if fID in self.figfamHash:
+			#iterate through all the sets of coordinates for the figfam
+			#to find if this figfam-node has already been encountered
+			#if it has make sure to update the positions with the union
+			#if it hasn't add these positions to the list.
+			#each node (consists of a figfam that can occur in multiple organisms)
 			for idx, uid_set in enumerate(self.figfamHash[fID]):
 				#bigset= id_set if len(id_set) > len(uid_set) else uid_set
 				score=len(id_set.intersection(uid_set))
@@ -104,12 +145,19 @@ class figFamStorage():
 					self.figfamHash[fID][idx]=uid_set.union(id_set)
 					break
 			if matching_group == -1:
+			
 				self.figfamHash[fID].append(id_set.copy())
 				matching_group = len(self.figfamHash[fID])-1
+			else:
+				matching_group=self.checkChainReaction(matching_group, fID, threshold)
 		else:
+			
 			self.figfamHash[fID]=[id_set.copy()]
 			matching_group=0
-		return str(fID)+':'+str(matching_group)
+		#MODIFY Some kindof kmer data structure to keep track of which figfams are which version of themselves.
+		for loc in self.figfamHash[fID][matching_group]:
+			self.locationHash[loc]=(str(fID),str(matching_group))
+		return 0
 					
 	##Separate the kmer back into its parts
 	def getParts(self, kmer):
@@ -223,17 +271,38 @@ class pFamGraph(Graph):
 				except: pass
 			try: self.adj[e[0]][e[1]][e_attr]=",".join(self.adj[e[0]][e[1]][e_attr])
 			except: pass
+
+	## create a graph node from a kmer
+	#Expands Each kmer to FIGFAM nodes ensuring that the kmer represents a certain number of unique positions/organisms before expanding
+	#parameters: storage- the figfam storage used to look things up
+	#kmer - the kmer being processed; total_tax- the total number of taxonomy groups represented in the graph; minOrg- the number of positions that need to be represented to qualify as a part of the summary graph
 	def kmer_to_node(self, storage, kmer, total_tax, minOrg):
 		cur_node=storage.kmerLookup[kmer][0]
 		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
 		#print org_part1
-		tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
-		cur_node.weightLabel="Percent genera"
-		cur_node.weight=len(tax_ids)/float(total_tax)
+
 		if(len(org_part1)>=minOrg):
+			#get a list of individual figfams that make up the kmer
 			nodeList1=storage.getParts(cur_node.nodeID)
 			nodeList2=[]
-			for idx, memID in enumerate(nodeList1): nodeList2.append(storage.checkIdentity(memID, storage.getHashSet(memID,cur_node.nodeID), minOrg))
+			#for each figfam get list of locations and call checkIdentity
+			for memID in nodeList1: storage.checkIdentity(memID, cur_node.nodeID,threshold=1)
+				
+	def kmer_to_node2(self, storage, kmer, total_tax, minOrg):
+		cur_node=storage.kmerLookup[kmer][0]
+		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
+		if(len(org_part1)>=minOrg):
+			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
+			cur_node.weightLabel="Percent genera"
+			cur_node.weight=len(tax_ids)/float(total_tax)
+			nodeList1=storage.getParts(cur_node.nodeID)
+			nodeList2=[]
+			for memID in nodeList1:
+				target_set=storage.getHashSet(memID,cur_node.nodeID)
+				fam_version=storage.locationHash[list(target_set)[0]]
+				nodeList2.append(fam_version[0]+':'+fam_version[1])
+				#if fam_version[0] =="FIG00229272" and fam_version[1]=="0":
+				#	pass
 			self.add_path_cumul_attr(nodeList2, orgs=org_part1)
 			for n in nodeList2:
 				self.node[n]['weight']=cur_node.weight
@@ -246,8 +315,11 @@ class pFamGraph(Graph):
 		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node(storage,kmer,total_tax,minOrg)
+			#for some reason this second loop is necessary to explode certain kmers. see if fID =="FIG00229272": Brucella
 			for next_kmer in storage.kmerLookup[kmer][1]:
 				self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
+		for kmer in storage.kmerLookup.keys():
+			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		self.update_edge_weight('orgs',divisor=float(total_tax))
 			#edge_added=False
 			#add all the edges to the graph
