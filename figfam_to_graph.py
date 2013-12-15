@@ -101,24 +101,26 @@ class figFamStorage():
 		num_adjust=0
 		adjustment=True
 		id_set_list=self.figfamHash[fID]
+		sets_merged=False #inefficient. should figure out which sets are merged and only updated those
 		while adjustment:
 			found=False
 			for idx2, test_set in enumerate(id_set_list):
 				if idx2 != idx and idx2 > start: #id_set_list[0:idx]+id_set_list[idx+1:]:
 					score=len(id_set_list[idx].intersection(test_set))
 					if(score>=threshold):
-						if fID == "FIG00003435":
-							pass
+						#if fID == "FIG00000231":
+						#	pass
 						id_set_list[idx]=id_set_list[idx].union(test_set)
 						id_set_list[idx2]=set([])
 						found=True
+						sets_merged=True
 						if idx2 < idx:
 							num_adjust=num_adjust+1
 						start=idx2
 			adjustment= found
 		#remove empty sets
 		self.figfamHash[fID]= [y for y in id_set_list if len(y)]				
-		return (idx-num_adjust)
+		return (idx-num_adjust, sets_merged)
 				
 	##check to see if the figfam should be considered the same or not
 	#Parameters fID-figfam ID, id_set-
@@ -129,6 +131,7 @@ class figFamStorage():
 	def checkIdentity(self, fID, kmer, threshold):
 		id_set = self.getHashSet(fID,kmer)				
 		matching_group=-1
+		change_groups=False#keeps track of which groups need to be updated
 		#check if the figfam is in storage
 		if fID in self.figfamHash:
 			#iterate through all the sets of coordinates for the figfam
@@ -136,6 +139,7 @@ class figFamStorage():
 			#if it has make sure to update the positions with the union
 			#if it hasn't add these positions to the list.
 			#each node (consists of a figfam that can occur in multiple organisms)
+			
 			for idx, uid_set in enumerate(self.figfamHash[fID]):
 				#bigset= id_set if len(id_set) > len(uid_set) else uid_set
 				score=len(id_set.intersection(uid_set))
@@ -149,14 +153,19 @@ class figFamStorage():
 				self.figfamHash[fID].append(id_set.copy())
 				matching_group = len(self.figfamHash[fID])-1
 			else:
-				matching_group=self.checkChainReaction(matching_group, fID, threshold)
+				matching_group, change_groups=self.checkChainReaction(matching_group, fID, threshold)
 		else:
 			
 			self.figfamHash[fID]=[id_set.copy()]
 			matching_group=0
 		#MODIFY Some kindof kmer data structure to keep track of which figfams are which version of themselves.
-		for loc in self.figfamHash[fID][matching_group]:
-			self.locationHash[loc]=(str(fID),str(matching_group))
+		if not change_groups:
+			for loc in self.figfamHash[fID][matching_group]:
+				self.locationHash[loc]=(str(fID),str(matching_group))
+		else:
+			for idx_grp, m_set in enumerate(self.figfamHash[fID]):
+				for loc in m_set:
+					self.locationHash[loc]=(str(fID),str(idx_grp))
 		return 0
 					
 	##Separate the kmer back into its parts
@@ -316,11 +325,19 @@ class pFamGraph(Graph):
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node(storage,kmer,total_tax,minOrg)
 			#for some reason this second loop is necessary to explode certain kmers. see if fID =="FIG00229272": Brucella
-			for next_kmer in storage.kmerLookup[kmer][1]:
-				self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
+			#for next_kmer in storage.kmerLookup[kmer][1]:
+			#	self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		self.update_edge_weight('orgs',divisor=float(total_tax))
+		node_handle=open('single_loop_node_list.txt','w')
+		for n in self.nodes_iter():
+			node_handle.write(n+"\n")
+		node_handle.close()
+		edge_handle=open('single_loop_edge_list.txt','w')
+		for e in self.edges_iter():
+			edge_handle.write(str(e)+"\n")
+		edge_handle.close()
 			#edge_added=False
 			#add all the edges to the graph
 			#for next_kmer in storage.kmerLookup[kmer][1]:
