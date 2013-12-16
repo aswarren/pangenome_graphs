@@ -15,20 +15,20 @@ from collections import deque
 ##FIG01045527     946034  AERV01000001    507
 
 ##Class for storing information about the origin of a Kmer
-class figFamInfo():
+class geneInfo():
 	def __init__(self, acc, oid, pos):
 		self.seq_accession=acc
 		self.org_id=oid
 		self.position=pos
 
-##Class for storing all the figFamInfo in a particular node
+##Class for storing all the geneInfo in a particular node
 class kmerNode():
 	def __init__(self,nid):
-		self.infoList={}#stores information about location of the figfams that make up kmer as figFamInfo objects infoList[figfam ID] = figFamInfo()
+		self.infoList={}#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo()
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
-	#each cell in list stores info[x]=figFamInfo()
+	#each cell in list stores info[x]=geneInfo()
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
 		except: self.infoList[cur_key]=[info]
@@ -62,7 +62,7 @@ class figFamStorage():
 			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
 		for fig_info in fig_list:
 			#print fig_info
-			self.kmerLookup[kmer_key][0].addInfo(fig_info[0], figFamInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
+			self.kmerLookup[kmer_key][0].addInfo(fig_info[0], geneInfo(fig_info[2], fig_info[1], fig_info[3]))#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -211,7 +211,9 @@ class figFamStorage():
 			for i in self.kmerLookup[kmer][0].infoList.values()[0]:
 				result.add(i.org_id)
 		return result
-	
+		
+	#for all the organisms of the kmer return a set of IDs at the taxonomy level
+	#e.g. all the genus IDs stored in summaryLookup under various organism IDs
 	def getTaxSummary(self,kmer):
 		result=set()
 		if kmer in self.kmerLookup:
@@ -330,14 +332,14 @@ class pFamGraph(Graph):
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		self.update_edge_weight('orgs',divisor=float(total_tax))
-		node_handle=open('single_loop_node_list.txt','w')
-		for n in self.nodes_iter():
-			node_handle.write(n+"\n")
-		node_handle.close()
-		edge_handle=open('single_loop_edge_list.txt','w')
-		for e in self.edges_iter():
-			edge_handle.write(str(e)+"\n")
-		edge_handle.close()
+		#node_handle=open('single_loop_node_list.txt','w')
+		#for n in self.nodes_iter():
+		#	node_handle.write(n+"\n")
+		#node_handle.close()
+		#edge_handle=open('single_loop_edge_list.txt','w')
+		#for e in self.edges_iter():
+		#	edge_handle.write(str(e)+"\n")
+		#edge_handle.close()
 			#edge_added=False
 			#add all the edges to the graph
 			#for next_kmer in storage.kmerLookup[kmer][1]:
