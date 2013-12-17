@@ -45,6 +45,15 @@ class famVersion():
 		self.organisms=set()
 		self.tax_summary=set()
 		self.replicons=set()
+		self.locations=set()
+	#returns of summary items
+	def get_summary(self):
+		for i in self.instances:
+			self.replicons.add(i.replicon_id)
+			self.organisms.add(i.org_id)
+			self.locations.add(':'.join(i.getLocation()))
+		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations}
+		return result
 		
 		
 #storing information about each protein family
@@ -331,13 +340,13 @@ class pFamGraph(Graph):
 	
 	#calculate the node weight and change the set attributes to string
 	#so that they can be written by graphml writer
-	def update_node_attr_final(self, weight_attr, divisor=1, attr_list=[]):
+	def update_node_attr_final(self, weight_attr, divisor=1):
 		for n in self.nodes():
 			try: self.node[n]['weight']=len(self.node[n][weight_attr])/float(divisor)
 			except: pass
-			for a in attr_list:
-				try: self.node[n][a]= ','.join(self.node[n][a])
-				except: pass
+			for a in self.node[n]:
+				if type(self.node[n][a])==set:
+					self.node[n][a] = ','.join(self.node[n][a])
 
 	## create a graph node from a kmer
 	#Expands Each kmer to FIGFAM nodes ensuring that the kmer represents a certain number of unique positions/organisms before expanding
@@ -361,15 +370,21 @@ class pFamGraph(Graph):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
 			nodeList1=storage.getParts(cur_node.nodeID)
 			nodeList2=[]
+			summaryList=[]
 			for memID in nodeList1:
 				target_set=storage.getHashSet(memID,cur_node.nodeID)
 				fam_version=storage.locationHash[list(target_set)[0]]
 				nodeList2.append(fam_version[0]+':'+fam_version[1])
+				summary_info=storage.figfamHash[fam_version[0]].versions[int(fam_version[1])].get_summary()
+				summary_info['tax_summary']=tax_ids
+				summaryList.append(summary_info)
 				#if fam_version[0] =="FIG00229272" and fam_version[1]=="0":
 				#	pass
-			self.add_path_cumul_attr(nodeList2, orgs=org_part1)			
-			for n in nodeList2:
-				self.update_node_cumul_attr(n, tax_summary=tax_ids)
+			self.add_path_cumul_attr(nodeList2, orgs=org_part1) #this also creats nodes in the graph
+			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
+				self.update_node_cumul_attr(n, **summaryList[idx])
+				
+				
 				
 	##this function takes the storage class and constructs the graph from it
 	def createGraph(self, storage, minOrg):
@@ -385,7 +400,7 @@ class pFamGraph(Graph):
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		self.update_edge_weight('orgs',divisor=float(num_orgs))
-		self.update_node_attr_final('tax_summary', divisor=float(total_tax), attr_list=['tax_summary'])
+		self.update_node_attr_final('tax_summary', divisor=float(total_tax))
 		node_handle=open('new_loop_node_list.txt','w')
 		for n in self.nodes_iter():
 			node_handle.write(n+"\n")
