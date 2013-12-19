@@ -16,10 +16,11 @@ from collections import deque
 
 ##Class for storing information about the origin of a Kmer
 class geneInfo():
-	def __init__(self, acc, oid, pos):
+	def __init__(self, acc, oid, pos, func):
 		self.replicon_id=acc
 		self.org_id=oid
 		self.position=pos
+		self.function=func
 	def getLocation(self):
 		return (self.replicon_id, self.position)
 
@@ -46,13 +47,15 @@ class famVersion():
 		self.tax_summary=set()
 		self.replicons=set()
 		self.locations=set()
+		self.functions=set()
 	#returns of summary items
 	def get_summary(self):
 		for i in self.instances:
 			self.replicons.add(i.replicon_id)
 			self.organisms.add(i.org_id)
 			self.locations.add(':'.join(i.getLocation()))
-		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations}
+			self.functions.add(i.function)
+		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations, "functions":self.functions}
 		return result
 		
 		
@@ -152,15 +155,15 @@ class figFamStorage():
 			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
 		for fig_info in fig_list:
 			#print fig_info
-			replicon_id, organism_id, position= fig_info[2], fig_info[1], fig_info[3]
+			fID, replicon_id, organism_id, position, fam_function= fig_info[0], fig_info[3], fig_info[1], fig_info[4], fig_info[5]
 			gene_lookup=(replicon_id, position)
 			#key the gene lookup by replicon_id and position
 			if not gene_lookup in self.geneHash:
-				target=geneInfo(replicon_id, organism_id, position)
+				target=geneInfo(replicon_id, organism_id, position, fam_function)
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			self.kmerLookup[kmer_key][0].addInfo(fig_info[0], target)#add information about kmer location
+			self.kmerLookup[kmer_key][0].addInfo(fID, target)#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -224,7 +227,7 @@ class figFamStorage():
 		
 		num_fam=0
 		inHandle=open(figfam_file, 'r')
-		header=inHandle.readline()
+		#header=inHandle.readline()
 		kmer_q=deque()
 		prev_seq=""
 		cur_seq=""
@@ -233,7 +236,7 @@ class figFamStorage():
 		for line in inHandle:
 			num_fam+=1
 			fig_info=line.strip().split("\t")
-			cur_seq=fig_info[2]
+			cur_seq=fig_info[3]
 			if(prev_seq != cur_seq and num_fam>1):
 				kmer_q=deque()#clear kmer stack because switching replicons
 				prev_kmer=None
@@ -294,13 +297,13 @@ class figFamStorage():
 	#expects summary taxid, tax level, and the taxpath comma seperated values
 	def parseSummary(self, summary_file):
 		inHandle=open(summary_file, 'r')
-		header=inHandle.readline()
+		#header=inHandle.readline()
 		for line in inHandle:
 			summary_info=line.strip().split("\t")
 			if(self.summary_level==None):
-				self.summary_level=summary_info[1]
-			summary_id=summary_info[0]
-			ref_id=sumamry=summary_info[2].split(',')[0]
+				self.summary_level=6
+			ref_id=summary_info[1]
+			summary_id=summary_info[-1].split(',')[self.summary_level]
 			self.summaryLookup[ref_id]=summary_id
 		inHandle.close()
 
