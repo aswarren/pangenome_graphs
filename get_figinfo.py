@@ -86,7 +86,7 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
 
         for f in feature_results:
             try:
-                out_handle.write("\t".join([f["figfam_id"],str(f["ncbi_tax_id"]),str(f["sequence_info_id"]),str(f["start_max"]),f["figfam_product"]])+"\n")
+                out_handle.write("\t".join([f["figfam_id"],str(f["gid"]),str(f["ncbi_tax_id"]),str(f["sequence_info_id"]),str(f["start_max"]),f["figfam_product"]])+"\n")
             except:
                 print "couldn't write line "+str(f)
             
