@@ -70,7 +70,7 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
     gids=set()
     for r in taxonomy_results:
         try:
-            out_handle.write("\t".join([r['genome_name'],r['genome_info_id'],r['ncbi_tax_id'],','.join(r['taxon_lineage_ids'])])+"\n")
+            out_handle.write("\t".join([r['genome_name'],str(r['genome_info_id']),str(r['ncbi_tax_id']),','.join(r['taxon_lineage_ids'])])+"\n")
         except:
             print "couldn't write line "+str(r)
         if 'genome_info_id' in r:
@@ -78,15 +78,17 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
     out_handle.close()
     out_handle=open(target_figfam_path,'w')
     
-    gidQuery=gidQuery+"+OR+".join(gids)
-    currentQuery=feature_url+"q=("+gidQuery+")"+"&"+"sort=sequence_info_id+asc,start_max+asc"+"&"+format_string
-    feature_results=get_solr_result(currentQuery)
+    for g in gids:
+        gidQuery="gid:"+g
+        currentQuery=feature_url+"q="+gidQuery+"&"+"sort=sequence_info_id+asc,start_max+asc"+"&"+format_string
+        print currentQuery
+        feature_results=get_solr_result(currentQuery)
 
-    for f in feature_results:
-        try:
-            out_handle.write("\t".join([f["figfam_id"],f["ncbi_tax_id"],f["sequence_info_id"],f["start_max"]])+"\n")
-        except:
-            print "couldn't write line "+str(f)
+        for f in feature_results:
+            try:
+                out_handle.write("\t".join([f["figfam_id"],str(f["ncbi_tax_id"]),str(f["sequence_info_id"]),str(f["start_max"]),f["figfam_product"]])+"\n")
+            except:
+                print "couldn't write line "+str(f)
             
 
 def main(init_args):
