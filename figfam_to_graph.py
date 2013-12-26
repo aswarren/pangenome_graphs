@@ -5,6 +5,7 @@ from networkx import Graph
 from networkx import readwrite
 import DOMLight, json
 from collections import deque
+from collections import OrderedDict
 ##This script expects files which contain a list of consecutive protein family ID's for the replicons in an organism
 ## and some kind of summary information about where the kmers come from
 
@@ -134,7 +135,7 @@ class figFamStorage():
 		print figfam_file
 		print summary_file
 		print str(ksize)
-		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
+		self.kmerLookup=OrderedDict()#Ordered so that results are reproducible. stores array for contig info and set for pointing to the next kmer
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
 		self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
