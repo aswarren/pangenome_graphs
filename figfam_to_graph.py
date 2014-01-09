@@ -235,6 +235,8 @@ class figFamStorage():
 		prev_kmer=None
 		#loop through figfams to create kmers
 		for line in inHandle:
+			if line.startswith('#'):
+				continue
 			num_fam+=1
 			fig_info=line.strip().split("\t")
 			cur_seq=fig_info[3]
@@ -300,6 +302,8 @@ class figFamStorage():
 		inHandle=open(summary_file, 'r')
 		#header=inHandle.readline()
 		for line in inHandle:
+			if line.startswith('#'):
+				continue
 			summary_info=line.strip().split("\t")
 			if(self.summary_level==None):
 				self.summary_level=6
