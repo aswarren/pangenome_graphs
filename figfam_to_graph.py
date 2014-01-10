@@ -390,7 +390,12 @@ class pFamGraph(Graph):
 				#	pass
 			self.add_path_cumul_attr(nodeList2, orgs=org_part1) #this also creats nodes in the graph
 			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
-				self.update_node_cumul_attr(n, **summaryList[idx])
+				attr_list={}
+				#HACK exclude replicons from list since locations already have them
+				for k in summaryList[idx].keys(): 
+					if k != 'replicons':
+						attr_list[k]=summaryList[idx][k]
+				self.update_node_cumul_attr(n, **attr_list)
 				
 				
 				
