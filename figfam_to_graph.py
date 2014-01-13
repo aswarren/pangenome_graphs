@@ -15,6 +15,11 @@ from collections import OrderedDict
 ##NAME    NCBI_TAX_ID     ACCESSION       START_MIN
 ##FIG01045527     946034  AERV01000001    507
 
+
+def warning(*objs):
+	for o in objs:
+		print >> sys.stderr, o
+
 ##Class for storing information about the origin of a Kmer
 class geneInfo():
 	def __init__(self, acc, oid, pos, func):
@@ -72,6 +77,7 @@ class famInfo():
 	#checks to see if the ID set that has changed now overlaps with any of the other sets
 	#function returns the number to adjust original idx by to account for emptied sets
 	def checkChainReaction(self, idx, fID, threshold, start=-1):
+		debug=False
 		num_adjust=0
 		adjustment=True
 		sets_merged=False #inefficient. should figure out which sets are merged and only updated those
@@ -79,10 +85,14 @@ class famInfo():
 			found=False
 			for idx2, v in enumerate(self.versions):
 				if idx2 != idx and idx2 > start: #id_set_list[0:idx]+id_set_list[idx+1:]:
-					score=len(self.versions[idx].instances.intersection(v.instances))
+					intersect=self.versions[idx].instances.intersection(v.instances)
+					score=len(intersect)
 					if(score>=threshold):
-						#if fID == "FIG00000231":
-						#	pass
+						if debug and fID == "FIG00638284":
+							warning("Merging groups for "+fID)
+							warning("Intersection", [':'.join(x.getLocation()) for x in intersect])
+							warning("Group1", [':'.join(x.getLocation()) for x in self.versions[idx].instances])
+							warning("Group2",[':'.join(x.getLocation()) for x in v.instances])
 						self.versions[idx].instances=self.versions[idx].instances.union(v.instances)
 						v.instances=set([])
 						found=True
@@ -131,10 +141,11 @@ class famInfo():
 ##This class is for parsing figfam and summary file (table of taxonomy information) and storing it in a dictionary structure
 ##Parameters are filepaths and the size of kmer to use
 class figFamStorage():
-	def __init__(self, figfam_file, summary_file, ksize):
+	def __init__(self, figfam_file, summary_file, ksize, ignore_fams=set([])):
 		print figfam_file
 		print summary_file
 		print str(ksize)
+		self.ignore_fams=ignore_fams
 		self.kmerLookup=OrderedDict()#Ordered so that results are reproducible. stores array for contig info and set for pointing to the next kmer
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
@@ -142,7 +153,7 @@ class figFamStorage():
 		self.geneHash={} #storing information about the individual genes
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
-		self.parseFigFam(figfam_file)
+		self.parseFam(figfam_file)
 		self.parseSummary(summary_file)
 		
 		
@@ -224,7 +235,7 @@ class figFamStorage():
 	def getParts(self, kmer):
 		return(kmer.split('|'))
 			
-	def parseFigFam(self, figfam_file):
+	def parseFam(self, figfam_file, ignore=True):
 		
 		num_fam=0
 		inHandle=open(figfam_file, 'r')
@@ -237,8 +248,12 @@ class figFamStorage():
 		for line in inHandle:
 			if line.startswith('#'):
 				continue
-			num_fam+=1
+
 			fig_info=line.strip().split("\t")
+
+			if ignore and fig_info[0] in self.ignore_fams:
+				continue
+			num_fam+=1
 			cur_seq=fig_info[3]
 			if(prev_seq != cur_seq and num_fam>1):
 				kmer_q=deque()#clear kmer stack because switching replicons
@@ -506,7 +521,9 @@ def main(init_args):
 		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size\n")
 		sys.exit()
 	k_size=int(init_args[3])
-	fstorage=figFamStorage(init_args[0], init_args[1], k_size)
+	if len(init_args)>=5:
+		ignore_fams=init_args[4].replace(' ','').split(',')
+	fstorage=figFamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[2])
 	out_file=os.path.join(out_folder,out_basename)
