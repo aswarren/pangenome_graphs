@@ -347,6 +347,7 @@ class pFamGraph(Graph):
 		for e in self.edges():
 			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
 			#except: pass
+			self.adj[e[0]][e[1]]['label']=''
 			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][e_attr])/float(divisor)
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
@@ -407,7 +408,9 @@ class pFamGraph(Graph):
 			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
 				attr_list={}
 				#HACK exclude replicons from list since locations already have them
-				for k in summaryList[idx].keys(): 
+				for k in summaryList[idx].keys():
+					if k == 'functions':
+						attr_list['label']=summaryList[idx][k] 
 					if k != 'replicons':
 						attr_list[k]=summaryList[idx][k]
 				self.update_node_cumul_attr(n, **attr_list)
