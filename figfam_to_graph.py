@@ -533,6 +533,7 @@ def main(init_args):
 	pgraph=pFamGraph(fstorage)
 	csize=pgraph.order()
 	toGML(pgraph, out_file+".graphml")
+	readwrite.write_gexf(pgraph, out_file+".gexf")
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
