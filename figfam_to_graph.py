@@ -29,6 +29,8 @@ class geneInfo():
 		self.function=func
 	def getLocation(self):
 		return (self.replicon_id, self.position)
+	def getReplicon(self):
+		return self.replicon_id
 
 ##Class for storing all the geneInfo in a particular node
 class kmerNode():
@@ -41,6 +43,23 @@ class kmerNode():
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
 		except: self.infoList[cur_key]=[info]
+	def getReplicons(self):
+		result=set([])
+		#all the replicons should be the same for each fam in this kmer
+		fam=self.infoList.values()[0]
+		for info in fam: 
+			result.add(info.getReplicon())
+		return result
+	def testNode(self):
+		#make sure that all the families in the kmer come from same replicons
+		ref_set=set([x.getReplicon() for x in self.infoList.values()[0]])
+		for fam in self.infoList.values():
+			test_set=set([])
+			for info in fam:
+				test_set.add(info.getReplicon())
+			if test_set != ref_set:
+				warning("kmer "+self.nodeID+" has inconsistent replicons")
+				
 
 
 
@@ -145,6 +164,7 @@ class figFamStorage():
 		print figfam_file
 		print summary_file
 		print str(ksize)
+		self.replicon_ids=set()
 		self.ignore_fams=ignore_fams
 		self.kmerLookup=OrderedDict()#Ordered so that results are reproducible. stores array for contig info and set for pointing to the next kmer
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
@@ -255,6 +275,7 @@ class figFamStorage():
 				continue
 			num_fam+=1
 			cur_seq=fig_info[3]
+			self.replicon_ids.add(cur_seq)
 			if(prev_seq != cur_seq and num_fam>1):
 				kmer_q=deque()#clear kmer stack because switching replicons
 				prev_kmer=None
@@ -343,17 +364,24 @@ class pFamGraph(Graph):
 						try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
 						except: self.adj[e[0]][e[1]]=kwargs[k]
 			else: self.add_edge(e[0],e[1],kwargs)
-	def update_edge_weight(self, e_attr, divisor=1):
+
+	#update the edge weight based on a designated attribute
+	#also flatten to a string since writing list objects isn't supported
+	def update_edges(self, weight_attr, divisor=1, label_attr='replicons', remove_attrs=[]):
 		for e in self.edges():
 			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
 			#except: pass
 			self.adj[e[0]][e[1]]['label']=''
-			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][e_attr])/float(divisor)
+			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][weight_attr])/float(divisor)
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
 				except: pass
-			try: self.adj[e[0]][e[1]][e_attr]=",".join(self.adj[e[0]][e[1]][e_attr])
+			try: self.adj[e[0]][e[1]][label_attr]=", ".join(self.adj[e[0]][e[1]][label_attr])
 			except: pass
+			for r in remove_attrs:
+				try: self.adj[e[0]][e[1]].pop(r,None)
+				except: pass
+				
 	def update_node_cumul_attr(self, n_id, **kwargs ):
 		if n_id in self.node:
 			for k in kwargs:
@@ -383,19 +411,19 @@ class pFamGraph(Graph):
 
 		if(len(org_part1)>=minOrg):
 			#get a list of individual figfams that make up the kmer
-			nodeList1=storage.getParts(cur_node.nodeID)
+			pfamily_ids=storage.getParts(cur_node.nodeID)
 			#for each figfam get list of locations and call checkIdentity
-			for memID in nodeList1: storage.checkIdentity(memID, cur_node.nodeID,threshold=1)
+			for famID in pfamily_ids: storage.checkIdentity(famID, cur_node.nodeID,threshold=1)
 				
 	def kmer_to_node2(self, storage, kmer, total_tax, minOrg):
 		cur_node=storage.kmerLookup[kmer][0]
 		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
 		if(len(org_part1)>=minOrg):
 			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
-			nodeList1=storage.getParts(cur_node.nodeID)
+			pfamily_ids=storage.getParts(cur_node.nodeID)
 			nodeList2=[]
 			summaryList=[]
-			for memID in nodeList1:
+			for memID in pfamily_ids:
 				target_set=storage.getHashSet(memID,cur_node.nodeID)
 				fam_version=storage.locationHash[list(target_set)[0]]
 				nodeList2.append(fam_version[0]+':'+fam_version[1])
@@ -404,7 +432,10 @@ class pFamGraph(Graph):
 				summaryList.append(summary_info)
 				#if fam_version[0] =="FIG00229272" and fam_version[1]=="0":
 				#	pass
-			self.add_path_cumul_attr(nodeList2, orgs=org_part1) #this also creats nodes in the graph
+			#for this kmer get all the replicons it is involved in
+			replicons=cur_node.getReplicons()
+			#cur_node.testNode()
+			self.add_path_cumul_attr(nodeList2, orgs=org_part1, replicons=replicons) #this also creats nodes in the graph
 			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
 				attr_list={}
 				#HACK exclude replicons from list since locations already have them
@@ -430,7 +461,7 @@ class pFamGraph(Graph):
 			#	self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
-		self.update_edge_weight('orgs',divisor=float(num_orgs))
+		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr="replicons", remove_attrs=['orgs'])
 		self.update_node_attr_final('tax_summary', divisor=float(total_tax))
 		node_handle=open('new_loop_node_list.txt','w')
 		for n in self.nodes_iter():
