@@ -112,7 +112,7 @@ class famInfo():
 							warning("Intersection", [':'.join(x.getLocation()) for x in intersect])
 							warning("Group1", [':'.join(x.getLocation()) for x in self.versions[idx].instances])
 							warning("Group2",[':'.join(x.getLocation()) for x in v.instances])
-						self.versions[idx].instances=self.versions[idx].instances.union(v.instances)
+						self.versions[idx].instances |= v.instances
 						v.instances=set([])
 						found=True
 						sets_merged=True
@@ -135,7 +135,7 @@ class famInfo():
 			if(score>=threshold):
 				matching_group=idx
 				#store the bigest id_set as the identifying one for this figfam
-				v.instances=v.instances.union(id_set)
+				v.instances |= id_set
 				break
 		if matching_group == -1:
 			self.versions.append(famVersion(id_set))
@@ -171,6 +171,7 @@ class figFamStorage():
 		self.summaryLookup={}
 		self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
 		self.geneHash={} #storing information about the individual genes
+		self.replicon_edges_dict={}#stores which replicons have which edges
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
 		self.parseFam(figfam_file)
@@ -356,14 +357,20 @@ class pFamGraph(Graph):
 		self.createGraph(storage, minOrg)
 	def add_path_cumul_attr(self,nlist,**kwargs):
 		edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
+		edge_ids=[]
 		for e in edges:
 			if self.has_edge(*e):
 				for k in kwargs:
-					try: self.adj[e[0]][e[1]][k]=kwargs[k] | self.adj[e[0]][e[1]][k]# union of attribute
-					except: 
-						try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
-						except: self.adj[e[0]][e[1]]=kwargs[k]
-			else: self.add_edge(e[0],e[1],kwargs)
+					if type(kwargs[k])==set:
+						try: self.adj[e[0]][e[1]][k] |= kwargs[k]#  union of attribute
+						except: 
+							try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
+							except: self.adj[e[0]][e[1]]=kwargs[k]
+			else:
+				kwargs['id']=self.number_of_edges()
+				self.add_edge(e[0],e[1],kwargs)
+			try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
+			except: warning("no ID for edge "+e[0]+" "+e[1]) 
 
 	#update the edge weight based on a designated attribute
 	#also flatten to a string since writing list objects isn't supported
@@ -376,8 +383,9 @@ class pFamGraph(Graph):
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
 				except: pass
-			try: self.adj[e[0]][e[1]][label_attr]=", ".join(self.adj[e[0]][e[1]][label_attr])
-			except: pass
+			if label_attr:
+				try: self.adj[e[0]][e[1]][label_attr]=", ".join(self.adj[e[0]][e[1]][label_attr])
+				except: pass
 			for r in remove_attrs:
 				try: self.adj[e[0]][e[1]].pop(r,None)
 				except: pass
@@ -435,7 +443,13 @@ class pFamGraph(Graph):
 			#for this kmer get all the replicons it is involved in
 			replicons=cur_node.getReplicons()
 			#cur_node.testNode()
-			self.add_path_cumul_attr(nodeList2, orgs=org_part1, replicons=replicons) #this also creats nodes in the graph
+			edges_added = self.add_path_cumul_attr(nodeList2, orgs=org_part1) #this also creats nodes in the graph
+			#create map of which edges occur for which replicons
+			for r in replicons:
+				edge_set=storage.replicon_edges_dict.get(r,None)
+				if edge_set == None:
+					edge_set=storage.replicon_edges_dict[r]=set()
+				edge_set.update(edges_added)
 			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
 				attr_list={}
 				#HACK exclude replicons from list since locations already have them
@@ -461,34 +475,31 @@ class pFamGraph(Graph):
 			#	self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
-		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr="replicons", remove_attrs=['orgs'])
+		
+		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr=None, remove_attrs=['orgs'])
 		self.update_node_attr_final('tax_summary', divisor=float(total_tax))
-		node_handle=open('new_loop_node_list.txt','w')
-		for n in self.nodes_iter():
-			node_handle.write(n+"\n")
-		node_handle.close()
-		edge_handle=open('new_loop_edge_list.txt','w')
-		for e in self.edges_iter():
-			edge_handle.write(str(e)+"\n")
-		edge_handle.close()
-			#edge_added=False
-			#add all the edges to the graph
-			#for next_kmer in storage.kmerLookup[kmer][1]:
-			#	next_node=storage.kmerLookup[next_kmer][0]
-			#	nxt_orgs=storage.nodeOrgSummary(next_node)
-			#	orgs_in_edge=len(nxt_orgs.intersection(org_part1))
-			#	if(orgs_in_edge>=2):
-			#		nodeSet1=storage.getParts(cur_node.nodeID)
-			#		nodeSet2=storage.getParts(next_node.nodeID)
-			#		edge_added=True
-			#		cur_weight=orgs_in_edge/float(num_orgs)
-			#		self.add_edge(cur_node.nodeID, next_node.nodeID, weight=cur_weight)
-					#need to fix this so that KmerNode is stored instead of string
-					#work out write_graphml
-			#		next_node.weight=len(storage.nodeTaxSummary(next_node))/float(total_tax)
-			#		self.node[next_node.nodeID]['weight']=next_node.weight
-			#if(edge_added):
-			#	self.node[cur_node.nodeID]['weight']= cur_node.weight
+
+		#create dictionary that relates one edge to every other edge by replicon
+		e2e_by_replicon={}
+		for edge_set in storage.replicon_edges_dict.values():
+			for e in edge_set:
+				stored_set=e2e_by_replicon.get(e,None)
+				if stored_set == None:
+					stored_set = e2e_by_replicon[e]=set()
+				stored_set |= edge_set
+				stored_set.remove(e)
+		self.Graph["paths"]=';'.join([k+':'+','.join(v) for k,v in e2e_by_replicon.iteritems()])
+			
+
+		#get list of nodes and edges for testing
+		#node_handle=open('new_loop_node_list.txt','w')
+		#for n in self.nodes_iter():
+		#	node_handle.write(n+"\n")
+		#node_handle.close()
+		#edge_handle=open('new_loop_edge_list.txt','w')
+		#for e in self.edges_iter():
+		#	edge_handle.write(str(e)+"\n")
+		#edge_handle.close()
 
 
 
