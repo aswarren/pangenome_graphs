@@ -367,10 +367,13 @@ class pFamGraph(Graph):
 							try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
 							except: self.adj[e[0]][e[1]]=kwargs[k]
 			else:
-				kwargs['id']=self.number_of_edges()
+				kwargs['id']=str(self.number_of_edges())
 				self.add_edge(e[0],e[1],kwargs)
 			try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
-			except: warning("no ID for edge "+e[0]+" "+e[1]) 
+			except: warning("no ID for edge "+e[0]+" "+e[1])
+			if kwargs['id']=="0":
+				warning("edge 0 is "+e[0]+" "+e[1])
+		return edge_ids 
 
 	#update the edge weight based on a designated attribute
 	#also flatten to a string since writing list objects isn't supported
