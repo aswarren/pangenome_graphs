@@ -369,10 +369,10 @@ class pFamGraph(Graph):
 			else:
 				kwargs['id']=str(self.number_of_edges())
 				self.add_edge(e[0],e[1],kwargs)
+				if kwargs['id']=="0":
+					warning("edge 0 is "+e[0]+" "+e[1])
 			try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
 			except: warning("no ID for edge "+e[0]+" "+e[1])
-			if kwargs['id']=="0":
-				warning("edge 0 is "+e[0]+" "+e[1])
 		return edge_ids 
 
 	#update the edge weight based on a designated attribute
@@ -446,13 +446,13 @@ class pFamGraph(Graph):
 			#for this kmer get all the replicons it is involved in
 			replicons=cur_node.getReplicons()
 			#cur_node.testNode()
-			edges_added = self.add_path_cumul_attr(nodeList2, orgs=org_part1) #this also creats nodes in the graph
+			edges_added = self.add_path_cumul_attr(nodeList2, orgs=org_part1, replicons=replicons) #this also creats nodes in the graph
 			#create map of which edges occur for which replicons
-			for r in replicons:
-				edge_set=storage.replicon_edges_dict.get(r,None)
-				if edge_set == None:
-					edge_set=storage.replicon_edges_dict[r]=set()
-				edge_set.update(edges_added)
+			#for r in replicons:
+			#	edge_set=storage.replicon_edges_dict.get(r,None)
+			#	if edge_set == None:
+			#		edge_set=storage.replicon_edges_dict[r]=set()
+			#	edge_set.update(edges_added)
 			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
 				attr_list={}
 				#HACK exclude replicons from list since locations already have them
@@ -479,19 +479,11 @@ class pFamGraph(Graph):
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		
-		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr=None, remove_attrs=['orgs'])
+		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr='replicons', remove_attrs=['orgs'])
 		self.update_node_attr_final('tax_summary', divisor=float(total_tax))
-
-		#create dictionary that relates one edge to every other edge by replicon
-		e2e_by_replicon={}
-		for edge_set in storage.replicon_edges_dict.values():
-			for e in edge_set:
-				stored_set=e2e_by_replicon.get(e,None)
-				if stored_set == None:
-					stored_set = e2e_by_replicon[e]=set()
-				stored_set |= edge_set
-				stored_set.remove(e)
-		self.Graph["paths"]=';'.join([k+':'+','.join(v) for k,v in e2e_by_replicon.iteritems()])
+		
+		#create attribute called paths which represents edges per replicon
+		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
 			
 
 		#get list of nodes and edges for testing
