@@ -483,7 +483,7 @@ class pFamGraph(Graph):
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		
 		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr='replicons', remove_attrs=['orgs'])
-		self.update_node_attr_final('tax_summary', divisor=float(total_tax), remove_attrs=['organisms', 'tax_summary'])
+		self.update_node_attr_final('tax_summary', divisor=float(total_tax), remove_attrs=['organisms'])
 		
 		#create attribute called paths which represents edges per replicon
 		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
