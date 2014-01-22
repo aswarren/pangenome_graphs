@@ -403,10 +403,13 @@ class pFamGraph(Graph):
 	
 	#calculate the node weight and change the set attributes to string
 	#so that they can be written by graphml writer
-	def update_node_attr_final(self, weight_attr, divisor=1):
+	def update_node_attr_final(self, weight_attr, divisor=1, remove_attrs=[]):
 		for n in self.nodes():
 			try: self.node[n]['weight']=len(self.node[n][weight_attr])/float(divisor)
 			except: pass
+			for r in remove_attrs:
+				try: self.node[n].pop(r,None)
+				except: pass
 			for a in self.node[n]:
 				if type(self.node[n][a])==set:
 					self.node[n][a] = ','.join(self.node[n][a])
@@ -480,7 +483,7 @@ class pFamGraph(Graph):
 			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
 		
 		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr='replicons', remove_attrs=['orgs'])
-		self.update_node_attr_final('tax_summary', divisor=float(total_tax))
+		self.update_node_attr_final('tax_summary', divisor=float(total_tax), remove_attrs=['organisms', 'tax_summary'])
 		
 		#create attribute called paths which represents edges per replicon
 		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
