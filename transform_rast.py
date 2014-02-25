@@ -15,7 +15,8 @@ import pandas as pd
 #adding lower base coordinate and stripping away uncessary columns
 #returns pandas table
 def morph_rast(input_file):
-    file_name=os.path.basename(input_file)
+    file_path, file_extension= os.path.splitext('./')
+    file_name=os.path.basename(input_file).replace(file_extension,'')
     initial_table=pd.read_table(input_file)
     result=pd.DataFrame({'org_id':[file_name]*len(initial_table)}) #give file name as organism ID
     result['contig_id']=initial_table['contig_id']
