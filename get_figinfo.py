@@ -13,7 +13,7 @@ import requests, json, sys
 
 
 taxURL="http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?"
-taxQuery="q=rast_cds:[1+TO+*]+AND+taxon_lineage_ids:"
+taxQuery="q=rast_cds:[1+TO+*]+AND+genome_info_id:(38055+OR+135566+OR+86222)"
 taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids"
 
 feature_url='http://macleod.vbi.vt.edu:8080/solr/figfam/select/?'
@@ -56,7 +56,7 @@ def get_solr_result(query_url):
 def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
     format_string="indent=on&wt=json"
     
-    currentQuery=taxURL+taxQuery+str(tax_id)+taxFormat
+    currentQuery=taxURL+taxQuery+taxFormat
     
 
     #get replicon results
@@ -92,7 +92,7 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
             
 
 def main(init_args):
-    patric_figinfo_from_solr(234, './new_brucella_taxon.txt', './new_brucella_figfam.txt')
+    patric_figinfo_from_solr(29461, './abortus_brucella_taxon.txt', './abortus_brucella_figfam.txt')
 
 if __name__ == "__main__":
 	main(sys.argv[1:])												

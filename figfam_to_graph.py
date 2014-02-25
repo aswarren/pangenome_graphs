@@ -11,10 +11,14 @@ from collections import OrderedDict
 
 ##NCBI_TAX_ID     RANK    TAX_PATH
 ##590     genus   220341,90370,59201,28901,590
+#genome_name	genome_info_id	ncbi_tax_id	taxon_lineage_ids
 
 ##NAME    NCBI_TAX_ID     ACCESSION       START_MIN
 ##FIG01045527     946034  AERV01000001    507
+#fam_id		gid	ncbi_tax_id	sequence_info_id	start_max	figfam_product
 
+#SHOULD BE
+#org_id	contig_id	locus_id	start	fam_id	fam_description
 
 def warning(*objs):
 	for o in objs:
@@ -351,7 +355,7 @@ class figFamStorage():
 
 # undirected weighted
 class pFamGraph(Graph):
-	def __init__(self, storage, minOrg=2):
+	def __init__(self, storage, minOrg=1):
 		#Graph.__init__(self, weighted=True)
 		Graph.__init__(self)
 		self.createGraph(storage, minOrg)
