@@ -42,7 +42,7 @@ def main(init_args):
         else:
             result.append(morph_rast(i))
         counter+=1
-    result.to_csv(init_args[0], sep="\t")
+    result.to_csv(init_args[0], sep="\t", index=False)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
