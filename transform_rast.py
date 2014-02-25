@@ -16,14 +16,14 @@ import pandas as pd
 #returns pandas table
 def morph_rast(input_file):
     file_name=os.path.basename(input_file)
-    initial_table=pd.read_table(init_args[0])
+    initial_table=pd.read_table(input_file)
     result=pd.DataFrame({'org_id':[file_name]*len(initial_table)}) #give file name as organism ID
     result['contig_id']=initial_table['contig_id']
     result['locus_id']=initial_table['feature_id']
     result['start']=initial_table[['start','stop']].min(axis=1) #take lower base coordinate
     result['fam_id']=initial_table['figfam']#figfam ID
     result['fam_description']=initial_table['function']
-    result=result[pd.notnull(result['figfam'])] #remove things without figfams
+    result=result[pd.notnull(result['fam_id'])] #remove things without figfams
     result=result.sort(columns=['contig_id','start'], ascending=[1,1])
     return result
     
@@ -36,7 +36,7 @@ def main(init_args):
         sys.stderr.write("Usage: transform_rast.py output_file.txt [rast_table1.txt ...]\n")
         sys.exit()
     counter =0
-    for i in init_args[1:]
+    for i in init_args[1:]:
         if counter == 0:
             result=morph_rast(i)
         else:
