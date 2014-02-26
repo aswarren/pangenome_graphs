@@ -1,11 +1,23 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import os, sys
+import json
 from networkx import Graph
 from networkx import readwrite
 import DOMLight, json
 from collections import deque
 from collections import OrderedDict
+from cStringIO import StringIO
+
+from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
+#try:
+#    from xml.etree.cElementTree import Element, ElementTree, tostring, fromstring, register_namespace
+#except ImportError:
+#    try:
+#        from xml.etree.ElementTree import Element, ElementTree, tostring, fromstring, register_namespace
+#    except ImportError:
+#        pass
+
 ##This script expects files which contain a list of consecutive protein family ID's for the replicons in an organism
 ## and some kind of summary information about where the kmers come from
 
@@ -197,8 +209,16 @@ class figFamStorage():
 		self.replicon_edges_dict={}#stores which replicons have which edges
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
+		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
 		self.parseFam(figfam_file)
 		self.parseSummary(summary_file)
+		
+	class taxInfo():
+		def __init__(self, genome_name, summary_id):
+			self.genome_name=genome_name
+			self.summary_id=summary_id
+		def get_summary_id(self):
+			return self.summary_id
 		
 		
 
@@ -295,6 +315,10 @@ class figFamStorage():
 				continue
 
 			fig_info=geneInfo(line=line)
+                        if fig_info.org_id not in self.replicon_map:
+				self.replicon_map[fig_info.org_id]=set()
+			else:
+				self.replicon_map[fig_info.org_id].add(fig_info.replicon_id)
 
 			if ignore and fig_info.fam_id in self.ignore_fams:
 				continue
@@ -334,7 +358,7 @@ class figFamStorage():
 		if kmer in self.kmerLookup:
 			for i in self.kmerLookup[kmer][0].infoList.values()[0]:
 				if(i.org_id in self.summaryLookup):
-					result.add(self.summaryLookup[i.org_id])
+					result.add(self.summaryLookup[i.org_id].get_summary_id())
 		return result
 	#for a given node return a set of the organisms involved
 	def nodeOrgSummary(self,cnode):
@@ -348,7 +372,7 @@ class figFamStorage():
 		result=set()
 		for i in cnode.infoList.values()[0]:
 			if(i.org_id in self.summaryLookup):
-				result.add(self.summaryLookup[i.org_id])
+				result.add(self.summaryLookup[i.org_id].get_summary_id())
 		return result
 
 	#Get the total number of unique taxonomy labels 
@@ -369,8 +393,9 @@ class figFamStorage():
 			if(self.summary_level==None):
 				self.summary_level=6
 			ref_id=summary_info[1]
+			genome_name=summary_info[0]
 			summary_id=summary_info[-1].split(',')[self.summary_level]
-			self.summaryLookup[ref_id]=summary_id
+			self.summaryLookup[ref_id]=self.taxInfo(genome_name,summary_id)
 		inHandle.close()
 
 # undirected weighted
@@ -441,7 +466,7 @@ class pFamGraph(Graph):
 	## create a graph node from a kmer
 	#Expands Each kmer to FIGFAM nodes ensuring that the kmer represents a certain number of unique positions/organisms before expanding
 	#parameters: storage- the figfam storage used to look things up
-	#kmer - the kmer being processed; total_tax- the total number of taxonomy groups represented in the graph; minOrg- the number of positions that need to be represented to qualify as a part of the summary graph
+	#kmer - the kmer being processedq total_tax- the total number of taxonomy groups represented in the graph; minOrg- the number of positions that need to be represented to qualify as a part of the summary graph
 	def kmer_to_node(self, storage, kmer, total_tax, minOrg):
 		cur_node=storage.kmerLookup[kmer][0]
 		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
@@ -497,6 +522,7 @@ class pFamGraph(Graph):
 		num_orgs=len(storage.summaryLookup.keys())
 		temp_size=len(storage.kmerLookup.keys())
 		total_tax=len(storage.completeTaxSummary())
+		for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
 		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
 		for kmer in storage.kmerLookup.keys():
 			self.kmer_to_node(storage,kmer,total_tax,minOrg)
@@ -580,7 +606,32 @@ class pFamGraph(Graph):
 			yield edge
 
 def toGML(cur_graph, file_name):
-		readwrite.graphml.write_graphml(cur_graph, file_name)	
+		readwrite.graphml.write_graphml(cur_graph, file_name)
+		
+def modGexf(in_handle, out_file, k_size, minOrg, storage):
+	#register_namespace('',"http://www.gexf.net/1.1draft")
+	encoding='utf-8'
+	header='<?xml version="1.0" encoding="%s"?>'%encoding
+	gexf_xml=ElementTree(fromstring(in_handle.getvalue()))
+	metadata_element=Element("meta")
+	metadata_element.append(Element("ksize",value=str(k_size)))
+	metadata_element.append(Element("minorg",value=str(minOrg)))
+	gn_element=Element("org_map")
+	org_map={}
+	for k,v in storage.summaryLookup.iteritems():
+		org_map[k]=v.genome_name
+	gn_element.text=CDATA(json.dumps(org_map))
+	metadata_element.append(gn_element)
+	contig_element= Element("contig_map")
+	contig_element.text = CDATA(json.dumps(storage.replicon_map))	
+	metadata_element.append(contig_element)
+	root=gexf_xml.getroot()
+	root.insert(0, metadata_element)
+	gexf_handle=open(out_file, 'w')
+	gexf_handle.write(header.encode(encoding))
+	gexf_xml.write(gexf_handle, encoding=encoding)
+	gexf_handle.close()
+	
 
 
 def main(init_args):
@@ -598,7 +649,9 @@ def main(init_args):
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
 	toGML(pgraph, out_file+".graphml")
-	readwrite.write_gexf(pgraph, out_file+".gexf")
+	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
+	readwrite.write_gexf(pgraph, gexf_capture)
+	modGexf(gexf_capture, out_file+".gexf", k_size, minOrg, fstorage)
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
