@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import os, sys
+import glob
 import pandas as pd
 
 ##script input:
@@ -37,7 +38,13 @@ def main(init_args):
         sys.stderr.write("Usage: transform_rast.py output_file.txt [rast_table1.txt ...]\n")
         sys.exit()
     counter =0
+    files=[]
     for i in init_args[1:]:
+        files=files+glob.glob(i)
+    if len(files)==0:
+        print "no files"
+        return 0
+    for i in files:
         if counter == 0:
             result=morph_rast(i)
         else:
