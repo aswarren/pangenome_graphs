@@ -37,13 +37,13 @@ class geneInfo():
 		self.function=''
                 self.fam_id=''
                 if line:
-			parse_line(line)
+			self.parse_line(line)
 
 	def parse_line(self, line):
 		try:
 			parts=line.strip().split("\t")
 			self.fam_id=parts[ip['fam_id']]
-			self.replicon=parts[ip['contig_id']]
+			self.replicon_id=parts[ip['contig_id']]
 			self.org_id=parts[ip['org_id']]
 			self.position=parts[ip['start']]
 			self.function=parts[ip['fam_description']]
