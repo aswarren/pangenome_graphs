@@ -29,10 +29,6 @@ def morph_rast(input_file):
     result=result.sort(columns=['contig_id','start'], ascending=[1,1])
     return result
     
-    
-    
-    
-
 def main(init_args):
     if(len(init_args)<2):
         sys.stderr.write("Usage: transform_rast.py output_file.txt [rast_table1.txt ...]\n")
@@ -48,7 +44,7 @@ def main(init_args):
         if counter == 0:
             result=morph_rast(i)
         else:
-            result.append(morph_rast(i))
+            result=result.append(morph_rast(i))
         counter+=1
     result.to_csv(init_args[0], sep="\t", index=False)
 
