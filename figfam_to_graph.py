@@ -375,7 +375,7 @@ class figFamStorage():
 
 # undirected weighted
 class pFamGraph(Graph):
-	def __init__(self, storage, minOrg=1):
+	def __init__(self, storage, minOrg=2):
 		#Graph.__init__(self, weighted=True)
 		Graph.__init__(self)
 		self.createGraph(storage, minOrg)
@@ -584,17 +584,18 @@ def toGML(cur_graph, file_name):
 
 
 def main(init_args):
-	if(len(init_args)<4):
-		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size\n")
+	if(len(init_args)<5):
+		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size minOrg\n")
 		sys.exit()
 	k_size=int(init_args[3])
-	if len(init_args)>=5:
-		ignore_fams=init_args[4].replace(' ','').split(',')
+	minOrg=int(init_args[4])
+	if len(init_args)>=6:
+		ignore_fams=init_args[5].replace(' ','').split(',')
 	fstorage=figFamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[2])
 	out_file=os.path.join(out_folder,out_basename)
-	pgraph=pFamGraph(fstorage)
+	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
 	toGML(pgraph, out_file+".graphml")
 	readwrite.write_gexf(pgraph, out_file+".gexf")
