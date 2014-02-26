@@ -19,6 +19,9 @@ from collections import OrderedDict
 
 #SHOULD BE
 #org_id	contig_id	locus_id	start	fam_id	fam_description
+ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3,'fam_id':4,'fam_description':5}
+
+
 
 def warning(*objs):
 	for o in objs:
@@ -26,11 +29,27 @@ def warning(*objs):
 
 ##Class for storing information about the origin of a Kmer
 class geneInfo():
-	def __init__(self, acc, oid, pos, func):
-		self.replicon_id=acc
-		self.org_id=oid
-		self.position=pos
-		self.function=func
+        #expand to parse out this information from different sources
+	def __init__(self, line=None):
+		self.replicon_id=''
+		self.org_id=''
+		self.position=-1
+		self.function=''
+                self.fam_id=''
+                if line:
+			parse_line(line)
+
+	def parse_line(self, line):
+		try:
+			parts=line.strip().split("\t")
+			self.fam_id=parts[ip['fam_id']]
+			self.replicon=parts[ip['contig_id']]
+			self.org_id=parts[ip['org_id']]
+			self.position=parts[ip['start']]
+			self.function=parts[ip['fam_description']]
+		except:
+			warning("parsing problem. couldn't parse line: "+line)
+			pass
 	def getLocation(self):
 		return (self.replicon_id, self.position)
 	def getReplicon(self):
@@ -192,11 +211,11 @@ class figFamStorage():
 			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
 		for fig_info in fig_list:
 			#print fig_info
-			fID, replicon_id, organism_id, position, fam_function= fig_info[0], fig_info[3], fig_info[1], fig_info[4], fig_info[5]
+			fID, replicon_id, organism_id, position, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.position, fig_info.function
 			gene_lookup=(replicon_id, position)
 			#key the gene lookup by replicon_id and position
 			if not gene_lookup in self.geneHash:
-				target=geneInfo(replicon_id, organism_id, position, fam_function)
+				target=fig_info
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
@@ -207,10 +226,11 @@ class figFamStorage():
 	##Create an ID for kmer
 	##In case directionality is flipped for entire genome I am flipping each kmer
 	##This shouldn't adversely affect inversions nor the overall result
+	#takes a list of geneInfo objects
 	def makeID(self, k_info_list):
 		k_list=[]
 		for k in k_info_list:
-			k_list.append(k[0])
+			k_list.append(k.fam_id)
 		id_sep="|"
 		result=None
 		if(k_list[0]> k_list[-1]):
@@ -274,12 +294,12 @@ class figFamStorage():
 			if line.startswith('#'):
 				continue
 
-			fig_info=line.strip().split("\t")
+			fig_info=geneInfo(line=line)
 
-			if ignore and fig_info[0] in self.ignore_fams:
+			if ignore and fig_info.fam_id in self.ignore_fams:
 				continue
 			num_fam+=1
-			cur_seq=fig_info[3]
+			cur_seq=fig_info.replicon_id
 			self.replicon_ids.add(cur_seq)
 			if(prev_seq != cur_seq and num_fam>1):
 				kmer_q=deque()#clear kmer stack because switching replicons
