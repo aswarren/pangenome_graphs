@@ -33,6 +33,8 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 #org_id	contig_id	locus_id	start	fam_id	fam_description
 ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3,'fam_id':4,'fam_description':5}
 
+#Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
+edgeClass={(False,False):0,(False,True):1,(True,False):2,(True,True):3}
 
 
 def warning(*objs):
@@ -69,15 +71,21 @@ class geneInfo():
 
 ##Class for storing all the geneInfo in a particular node
 class kmerNode():
-	def __init__(self,nid):
+	def __init__(self,nid, rev_status=False):
 		self.infoList={}#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo()
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
+                self.linkOut=[set(),set(),set(),set()]#four classes of linkouts
+                self.curRevStatus=rev_status
 	#each cell in list stores info[x]=geneInfo()
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
 		except: self.infoList[cur_key]=[info]
+	def addEdge(self,node_id,nxt_rev_status):
+		#get class of edge type
+		edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
+                self.linkOut[edgeStatus].add(node_id)
 	def getReplicons(self):
 		result=set([])
 		#all the replicons should be the same for each fam in this kmer
@@ -194,11 +202,12 @@ class famInfo():
 
 ##This class is for parsing figfam and summary file (table of taxonomy information) and storing it in a dictionary structure
 ##Parameters are filepaths and the size of kmer to use
-class figFamStorage():
+class FamStorage():
 	def __init__(self, figfam_file, summary_file, ksize, ignore_fams=set([])):
 		print figfam_file
 		print summary_file
 		print str(ksize)
+		self.kmerList=[] #set kmer_ids to position here.
 		self.replicon_ids=set()
 		self.ignore_fams=ignore_fams
 		self.kmerLookup=OrderedDict()#Ordered so that results are reproducible. stores array for contig info and set for pointing to the next kmer
@@ -225,10 +234,17 @@ class figFamStorage():
 	##This function checks whether the kmer is in the graph
 	#and links kmer graph data structure appropriately
 	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
-	def addKmer(self, prev, kmer_key, fig_list):
+        #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
+	def addKmer(self, prev, kmer_q):
+		fig_list=list(kmer_q)
+		kmer_key=self.makeKey(list(kmer_q))#put IDs together to make kmer
 		if not kmer_key in self.kmerLookup: 
-			#pair: array for storing the contig info and set for storing the next kmer
-			self.kmerLookup[kmer_key]=[kmerNode(kmer_key),set()]
+			nodeID = len(self.kmerList)
+			self.kmerList.append(kmerNode(nodeID, rev_status))
+			self.kmerLookup[kmer_key]=self.kmerList[-1]
+		else:
+			self.kmerLookup[kmer_key].curRevStatus=rev_status
+			nodeID=self.kmerLookup[kmer_key]
 		for fig_info in fig_list:
 			#print fig_info
 			fID, replicon_id, organism_id, position, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.position, fig_info.function
@@ -239,15 +255,16 @@ class figFamStorage():
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			self.kmerLookup[kmer_key][0].addInfo(fID, target)#add information about kmer location
+			self.kmerLookup[kmer_key].addInfo(fID, target)#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
-			self.kmerLookup[prev][1].add(kmer_key)#add the last figfam ID to the previous kmer so that it can find this kmer
+			self.kmerLookup[prev].addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
+                return kmer_key
 	##Create an ID for kmer
 	##In case directionality is flipped for entire genome I am flipping each kmer
 	##This shouldn't adversely affect inversions nor the overall result
 	#takes a list of geneInfo objects
-	def makeID(self, k_info_list):
+	def makeKey(self, k_info_list):
 		k_list=[]
 		for k in k_info_list:
 			k_list.append(k.fam_id)
@@ -332,11 +349,9 @@ class figFamStorage():
 			kmer_q.append(fig_info)#append the figfam ID
 			if(len(kmer_q)>self.ksize):
 				kmer_q.popleft()
-				kmer=self.makeID(list(kmer_q))#put IDs together to make kmer ID
-				self.addKmer(prev_kmer, kmer, list(kmer_q))
+				kmer=self.addKmer(prev_kmer, kmer_q)
 			elif(len(kmer_q)== self.ksize):
-				kmer=self.makeID(list(kmer_q))#put IDs together to make kmer ID
-				self.addKmer(prev_kmer, kmer, list(kmer_q))#right now only passing in the last figfams information
+				kmer=self.addKmer(prev_kmer, kmer_q)#right now only passing in the last figfams information
 			else:#kmer size is less than ksize
 				kmer=None
 			prev_seq=cur_seq # record which replicon we are on
@@ -642,7 +657,7 @@ def main(init_args):
 	minOrg=int(init_args[4])
 	if len(init_args)>=6:
 		ignore_fams=init_args[5].replace(' ','').split(',')
-	fstorage=figFamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	fstorage=FamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[2])
 	out_file=os.path.join(out_folder,out_basename)
