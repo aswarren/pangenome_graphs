@@ -34,7 +34,7 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3,'fam_id':4,'fam_description':5}
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
-edgeClass={(False,False):0,(False,True):1,(True,False):2,(True,True):3}
+edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
 
 
 def warning(*objs):
@@ -72,21 +72,23 @@ class geneInfo():
 ##Class for storing all the geneInfo in a particular node
 class kmerNode():
 	def __init__(self,nid, rev_status=False):
-		self.infoList={}#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo()
+		self.infoList=[{},{}]#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo() in accordance with whether the kmer has been reversed. zero position for not reversed. one fore reversed
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
                 self.linkOut=[set(),set(),set(),set()]#four classes of linkouts
-                self.curRevStatus=rev_status
 		self.visited=False
 	#each cell in list stores info[x]=geneInfo()
-	def addInfo(self, cur_key, info):
-		try: self.infoList[cur_key].append(info)
-		except: self.infoList[cur_key]=[info]
+	def addInfo(self, cur_key, info,rev_status):
+		try: self.infoList[rev_status][cur_key].append(info)
+		except: self.infoList[rev_status][cur_key]=[info]
 	def addEdge(self,node_id,nxt_rev_status):
 		#get class of edge type
 		edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
-                self.linkOut[edgeStatus].add(node_id)
+		if node_id in self.linkOut:
+			self.linkOut[node_id]=self.linkOut[node_id]|edgeStatus #bitwise OR to represent both multi status
+                else:
+			self.linkOut[node_id]=edgeStatus
 	def getReplicons(self):
 		result=set([])
 		#all the replicons should be the same for each fam in this kmer
@@ -238,13 +240,12 @@ class FamStorage():
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
 	def addKmer(self, prev, kmer_q):
 		fig_list=list(kmer_q)
-		kmer_key=self.makeKey(list(kmer_q))#put IDs together to make kmer
+		kmer_key, rev_status=self.makeKey(list(kmer_q))#put IDs together to make kmer
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
 			self.kmerList.append(kmerNode(nodeID, rev_status))
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
 		else:
-			self.kmerLookup[kmer_key].curRevStatus=rev_status
 			nodeID=self.kmerLookup[kmer_key]
 		for fig_info in fig_list:
 			#print fig_info
@@ -256,7 +257,7 @@ class FamStorage():
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			self.kmerLookup[kmer_key].addInfo(fID, target)#add information about kmer location
+			self.kmerLookup[kmer_key].addInfo(fID, target, rev_status)#add information about kmer location
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev].addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -271,10 +272,12 @@ class FamStorage():
 			k_list.append(k.fam_id)
 		id_sep="|"
 		result=None
+		rev_status=False
 		if(k_list[0]> k_list[-1]):
 			k_list.reverse()
+			rev_status=True
 		result=id_sep.join(k_list)
-		return result
+		return (result, rev_status)
 	##get the id_set used for degree of similarity for protein family
 	#Parameters fID-figfamID; kmer-the kmer ID
 	#Return a hash value (set) of all the positions of a figfam
@@ -414,6 +417,37 @@ class FamStorage():
 			self.summaryLookup[ref_id]=self.taxInfo(genome_name,summary_id)
 		inHandle.close()
 
+        #transform the kmerNode graph (rf-graph) into a pg-graph
+	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
+	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
+	def bfsExpand(self, minOrg):
+		for start_k_id, start_knode= in enumerate(self.kmerList):
+			if start_knode.visited:
+				continue
+			else:
+				knode_q=deque()
+				knode_q.append(start_k_id)
+				prev_k_id=None
+				incoming_edge_status=None # type of edge arrived by
+				while len(knode_q) > 0:
+					visiting_k_id=knode_q.popleft()
+					cur_knode=self.kmerList[visiting_k_id]
+					cur_knode.visited=True
+					#do work for expanding this kmer node into pg-graph nodes
+					#if prev_knode and incoming_status != None :
+					cur_knode.expandNode(self.kmerList[prev_k_id], incoming_status)#
+					for edge_bins in cur_knode.linkOut:
+						for k_id in edge_bins:
+							if k_id == visiting_k_id: #self loop
+								#something selfish
+							elif k_id == prev_k_id:#return loop
+								#handle return loop	
+							elif self.kmerList[k_id].visited=True:
+								#handle identity crisis
+							else:
+								knode_q.append(k_id)
+					prev_k_id = visiting_k_id	
+
 # undirected weighted
 class pFamGraph(Graph):
 	def __init__(self, storage, minOrg=2):
@@ -533,32 +567,6 @@ class pFamGraph(Graph):
 						attr_list[k]=summaryList[idx][k]
 				self.update_node_cumul_attr(n, **attr_list)
 
-        #transform the kmerNode graph (rf-graph) into a pg-graph
-	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
-	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
-	def bfsExpand(self, storage, minOrg):
-		for kmer in storage.kmerLookup.keys():
-			start_knode=storage.kmerLookup[kmer]
-			if start_knode.visited:
-				continue
-			else:
-				knode_q=deque()
-				knode_q.append(start_knode)
-				prev_knode=None
-				incoming_status=None # type of edge arrived by
-				while len(knode_q) > 0:
-					cur_knode=knode_q.popleft()
-					cur_knode.visited=True
-					if prev_knode and incoming_status != None :
-						existing_nodes = prev_knode.getProcessed(incoming_status)
-						for n in existing_nodes:
-							n.addInfo(cur_knode.info1, info2 info3)
-					cur_knode.getNewSeq()
-						
-					for edge_bins in cur_knode.linkOut:
-						for k_id in edge_bins:
-							if storage.kmerList[k_id].visited=True:
-							else:
 								
 							
                				
