@@ -78,6 +78,7 @@ class kmerNode():
 		self.weight=None
                 self.linkOut=[set(),set(),set(),set()]#four classes of linkouts
                 self.curRevStatus=rev_status
+		self.visited=False
 	#each cell in list stores info[x]=geneInfo()
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
@@ -419,6 +420,8 @@ class pFamGraph(Graph):
 		#Graph.__init__(self, weighted=True)
 		Graph.__init__(self)
 		self.createGraph(storage, minOrg)
+		self.pg_initial=[] #initial node storage
+		self.pg_ptrs=[] #idx of nodes. for merging identity
 	def add_path_cumul_attr(self,nlist,**kwargs):
 		edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
 		edge_ids=[]
@@ -529,7 +532,36 @@ class pFamGraph(Graph):
 					if k != 'replicons':
 						attr_list[k]=summaryList[idx][k]
 				self.update_node_cumul_attr(n, **attr_list)
-				
+
+        #transform the kmerNode graph (rf-graph) into a pg-graph
+	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
+	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
+	def bfsExpand(self, storage, minOrg):
+		for kmer in storage.kmerLookup.keys():
+			start_knode=storage.kmerLookup[kmer]
+			if start_knode.visited:
+				continue
+			else:
+				knode_q=deque()
+				knode_q.append(start_knode)
+				prev_knode=None
+				incoming_status=None # type of edge arrived by
+				while len(knode_q) > 0:
+					cur_knode=knode_q.popleft()
+					cur_knode.visited=True
+					if prev_knode and incoming_status != None :
+						existing_nodes = prev_knode.getProcessed(incoming_status)
+						for n in existing_nodes:
+							n.addInfo(cur_knode.info1, info2 info3)
+					cur_knode.getNewSeq()
+						
+					for edge_bins in cur_knode.linkOut:
+						for k_id in edge_bins:
+							if storage.kmerList[k_id].visited=True:
+							else:
+								
+							
+               				
 				
 				
 	##this function takes the storage class and constructs the graph from it
