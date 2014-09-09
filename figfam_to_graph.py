@@ -148,7 +148,7 @@ class kmerNode():
 			storage.addInfoPGNode(g_id,g,gene_list)#adds the node. edges are implied within every k-mer 
 			count +=1
 
-	def createEdges(self,storage):
+	def createPGEdges(self,storage):
 		for i in range(0,len(self.pgRefs)-1,1):
 			storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1])
 		if self.self_edge:
@@ -213,9 +213,19 @@ class kmerNode():
 			if test_set != ref_set:
 				warning("kmer "+self.nodeID+" has inconsistent replicons")
 				
-
-
-
+#pg-node "factory" class
+class pgShell():
+	def __init__(self, nid, gene_set):
+		self.node_id=nid
+		self.famSubset=famVersion(gene_set)
+		self.edges=set()
+	def addEdge(self, nodeRef):
+		self.edges.add(nodeRef)
+	def subsumeNode(self, target):
+		self.edges.update(target.edges)
+		self.famSubset.instances.update(target.famSubset.instances)
+		
+		 
 #provides a summary of where this family occurs
 #a family may be differentiated into multiple version depending on its ocurrence in kmers
 class famVersion():
@@ -558,7 +568,7 @@ class FamStorage():
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
 							knode_q.append(k_id)
-					cur_knode.addEdges(self)
+					cur_knode.createPGEdges(self)
 					prev_k_id = visiting_k_id	
 
 # undirected weighted
