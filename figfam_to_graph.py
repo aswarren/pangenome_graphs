@@ -3,12 +3,14 @@
 import os, sys
 import itertools
 import json
+import copy
 from networkx import Graph
 from networkx import readwrite
 import DOMLight, json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
+
 
 from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
 #try:
@@ -32,7 +34,7 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 
 #SHOULD BE
 #org_id	contig_id	locus_id	start	fam_id	fam_description
-ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3,'fam_id':4,'fam_description':5}
+ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5,'fam_description':6}
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
 edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
@@ -48,11 +50,21 @@ class geneInfo():
 	def __init__(self, line=None):
 		self.replicon_id=''
 		self.org_id=''
-		self.position=-1
+		self.start=-1
+		self.end=-1
 		self.function=''
                 self.fam_id=''
                 if line:
 			self.parse_line(line)
+
+	#calculate region between genes
+	def getInterFeature(nxt_feature):
+		result=copy.deepcopy(nxt_feature)
+		result.function=None
+		result.fam_id=None
+		result.start=self.end+1
+		result.end=nxt_feature.start-1
+		return result
 
 	def parse_line(self, line):
 		try:
@@ -60,13 +72,14 @@ class geneInfo():
 			self.fam_id=parts[ip['fam_id']]
 			self.replicon_id=parts[ip['contig_id']]
 			self.org_id=parts[ip['org_id']]
-			self.position=parts[ip['start']]
+			self.start=parts[ip['start']]
+			self.end=parts[ip['end']]
 			self.function=parts[ip['fam_description']]
 		except:
 			warning("parsing problem. couldn't parse line: "+line)
 			pass
 	def getLocation(self):
-		return (self.replicon_id, self.position)
+		return (self.replicon_id, self.start)
 	def getReplicon(self):
 		return self.replicon_id
 
@@ -77,6 +90,7 @@ class kmerNode():
 	def __init__(self,nid, ksize, rev_status=False):
 		self.infoList=OrderedDict()#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo() Does not store direction.
 		self.pgRefs=[None for i in range(ksize)]#an ordered list of pg-node pointers which will be updated as k-nodes are processed
+		self.peInfo=[set() for i in range(ksize)]#pan-edge info regarding space between families. Last spot is for self_edge Info
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
@@ -84,9 +98,13 @@ class kmerNode():
 		self.visited=False
 		self.self_edge=False
 	#each cell in list stores info[LetterOfKmer]=geneInfo()
-	def addInfo(self, cur_key, info,rev_status):
+	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
 		except: self.infoList[cur_key]=[info]
+	#add intergenic information to what will eventually become pan-genome edges
+	def addPGEInfo(self, inter_info, position):
+		self.peInfo[position].add(inter_info)
+
 	def addEdges(self,node_id,nxt_rev_status):
 		#get class of edge type
 		edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
@@ -143,16 +161,17 @@ class kmerNode():
 	#apply this kmers location info to current pg-node references
 	def applyInfo(self,storage):
 		count =0
-		for g,gene_list in self.infoList.iteritems():
-			g_id=self.pgRefs[count]
-			storage.addInfoPGNode(g_id,g,gene_list)#adds the node. edges are implied within every k-mer 
+		#infoList is an OrderedDict
+		for fID,gene_list in self.infoList.iteritems():
+			nid=self.pgRefs[count]
+			storage.addInfoPGNode(nid,gene_list)#adds the node. edges are implied within every k-mer 
 			count +=1
 
 	def createPGEdges(self,storage):
 		for i in range(0,len(self.pgRefs)-1,1):
-			storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1])
+			storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
 		if self.self_edge:
-			storage.getPGNode(self.pgRefs[0]).addEdge(self.pgRefs[-1])
+			storage.getPGNode(self.pgRefs[0]).addEdge(self.pgRefs[-1],self.peInfo[-1])
 		
 	#1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
 	#2nd Add edges to new family added in this kmer FOR ALL INCOMING EDGE TYPES
@@ -164,8 +183,8 @@ class kmerNode():
         def visitNode(self, prev_node, in_edge_status, storage):
 		if not prev_node:
 			count =0
-			for g,gene_list in self.infoList.iteritems():
-				g_id=storage.addPGNode(g,gene_list)#adds the node. edges are implied within every k-mer 
+			for fID,gene_list in self.infoList.iteritems():
+				g_id=storage.addPGNode(fID,gene_list)#adds the node. edges are implied within every k-mer 
 				self.pgRefs[count]=g_id
 				count +=1
 		else:
@@ -177,8 +196,8 @@ class kmerNode():
 			#handle new portion exposed in this kmer
 			#case 2|8 =10
 			if (in_edge_status & 10):
-				g=self.infoList.keys()[0]
-				g_id=storage.addPGNode(g,self.infoList[g])
+				fID=self.infoList.keys()[0]
+				g_id=storage.addPGNode(fID,self.infoList[fID])
 				self.pgRefs[0]=g_id
 
 			#transfer references from previous k-mer
@@ -188,8 +207,8 @@ class kmerNode():
 			#handle new portion exposed in this kmer
 			#case 1|4 =5
 			if (in_edge_status & 5):
-				g=self.infoList.keys()[-1]
-				g_id=storage.addPGNode(g,self.infoList[g])
+				fID=self.infoList.keys()[-1]
+				g_id=storage.addPGNode(fID,self.infoList[fID])
 				self.pgRefs.append(g_id)
 			#some information may be unique to this kmer. apply it to the pg-nodes
 			self.applyInfo(storage)
@@ -213,14 +232,19 @@ class kmerNode():
 			if test_set != ref_set:
 				warning("kmer "+self.nodeID+" has inconsistent replicons")
 				
-#pg-node "factory" class
+#pg-node "incubator" class
 class pgShell():
-	def __init__(self, nid, gene_set):
+	def __init__(self, nid,fid,gene_set):
 		self.node_id=nid
-		self.famSubset=famVersion(gene_set)
-		self.edges=set()
-	def addEdge(self, nodeRef):
-		self.edges.add(nodeRef)
+		self.famSubset=famVersion(fid,gene_set)
+		self.edges={}#key is nodeRef, value is set of geneInfo intergenic
+	def addEdge(self, nodeRef, e_info):
+		if not nodeRef in self.edges:
+			self.edges[nodeRef]=e_info.copy()
+		else: self.edges[nodeRef].update(e_info)
+	def addInfo(self, info_list):
+		for i in info_list:
+			self.famSubset.instances.add(i)
 	def subsumeNode(self, target):
 		self.edges.update(target.edges)
 		self.famSubset.instances.update(target.famSubset.instances)
@@ -229,7 +253,7 @@ class pgShell():
 #provides a summary of where this family occurs
 #a family may be differentiated into multiple version depending on its ocurrence in kmers
 class famVersion():
-	def __init__(self, id_set):
+	def __init__(self, famID, id_set):
 		self.instances=id_set.copy() #set of locations that identify this version of family
 		self.organisms=set()
 		self.tax_summary=set()
@@ -351,7 +375,18 @@ class FamStorage():
 		def get_summary_id(self):
 			return self.summary_id
 		
-		
+	##adds a PGShell to pg_initial and a pointer in pg_ptrs
+	def addPGNode(self,fid,gene_list):
+		nid=len(self.pg_initial)-1
+		self.pg_initial.append(pgShell(nid,fid,gene_list))
+		self.pg_ptrs.append(nid)
+
+	def addInfoPGNode(self, nid, gene_list):
+		pgref=self.pg_ptr[nid]
+		cur_node=self.pg_initial[pgref]
+		cur_node.addInfo(gene_list)
+		 
+			
 
 	##This function checks whether the kmer is in the graph
 	#and links kmer graph data structure appropriately
@@ -366,17 +401,28 @@ class FamStorage():
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
 		else:
 			nodeID=self.kmerLookup[kmer_key]
+		prev_fam=None
+		e_counter=0 #for keeping track of which intergenic space
 		for fig_info in fig_list:
 			#print fig_info
-			fID, replicon_id, organism_id, position, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.position, fig_info.function
-			gene_lookup=(replicon_id, position)
+			fID, replicon_id, organism_id, start, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.start, fig_info.function
+			gene_lookup=(replicon_id, start)
 			#key the gene lookup by replicon_id and position
 			if not gene_lookup in self.geneHash:
 				target=fig_info
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			self.kmerLookup[kmer_key].addInfo(fID, target, rev_status)#add information about kmer location
+			cur_knode=self.kmerLookup[kmer_key]
+			cur_knode.addInfo(fID, target)#add information about kmer location
+			if prev_fam != None:
+				if rev_status:
+					intergenic=fig_info.getInterFeature(prev_fam)
+				else:
+					intergenic=prev_fam.getInterFeature(fig_info)
+				cur_knode.addPGEInfo(intergenic,e_counter)
+				e_counter+=1	
+			prev_fam=fig_info
 		if(prev!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			self.kmerLookup[prev].addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
