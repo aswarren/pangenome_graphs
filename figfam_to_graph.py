@@ -90,7 +90,7 @@ class kmerNode():
 	def __init__(self,nid, ksize, rev_status=False):
 		self.infoList=OrderedDict()#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo() Does not store direction.
 		self.pgRefs=[None for i in range(ksize)]#an ordered list of pg-node pointers which will be updated as k-nodes are processed
-		self.peInfo=[set() for i in range(ksize)]#pan-edge info regarding space between families. Last spot is for self_edge Info
+		self.peInfo=[set() for i in range(ksize)-1]#pan-edge info regarding space between families
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
@@ -167,11 +167,9 @@ class kmerNode():
 			storage.addInfoPGNode(nid,gene_list)#adds the node. edges are implied within every k-mer 
 			count +=1
 
-	def createPGEdges(self,storage):
+	def addPGEdges(self,storage):
 		for i in range(0,len(self.pgRefs)-1,1):
 			storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
-		if self.self_edge:
-			storage.getPGNode(self.pgRefs[0]).addEdge(self.pgRefs[-1],self.peInfo[-1])
 		
 	#1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
 	#2nd Add edges to new family added in this kmer FOR ALL INCOMING EDGE TYPES
@@ -246,7 +244,11 @@ class pgShell():
 		for i in info_list:
 			self.famSubset.instances.add(i)
 	def subsumeNode(self, target):
-		self.edges.update(target.edges)
+		for nid in target.edges:
+			if nid in self.edges:
+				self.edges[nid].update(target.edges[nid])
+			else:
+				self.edges[nid]=target.edges[nid] #Does this need to be copied?? It is a reference to a set after all...
 		self.famSubset.instances.update(target.famSubset.instances)
 		
 		 
@@ -354,7 +356,8 @@ class FamStorage():
 		self.kmerList=[] #set kmer_ids to position here.
 		self.replicon_ids=set()
 		self.ignore_fams=ignore_fams
-		self.kmerLookup=OrderedDict()#Ordered so that results are reproducible. stores array for contig info and set for pointing to the next kmer
+		self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
+		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
 		self.pg_initial=[] #initial node storage
 		self.pg_ptrs=[] #idx of nodes. for merging identity
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
@@ -394,7 +397,7 @@ class FamStorage():
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
 	def addKmer(self, prev_key, kmer_q):
 		fig_list=list(kmer_q)
-		kmer_key, rev_status=self.makeKey(list(kmer_q))#put IDs together to make kmer
+		kmer_key, rev_status=self.makeKey(list(kmer_q),prev_key)#put IDs together to make kmer
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
 			self.kmerList.append(kmerNode(nodeID, rev_status))
@@ -404,9 +407,6 @@ class FamStorage():
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			prev_knode=self.kmerLookup[prev_key]
 			prev_knode.addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
-			if prev_key == kmer_key:
-				cur_knode.self_edge=True		
-				cur_knode.addPGEInfo(intergenic,-1)
 		prev_fam=None
 		e_counter=0 #for keeping track of which intergenic space
 		for fig_info in fig_list:
@@ -433,7 +433,7 @@ class FamStorage():
 	##In case directionality is flipped for entire genome I am flipping each kmer
 	##This shouldn't adversely affect inversions nor the overall result
 	#takes a list of geneInfo objects
-	def makeKey(self, k_info_list):
+	def makeKey(self, k_info_list, prev_key):
 		k_list=[]
 		for k in k_info_list:
 			k_list.append(k.fam_id)
@@ -444,7 +444,11 @@ class FamStorage():
 			k_list.reverse()
 			rev_status=True
 		result=id_sep.join(k_list)
-		return (result, rev_status)
+		if prev_key[-1] == result:
+			self.kmerLevel+=1
+		else:
+			self.kmerLevel=0
+		return ((self.kmerLevel, result), rev_status)
 	##get the id_set used for degree of similarity for protein family
 	#Parameters fID-figfamID; kmer-the kmer ID
 	#Return a hash value (set) of all the positions of a figfam
@@ -617,7 +621,7 @@ class FamStorage():
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
 							knode_q.append(k_id, cur_knode.linkOut[k_id])
-					cur_knode.createPGEdges(self)
+					cur_knode.addPGEdges(self)
 					prev_k_id = visiting_k_id	
 
 # undirected weighted
