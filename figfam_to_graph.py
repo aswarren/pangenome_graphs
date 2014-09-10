@@ -33,7 +33,7 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 #fam_id		gid	ncbi_tax_id	sequence_info_id	start_max	figfam_product
 
 #SHOULD BE
-#org_id	contig_id	locus_id	start	fam_id	fam_description
+
 ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5,'fam_description':6}
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
@@ -392,15 +392,21 @@ class FamStorage():
 	#and links kmer graph data structure appropriately
 	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
-	def addKmer(self, prev, kmer_q):
+	def addKmer(self, prev_key, kmer_q):
 		fig_list=list(kmer_q)
 		kmer_key, rev_status=self.makeKey(list(kmer_q))#put IDs together to make kmer
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
 			self.kmerList.append(kmerNode(nodeID, rev_status))
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
-		else:
-			nodeID=self.kmerLookup[kmer_key]
+		cur_knode=self.kmerLookup[kmer_key]
+		if(prev_key!=None):
+			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
+			prev_knode=self.kmerLookup[prev_key]
+			prev_knode.addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
+			if prev_key == kmer_key:
+				cur_knode.self_edge=True		
+				cur_knode.addPGEInfo(intergenic,-1)
 		prev_fam=None
 		e_counter=0 #for keeping track of which intergenic space
 		for fig_info in fig_list:
@@ -413,7 +419,6 @@ class FamStorage():
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			cur_knode=self.kmerLookup[kmer_key]
 			cur_knode.addInfo(fID, target)#add information about kmer location
 			if prev_fam != None:
 				if rev_status:
@@ -423,9 +428,6 @@ class FamStorage():
 				cur_knode.addPGEInfo(intergenic,e_counter)
 				e_counter+=1	
 			prev_fam=fig_info
-		if(prev!=None):
-			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
-			self.kmerLookup[prev].addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
                 return kmer_key
 	##Create an ID for kmer
 	##In case directionality is flipped for entire genome I am flipping each kmer
@@ -591,19 +593,20 @@ class FamStorage():
 				continue
 			else:
 				knode_q=deque()
-				knode_q.append(start_k_id)
+				knode_q.append((start_k_id,None))
 				prev_k_id=None
 				in_edge_status=None # type of edge arrived by
 				while len(knode_q) > 0:
-					visiting_k_id=knode_q.popleft()
+					visiting_k_id, in_edge_status=knode_q.popleft()
 					cur_knode=self.kmerList[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
 					cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
 					for k_id in cur_knode.linkOut:
-						if k_id == visiting_k_id: #self loop
+						if k_id == visiting_k_id:#self loop
+							continue
 							#something selfish
-							cur_knode.self_edge=True
+							#cur_knode.self_edge=True
 						elif k_id == prev_k_id:#return loop
 							continue
 							#handle return loop. create single edge back and apply labels
@@ -613,7 +616,7 @@ class FamStorage():
 							return_node=self.kmerList[k_id]
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
-							knode_q.append(k_id)
+							knode_q.append(k_id, cur_knode.linkOut[k_id])
 					cur_knode.createPGEdges(self)
 					prev_k_id = visiting_k_id	
 
