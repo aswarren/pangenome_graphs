@@ -388,6 +388,16 @@ class FamStorage():
 		pgref=self.pg_ptr[nid]
 		cur_node=self.pg_initial[pgref]
 		cur_node.addInfo(gene_list)
+	#using the idx provided make the main node subsume the target node
+	def updatePGNode(self, main_idx, target_idx):
+		main_idx2 = self.pg_ptrs[main_idx]
+		main_node = self.pg_initial[main_idx2]
+		target_idx2 = self.pg_ptrs[target_idx]
+		target_node = self.pg_initial[target_idx2]
+		main_node.subsumeNode(target_node)
+		#now point all future references to target_node at main_node
+		self.pg_ptrs[target_idx]=main_idx2
+		#self.pg_initial[target_idx2]=None #destroy target
 		 
 			
 
