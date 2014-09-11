@@ -397,7 +397,7 @@ class FamStorage():
 		main_node.subsumeNode(target_node)
 		#now point all future references to target_node at main_node
 		self.pg_ptrs[target_idx]=main_idx2
-		#self.pg_initial[target_idx2]=None #destroy target
+		self.pg_initial[target_idx2]=None #destroy target
 		 
 			
 
@@ -763,13 +763,15 @@ class pFamGraph(Graph):
 		total_tax=len(storage.completeTaxSummary())
 		for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
 		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
-		for kmer in storage.kmerLookup.keys():
-			self.kmer_to_node(storage,kmer,total_tax,minOrg)
-			#for some reason this second loop is necessary to explode certain kmers. see if fID =="FIG00229272": Brucella
-			#for next_kmer in storage.kmerLookup[kmer][1]:
-			#	self.kmer_to_node(storage, next_kmer,total_tax,minOrg)
-		for kmer in storage.kmerLookup.keys():
-			self.kmer_to_node2(storage,kmer,total_tax,minOrg)
+		for n in storage.pg_initial:
+			if n:
+				for e in n.edges:
+					n2_idx=storage.pg_ptrs[e]
+					n2=storage.pg_initial[n2_idx]
+					self.add_edge(n.famSubset, n2.famSubset)
+					if not 'instances' in self[n.famSubset][n2.famSubset]:
+						self[n.famSubset][n2.famSubset]['instances']=set()
+					self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
 		
 		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr='replicons', remove_attrs=['orgs'])
 		self.update_node_attr_final('tax_summary', divisor=float(total_tax), remove_attrs=['organisms'])
@@ -882,6 +884,7 @@ def main(init_args):
 	if len(init_args)>=6:
 		ignore_fams=init_args[5].replace(' ','').split(',')
 	fstorage=FamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[2])
 	out_file=os.path.join(out_folder,out_basename)
