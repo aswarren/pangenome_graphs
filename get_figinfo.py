@@ -8,15 +8,18 @@ Created on Wed Dec 18 22:04:38 2013
 """
 
 import requests, json, sys
+import time
+ts = time.time()
 
 
-
-
+#brucella = 234
+#abortus = 29461
 taxURL="http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?"
-taxQuery="q=rast_cds:[1+TO+*]+AND+genome_info_id:(38055+OR+135566+OR+86222)"
+taxQuery="q=rast_cds:[1+TO+*]+AND+taxon_lineage_ids:234"
 taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids"
+feature_url="http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q="
+feature_conditions="+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min"
 
-feature_url='http://macleod.vbi.vt.edu:8080/solr/figfam/select/?'
 
 ##get SOLR query results
 def get_solr_result(query_url):
@@ -53,7 +56,7 @@ def get_solr_result(query_url):
     return results
 				
 
-def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
+def patric_figinfo_from_solr(tax_id, target_path):
     format_string="indent=on&wt=json"
     
     currentQuery=taxURL+taxQuery+taxFormat
@@ -61,7 +64,7 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
 
     #get replicon results
     taxonomy_results=get_solr_result(currentQuery)
-    out_handle=open(target_tax_path,'w')
+    out_handle=open(target_path+str(ts)+".taxinfo.txt",'w')
     #create header
     if len(taxonomy_results) and 'genome_name' in taxonomy_results[0]:
         print "Creating tax table from SOLR for "+currentQuery
@@ -76,23 +79,36 @@ def patric_figinfo_from_solr(tax_id, target_tax_path, target_figfam_path):
         if 'genome_info_id' in r:
             gids.add(str(r["genome_info_id"]))
     out_handle.close()
-    out_handle=open(target_figfam_path,'w')
-    
+    out_handle=open(target_path+str(ts)+".feature_info.txt",'w')
+    figfams=set()
     for g in gids:
         gidQuery="gid:"+g
-        currentQuery=feature_url+"q="+gidQuery+"&"+"sort=sequence_info_id+asc,start_max+asc"+"&"+format_string
+        currentQuery=feature_url+gidQuery+feature_conditions+"&"+format_string
         print currentQuery
         feature_results=get_solr_result(currentQuery)
 
         for f in feature_results:
             try:
-                out_handle.write("\t".join([f["figfam_id"],str(f["gid"]),str(f["ncbi_tax_id"]),str(f["sequence_info_id"]),str(f["start_max"]),f["figfam_product"]])+"\n")
+                out_handle.write("\t".join([f["figfam_id"],str(f["gid"]),str(f["ncbi_tax_id"]),str(f["sequence_info_id"]),str(f["start_max"]),str(f["end_min"])])+"\n")
+		figfams.add(f["figfam_id"])
             except:
                 print "couldn't write line "+str(f)
-            
+    out_handle.close()
+    out_handle.open(target_path+str(ts)+".family_info.txt")
+    fid_query="figfam_id:("+" OR ".join(figfams)+")&fl=figfam_id,figfam_product"
+    currentQuery=fam_url+fid_query+"&"+format_string
+    figfam_results=get_solr_result(currentQuery)
+    for f in figfam_results: 
+        try:
+            out_handle.write("\t".join([f["figfam_id"],str(f["figfam_product"])])+"\n")
+        except:
+            print "couldn't write line "+str(f)
+    out_handle.close()
+    
+           
 
 def main(init_args):
-    patric_figinfo_from_solr(29461, './abortus_brucella_taxon.txt', './abortus_brucella_figfam.txt')
+    patric_figinfo_from_solr(234, './')
 
 if __name__ == "__main__":
 	main(sys.argv[1:])												
