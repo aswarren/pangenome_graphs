@@ -9,6 +9,8 @@ Created on Wed Dec 18 22:04:38 2013
 
 import requests, json, sys
 import time
+#import pandas as pd
+
 ts = time.time()
 
 
@@ -18,7 +20,7 @@ taxURL="http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?"
 taxQuery="q=rast_cds:[1+TO+*]+AND+taxon_lineage_ids:234"
 taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids"
 feature_url="http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q="
-feature_conditions="+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min"
+feature_conditions="+AND+figfam_id:[*+TO+*]&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min"
 
 
 ##get SOLR query results
