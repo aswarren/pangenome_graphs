@@ -22,7 +22,7 @@ taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_li
 feature_url="http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q="
 feature_conditions="+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min"
 format_string="indent=on&wt=json"
-
+fam_url='http://macleod.vbi.vt.edu:8080/solr/figfam-dic/select/?q='
 ##get SOLR query results
 def get_solr_result(query_url):
     results=[]
@@ -101,7 +101,7 @@ def get_patric_feature_info(gids, target_path):
     return figfams
 
 def get_figfam_info(figfams, target_path):
-    out_handle=open(target_path+str(ts)+".family_info.txt")
+    out_handle=open(target_path+str(ts)+".family_info.txt",'w')
     fid_query="figfam_id:("+" OR ".join(figfams)+")&fl=figfam_id,figfam_product"
     currentQuery=fam_url+fid_query+"&"+format_string
     figfam_results=get_solr_result(currentQuery)
@@ -118,6 +118,8 @@ def main(init_args):
     target_path='./'
     gids=get_tax_info(234,target_path)
     figfams=get_patric_feature_info(gids, target_path)
+    #table=pd.read_table('./1410652018.19.feature_info.txt',names=['figfam_id','gid','ncbi_tax_id','sid','start','end'])
+    #figfams=set(table['figfam_id'])
     get_figfam_info(figfams, target_path)
 
 if __name__ == "__main__":
