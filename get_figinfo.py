@@ -9,7 +9,7 @@ Created on Wed Dec 18 22:04:38 2013
 
 import requests, json, sys
 import time
-#import pandas as pd
+import pandas as pd
 
 ts = time.time()
 
@@ -21,7 +21,7 @@ taxQuery="q=rast_cds:[1+TO+*]+AND+taxon_lineage_ids:234"
 taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids"
 feature_url="http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q="
 feature_conditions="+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min"
-
+format_string="indent=on&wt=json"
 
 ##get SOLR query results
 def get_solr_result(query_url):
@@ -58,8 +58,7 @@ def get_solr_result(query_url):
     return results
 				
 
-def patric_figinfo_from_solr(tax_id, target_path):
-    format_string="indent=on&wt=json"
+def get_tax_info(tax_id, target_path):
     
     currentQuery=taxURL+taxQuery+taxFormat
     
@@ -81,6 +80,9 @@ def patric_figinfo_from_solr(tax_id, target_path):
         if 'genome_info_id' in r:
             gids.add(str(r["genome_info_id"]))
     out_handle.close()
+    return gids
+
+def get_patric_feature_info(gids, target_path):
     out_handle=open(target_path+str(ts)+".feature_info.txt",'w')
     figfams=set()
     for g in gids:
@@ -96,6 +98,9 @@ def patric_figinfo_from_solr(tax_id, target_path):
             except:
                 print "couldn't write line "+str(f)
     out_handle.close()
+    return figfams
+
+def get_figfam_info(figfams, target_path):
     out_handle=open(target_path+str(ts)+".family_info.txt")
     fid_query="figfam_id:("+" OR ".join(figfams)+")&fl=figfam_id,figfam_product"
     currentQuery=fam_url+fid_query+"&"+format_string
@@ -110,7 +115,10 @@ def patric_figinfo_from_solr(tax_id, target_path):
            
 
 def main(init_args):
-    patric_figinfo_from_solr(234, './')
+    target_path='./'
+    gids=get_tax_info(234,target_path)
+    figfams=get_patric_feature_info(gids, target_path)
+    get_figfam_info(figfams, target_path)
 
 if __name__ == "__main__":
 	main(sys.argv[1:])												
