@@ -117,7 +117,7 @@ class kmerNode():
 	def updateNode(self, prev_node, in_edge_status, storage):
 		update_pos=[] #ordered pg-node references to project onto current node	
 		if (not in_edge_status in edgePossible):
-			sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys())
+			sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
 		#update references to pg-nodes from overlapping portion of previous k-mer
 		if in_edge_status & 1:
 			update_pos = range(1,len(prev_node.pgRefs),1)+[None]
@@ -188,7 +188,7 @@ class kmerNode():
 		else:
 			
 			if (not in_edge_status in edgePossible):
-				sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys())
+				sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
 
 			#if the beginnning of this kmer is new create a pg-node for it and a reference to it in this kmer
 			#handle new portion exposed in this kmer
@@ -618,7 +618,7 @@ class FamStorage():
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
 	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
 	def bfsExpand(self, minOrg):
-		for start_k_id, start_knode= in enumerate(self.kmerList):
+		for start_k_id, start_knode in enumerate(self.kmerList):
 			if start_knode.visited:
 				continue
 			else:
