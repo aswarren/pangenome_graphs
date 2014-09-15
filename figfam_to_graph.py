@@ -439,13 +439,13 @@ class FamStorage():
 				target=self.geneHash[gene_lookup]
 			cur_knode.addInfo(fID, target)#add information about kmer location
 			if prev_fam != None:
-				if rev_status and e_counter==1:
+				if rev_status and (e_counter==0 or (prev_fam and not prev_key)):
 					intergenic=fig_info.getInterFeature(prev_fam)
 					cur_knode.addPGEInfo(intergenic,e_counter)
-				elif e_counter==self.ksize-1:
+				elif e_counter==self.ksize-2 or (prev_fam and not prev_key):
 					intergenic=prev_fam.getInterFeature(fig_info)
 					cur_knode.addPGEInfo(intergenic,e_counter)
-			e_counter+=1	
+				e_counter+=1	
 			prev_fam=fig_info
                 return kmer_key
 	##Create an ID for kmer
