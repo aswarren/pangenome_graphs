@@ -34,7 +34,7 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 
 #SHOULD BE
 
-ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5,'fam_description':6}
+ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
 edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
@@ -349,7 +349,7 @@ class famInfo():
 ##This class is for parsing figfam and summary file (table of taxonomy information) and storing it in a dictionary structure
 ##Parameters are filepaths and the size of kmer to use
 class FamStorage():
-	def __init__(self, figfam_file, summary_file, ksize, ignore_fams=set([])):
+	def __init__(self, feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
 		print figfam_file
 		print summary_file
 		print str(ksize)
@@ -362,14 +362,16 @@ class FamStorage():
 		self.pg_ptrs=[] #idx of nodes. for merging identity
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
 		self.summaryLookup={}
+                self.familyInfo={}
 		self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
 		self.geneHash={} #storing information about the individual genes
 		self.replicon_edges_dict={}#stores which replicons have which edges
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
 		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
-		self.parseFam(figfam_file)
+		self.parseFam(feature_file)
 		self.parseSummary(summary_file)
+                self.parseFamilyInfo(family_file)
 		
 	class taxInfo():
 		def __init__(self, genome_name, summary_id):
@@ -597,6 +599,20 @@ class FamStorage():
 			summary_id=summary_info[-1].split(',')[self.summary_level]
 			self.summaryLookup[ref_id]=self.taxInfo(genome_name,summary_id)
 		inHandle.close()
+
+	#expects two column family name information
+	def parseFamilyInfo(self, family_file):
+		in_handle=open(family_file, 'r')
+		#header=inHandle.readline()
+		for line in in_handle:
+			if line.startswith('#'):
+				continue
+			info_list=line.strip().split("\t")
+                        try:
+                            self.familyInfo[info_list[fi["fam_id"]]]=info_list[fi["fam_description"]]
+                        except:
+                           warning("problem parsing family info line: "+line) 
+		in_handle.close()
 
         #transform the kmerNode graph (rf-graph) into a pg-graph
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
@@ -877,16 +893,16 @@ def modGexf(in_handle, out_file, k_size, minOrg, storage):
 
 def main(init_args):
 	if(len(init_args)<5):
-		sys.stderr.write("Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size minOrg\n")
+		sys.stderr.write("Usage: figfam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
 		sys.exit()
-	k_size=int(init_args[3])
-	minOrg=int(init_args[4])
-	if len(init_args)>=6:
-		ignore_fams=init_args[5].replace(' ','').split(',')
-	fstorage=FamStorage(init_args[0], init_args[1], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	k_size=int(init_args[4])
+	minOrg=int(init_args[5])
+	if len(init_args)>=7:
+		ignore_fams=init_args[6].replace(' ','').split(',')
+	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
 	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
-	out_folder=os.path.expanduser(init_args[2])
+	out_folder=os.path.expanduser(init_args[3])
 	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
