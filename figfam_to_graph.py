@@ -59,11 +59,13 @@ class geneInfo():
 
 	#calculate region between genes
 	def getInterFeature(self,nxt_feature):
-		result=copy.deepcopy(nxt_feature)
-		result.function=None
-		result.fam_id=None
+		result=geneInfo()
+		result.replicon_id=self.replicon_id
+		result.org_id=self.org_id
 		result.start=int(self.end)+1
 		result.end=int(nxt_feature.start)-1
+		result.function=None
+		result.fam_id=None
 		return result
 
 	def parse_line(self, line):
@@ -172,7 +174,8 @@ class kmerNode():
 
 	def addPGEdges(self,storage):
 		for i in range(0,len(self.pgRefs)-1,1):
-			storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
+			if self.peInfo[i]:
+				storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
 		
 	#1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
 	#2nd Add edges to new family added in this kmer FOR ALL INCOMING EDGE TYPES
@@ -436,12 +439,13 @@ class FamStorage():
 				target=self.geneHash[gene_lookup]
 			cur_knode.addInfo(fID, target)#add information about kmer location
 			if prev_fam != None:
-				if rev_status:
+				if rev_status and e_counter==1:
 					intergenic=fig_info.getInterFeature(prev_fam)
-				else:
+					cur_knode.addPGEInfo(intergenic,e_counter)
+				elif e_counter==self.ksize-1:
 					intergenic=prev_fam.getInterFeature(fig_info)
-				cur_knode.addPGEInfo(intergenic,e_counter)
-				e_counter+=1	
+					cur_knode.addPGEInfo(intergenic,e_counter)
+			e_counter+=1	
 			prev_fam=fig_info
                 return kmer_key
 	##Create an ID for kmer
@@ -508,7 +512,7 @@ class FamStorage():
 		return(kmer.split('|'))
 			
 	def parseFeatures(self, feature_file, ignore=True):
-		
+		print "parsing features and constructing kmer graph"	
 		num_fam=0
 		inHandle=open(feature_file, 'r')
 		#header=inHandle.readline()
@@ -590,6 +594,7 @@ class FamStorage():
 	#expects summary taxid, tax level, and the taxpath comma seperated values
 	def parseSummary(self, summary_file):
 		inHandle=open(summary_file, 'r')
+		print "parsing taxonomy information and constructing taxon table"
 		#header=inHandle.readline()
 		for line in inHandle:
 			if line.startswith('#'):
@@ -606,6 +611,7 @@ class FamStorage():
 	#expects two column family name information
 	def parseFamilyInfo(self, family_file):
 		in_handle=open(family_file, 'r')
+		print "parsing family information table"
 		#header=inHandle.readline()
 		for line in in_handle:
 			if line.startswith('#'):
@@ -621,6 +627,7 @@ class FamStorage():
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
 	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
 	def bfsExpand(self, minOrg):
+		print "expanding kmer graph in to pg-graph"
 		for start_k_id, start_knode in enumerate(self.kmerList):
 			if start_knode.visited:
 				continue
