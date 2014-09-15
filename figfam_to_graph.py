@@ -58,12 +58,12 @@ class geneInfo():
 			self.parse_line(line)
 
 	#calculate region between genes
-	def getInterFeature(nxt_feature):
+	def getInterFeature(self,nxt_feature):
 		result=copy.deepcopy(nxt_feature)
 		result.function=None
 		result.fam_id=None
-		result.start=self.end+1
-		result.end=nxt_feature.start-1
+		result.start=int(self.end)+1
+		result.end=int(nxt_feature.start)-1
 		return result
 
 	def parse_line(self, line):
@@ -74,7 +74,6 @@ class geneInfo():
 			self.org_id=parts[ip['org_id']]
 			self.start=parts[ip['start']]
 			self.end=parts[ip['end']]
-			self.function=parts[ip['fam_description']]
 		except:
 			warning("parsing problem. couldn't parse line: "+line)
 			pass
@@ -87,23 +86,27 @@ class geneInfo():
 ##along with the kmer information. does not store information in direction
 ##specific way.
 class kmerNode():
-	def __init__(self,nid, ksize, rev_status=False):
+	def __init__(self,nid, ksize, rev_status):
 		self.infoList=OrderedDict()#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo() Does not store direction.
 		self.pgRefs=[None for i in range(ksize)]#an ordered list of pg-node pointers which will be updated as k-nodes are processed
-		self.peInfo=[set() for i in range(ksize)-1]#pan-edge info regarding space between families
+		self.peInfo=[set() for i in range(ksize-1)]#pan-edge info regarding space between families
 		self.nodeID=nid
 		self.weightLabel=None
 		self.weight=None
-                self.linkOut=[set(),set(),set(),set()]#four classes of edges
+                self.linkOut={}#four classes of edges
 		self.visited=False
 		self.self_edge=False
+		self.curRevStatus=rev_status
 	#each cell in list stores info[LetterOfKmer]=geneInfo()
 	def addInfo(self, cur_key, info):
 		try: self.infoList[cur_key].append(info)
 		except: self.infoList[cur_key]=[info]
 	#add intergenic information to what will eventually become pan-genome edges
 	def addPGEInfo(self, inter_info, position):
-		self.peInfo[position].add(inter_info)
+		if position > len(self.peInfo)-1:
+			print str(position)+" for "+" ".join(self.peInfo)
+		else:
+			self.peInfo[position].add(inter_info)
 
 	def addEdges(self,node_id,nxt_rev_status):
 		#get class of edge type
@@ -350,7 +353,7 @@ class famInfo():
 ##Parameters are filepaths and the size of kmer to use
 class FamStorage():
 	def __init__(self, feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
-		print figfam_file
+		print feature_file
 		print summary_file
 		print str(ksize)
 		self.kmerList=[] #set kmer_ids to position here.
@@ -369,7 +372,7 @@ class FamStorage():
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
 		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
-		self.parseFam(feature_file)
+		self.parseFeatures(feature_file)
 		self.parseSummary(summary_file)
                 self.parseFamilyInfo(family_file)
 		
@@ -412,13 +415,13 @@ class FamStorage():
 		kmer_key, rev_status=self.makeKey(list(kmer_q),prev_key)#put IDs together to make kmer
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
-			self.kmerList.append(kmerNode(nodeID, rev_status))
+			self.kmerList.append(kmerNode(nodeID, self.ksize, rev_status))
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
 		cur_knode=self.kmerLookup[kmer_key]
 		if(prev_key!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			prev_knode=self.kmerLookup[prev_key]
-			prev_knode.addEdge(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
+			prev_knode.addEdges(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
 		prev_fam=None
 		e_counter=0 #for keeping track of which intergenic space
 		for fig_info in fig_list:
@@ -456,7 +459,7 @@ class FamStorage():
 			k_list.reverse()
 			rev_status=True
 		result=id_sep.join(k_list)
-		if prev_key[-1] == result:
+		if prev_key and prev_key[-1] == result:
 			self.kmerLevel+=1
 		else:
 			self.kmerLevel=0
@@ -504,10 +507,10 @@ class FamStorage():
 	def getParts(self, kmer):
 		return(kmer.split('|'))
 			
-	def parseFam(self, figfam_file, ignore=True):
+	def parseFeatures(self, feature_file, ignore=True):
 		
 		num_fam=0
-		inHandle=open(figfam_file, 'r')
+		inHandle=open(feature_file, 'r')
 		#header=inHandle.readline()
 		kmer_q=deque()
 		prev_seq=""
