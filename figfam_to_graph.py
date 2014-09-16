@@ -663,7 +663,7 @@ class FamStorage():
 							return_node=self.kmerList[k_id]
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
-							knode_q.append(k_id, cur_knode.linkOut[k_id])
+							knode_q.append((k_id, cur_knode.linkOut[k_id]))
 					cur_knode.addPGEdges(self)
 					prev_k_id = visiting_k_id	
 
