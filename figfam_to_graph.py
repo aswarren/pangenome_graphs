@@ -426,7 +426,7 @@ class FamStorage():
 		if(prev_key!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			prev_knode=self.kmerLookup[prev_key]
-			prev_knode.addEdges(kmer_key, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
+			prev_knode.addEdges(nodeID, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
 		prev_fam=None
 		e_counter=0 #for keeping track of which intergenic space
 		for fig_info in fig_list:
