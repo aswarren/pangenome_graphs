@@ -35,6 +35,7 @@ from lxml.etree import Element, ElementTree, tostring, fromstring, register_name
 #SHOULD BE
 
 ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
+fi={'fam_id':0,'fam_description':1}
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
 edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
@@ -59,6 +60,7 @@ class geneInfo():
 
 	#calculate region between genes
 	def getInterFeature(self,nxt_feature):
+		print "from "+self.fam_id+" to "+nxt_feature.fam_id
 		result=geneInfo()
 		result.replicon_id=self.replicon_id
 		result.org_id=self.org_id
@@ -641,7 +643,10 @@ class FamStorage():
 					cur_knode=self.kmerList[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
-					cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
+					if prev_k_id:
+						cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
+					else:
+						cur_knode.visitNode(None, None, self)
 					for k_id in cur_knode.linkOut:
 						if k_id == visiting_k_id:#self loop
 							continue
