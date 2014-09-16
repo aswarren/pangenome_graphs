@@ -393,7 +393,8 @@ class FamStorage():
 		nid=len(self.pg_initial)-1
 		self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
 		self.pg_ptrs.append(nid)
-
+	def getPGNode(self, node_idx):
+		return self.pg_initial[node_idx]
 	def addInfoPGNode(self, nid, gene_list):
 		pgref=self.pg_ptr[nid]
 		cur_node=self.pg_initial[pgref]
