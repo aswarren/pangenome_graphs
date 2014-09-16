@@ -418,11 +418,13 @@ class FamStorage():
 	def addKmer(self, prev_key, kmer_q):
 		fig_list=list(kmer_q)
 		kmer_key, rev_status=self.makeKey(list(kmer_q),prev_key)#put IDs together to make kmer
+		nodeID=None
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
 			self.kmerList.append(kmerNode(nodeID, self.ksize, rev_status))
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
 		cur_knode=self.kmerLookup[kmer_key]
+		nodeID= cur_knode.nodeID
 		if(prev_key!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
 			prev_knode=self.kmerLookup[prev_key]
