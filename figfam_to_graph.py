@@ -240,9 +240,9 @@ class kmerNode():
 				
 #pg-node "incubator" class
 class pgShell():
-	def __init__(self, nid,fid,gene_set):
+	def __init__(self, nid,fid,gene_list):
 		self.node_id=nid
-		self.famSubset=famVersion(fid,gene_set)
+		self.famSubset=famVersion(fid,gene_list)
 		self.edges={}#key is nodeRef, value is set of geneInfo intergenic
 	def addEdge(self, nodeRef, e_info):
 		if not nodeRef in self.edges:
@@ -263,8 +263,8 @@ class pgShell():
 #provides a summary of where this family occurs
 #a family may be differentiated into multiple version depending on its ocurrence in kmers
 class famVersion():
-	def __init__(self, famID, id_set):
-		self.instances=id_set.copy() #set of locations that identify this version of family
+	def __init__(self, famID, id_list):
+		self.instances=set(id_list) #set of locations that identify this version of family
 		self.organisms=set()
 		self.tax_summary=set()
 		self.replicons=set()
@@ -391,7 +391,7 @@ class FamStorage():
 	##adds a PGShell to pg_initial and a pointer in pg_ptrs
 	def addPGNode(self,fid,gene_list):
 		nid=len(self.pg_initial)-1
-		self.pg_initial.append(pgShell(nid,fid,gene_list))
+		self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
 		self.pg_ptrs.append(nid)
 
 	def addInfoPGNode(self, nid, gene_list):
