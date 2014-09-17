@@ -116,7 +116,7 @@ def get_figfam_info(figfams, target_path):
 
 def main(init_args):
     target_path='./'
-    gids=get_tax_info(234,target_path)
+    gids=get_tax_info(29461,target_path)
     figfams=get_patric_feature_info(gids, target_path)
     #table=pd.read_table('./1410652018.19.feature_info.txt',names=['figfam_id','gid','ncbi_tax_id','sid','start','end'])
     #figfams=set(table['figfam_id'])

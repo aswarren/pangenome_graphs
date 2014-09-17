@@ -58,9 +58,13 @@ class geneInfo():
                 if line:
 			self.parse_line(line)
 
+	def getString(self):
+		result="|".join([self.replicon_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
+		return result
+
 	#calculate region between genes
 	def getInterFeature(self,nxt_feature):
-		print "from "+self.fam_id+" to "+nxt_feature.fam_id
+		#print "from "+self.fam_id+" to "+nxt_feature.fam_id
 		result=geneInfo()
 		result.replicon_id=self.replicon_id
 		result.org_id=self.org_id
@@ -108,12 +112,14 @@ class kmerNode():
 	#add intergenic information to what will eventually become pan-genome edges
 	def addPGEInfo(self, inter_info, position):
 		if position > len(self.peInfo)-1:
-			print str(position)+" for "+" ".join(self.peInfo)
+			print "out of bounds "+str(position)+" for "+" ".join(self.peInfo)
 		else:
 			self.peInfo[position].add(inter_info)
 
 	def addEdges(self,node_id,nxt_rev_status):
 		#get class of edge type
+		if self.nodeID ==1 and node_id ==0:
+			print "Debug: makes no sense for this to link backwards"
 		edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
 		if node_id in self.linkOut:
 			self.linkOut[node_id]=self.linkOut[node_id]|edgeStatus #bitwise OR to represent both multi status
@@ -135,7 +141,7 @@ class kmerNode():
 		elif in_edge_status & 8:
 			update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
 		for cur_pos, prev_pos in enumerate(update_pos):
-			if prev_pos and prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
+			if prev_pos != None and prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
 				storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
 				
 			
@@ -150,7 +156,8 @@ class kmerNode():
 		#	for n in reversed(prev_node.pgRefs[0:-1]):self.pgRefs.append(n)
 		#elif in_edge_status & 8:
 		#	for n in prev_node.pgRefs[0:-1]):self.pgRefs.append(n)
-		
+		if self.nodeID == 1 or self.nodeID ==2 or (prev_node != None and (prev_node.nodeID ==1 or prev_node.nodeID ==2)):
+			print "Debug: pgRefs and in_edge_status screwed up"
 		update_pos=[] #ordered pg-node references to project onto current node	
 		#update references to pg-nodes from overlapping portion of previous k-mer
 		if in_edge_status & 1:
@@ -162,21 +169,28 @@ class kmerNode():
 		elif in_edge_status & 8:
 			update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
 		for cur_pos, prev_pos in enumerate(update_pos):
-			if prev_pos:
+			if prev_pos != None:
 				self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
 
 	#apply this kmers location info to current pg-node references
 	def applyInfo(self,storage):
 		count =0
 		#infoList is an OrderedDict
+		if self.nodeID == 1 or self.nodeID ==2:
+			print "Debug: pgRefs and in_edge_status screwed up"
 		for fID,gene_list in self.infoList.iteritems():
 			nid=self.pgRefs[count]
 			storage.addInfoPGNode(nid,gene_list)#adds the node. edges are implied within every k-mer 
 			count +=1
 
 	def addPGEdges(self,storage):
+		if self.nodeID == 1 or self.nodeID ==2 :
+			print "Debug: pgRefs and in_edge_status screwed up"
 		for i in range(0,len(self.pgRefs)-1,1):
-			if self.peInfo[i]:
+			if self.pgRefs[i] == None or self.pgRefs[i+1] == None:
+				print "missing pg-nodes in "+str(self.nodeID)
+				sys.exit()
+			if len(self.peInfo[i]):
 				storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
 		
 	#1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
@@ -187,7 +201,11 @@ class kmerNode():
 	#NOTES direction does not matter at the pg-edge/node level
 	#model letters in k-mer more explicitly than stupid | separated     	
         def visitNode(self, prev_node, in_edge_status, storage):
-		if not prev_node:
+		if self.nodeID == 1 or self.nodeID ==2 or (prev_node != None and (prev_node.nodeID ==1 or prev_node.nodeID ==2)):
+			print "Debug: pgRefs and in_edge_status screwed up"
+		if self.nodeID ==3261:
+			print "Debug: investigate here"
+		if prev_node == None:
 			count =0
 			for fID,gene_list in self.infoList.iteritems():
 				g_id=storage.addPGNode(fID,gene_list)#adds the node. edges are implied within every k-mer 
@@ -207,6 +225,8 @@ class kmerNode():
 				self.pgRefs[0]=g_id
 
 			#transfer references from previous k-mer
+			if self.nodeID==3261:
+				print "Debug: look at transfer of references to this node"
 			self.transferRefs(prev_node, in_edge_status, storage)
 	
 			#if the end of *this* kmer is new create a PG-node for it and add the reference to this kmer
@@ -215,7 +235,7 @@ class kmerNode():
 			if (in_edge_status & 5):
 				fID=self.infoList.keys()[-1]
 				g_id=storage.addPGNode(fID,self.infoList[fID])
-				self.pgRefs.append(g_id)
+				self.pgRefs[-1]=g_id
 			#some information may be unique to this kmer. apply it to the pg-nodes
 			self.applyInfo(storage)
 
@@ -390,13 +410,20 @@ class FamStorage():
 		
 	##adds a PGShell to pg_initial and a pointer in pg_ptrs
 	def addPGNode(self,fid,gene_list):
-		nid=len(self.pg_initial)-1
+		nid=len(self.pg_initial)
 		self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
 		self.pg_ptrs.append(nid)
+		return len(self.pg_ptrs)-1
 	def getPGNode(self, node_idx):
-		return self.pg_initial[node_idx]
+		cur_ref=self.pg_ptrs[node_idx]
+		result=self.pg_initial[cur_ref]
+		if result == None:
+			print "Debug: None type"
+		return result
 	def addInfoPGNode(self, nid, gene_list):
-		pgref=self.pg_ptr[nid]
+		if nid == None:
+			print "Debug: whats going on?"
+		pgref=self.pg_ptrs[nid]
 		cur_node=self.pg_initial[pgref]
 		cur_node.addInfo(gene_list)
 	#using the idx provided make the main node subsume the target node
@@ -405,6 +432,8 @@ class FamStorage():
 		main_node = self.pg_initial[main_idx2]
 		target_idx2 = self.pg_ptrs[target_idx]
 		target_node = self.pg_initial[target_idx2]
+		if main_node == None or target_node == None or target_idx==18:
+			print "Debug: None type here"
 		main_node.subsumeNode(target_node)
 		#now point all future references to target_node at main_node
 		self.pg_ptrs[target_idx]=main_idx2
@@ -420,11 +449,16 @@ class FamStorage():
 		fig_list=list(kmer_q)
 		kmer_key, rev_status=self.makeKey(list(kmer_q),prev_key)#put IDs together to make kmer
 		nodeID=None
+		if rev_status:
+			fig_list.reverse()
 		if not kmer_key in self.kmerLookup: 
 			nodeID = len(self.kmerList)
 			self.kmerList.append(kmerNode(nodeID, self.ksize, rev_status))
 			self.kmerLookup[kmer_key]=self.kmerList[-1]
 		cur_knode=self.kmerLookup[kmer_key]
+		cur_knode.curRevStatus=rev_status
+		if nodeID == 2:
+			print "Debug: Why are you linking backwards?"
 		nodeID= cur_knode.nodeID
 		if(prev_key!=None):
 			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
@@ -444,10 +478,10 @@ class FamStorage():
 				target=self.geneHash[gene_lookup]
 			cur_knode.addInfo(fID, target)#add information about kmer location
 			if prev_fam != None:
-				if rev_status and (e_counter==0 or (prev_fam and not prev_key)):
+				if rev_status and (e_counter==0 or (prev_fam and prev_key == None)):
 					intergenic=fig_info.getInterFeature(prev_fam)
 					cur_knode.addPGEInfo(intergenic,e_counter)
-				elif e_counter==self.ksize-2 or (prev_fam and not prev_key):
+				elif e_counter==self.ksize-2 or (prev_fam and prev_key == None):
 					intergenic=prev_fam.getInterFeature(fig_info)
 					cur_knode.addPGEInfo(intergenic,e_counter)
 				e_counter+=1	
@@ -638,15 +672,15 @@ class FamStorage():
 				continue
 			else:
 				knode_q=deque()
-				knode_q.append((start_k_id,None))
+				knode_q.append((start_k_id,None,None))
 				prev_k_id=None
 				in_edge_status=None # type of edge arrived by
 				while len(knode_q) > 0:
-					visiting_k_id, in_edge_status=knode_q.popleft()
+					visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
 					cur_knode=self.kmerList[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
-					if prev_k_id:
+					if prev_k_id != None:
 						cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
 					else:
 						cur_knode.visitNode(None, None, self)
@@ -664,9 +698,8 @@ class FamStorage():
 							return_node=self.kmerList[k_id]
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
-							knode_q.append((k_id, cur_knode.linkOut[k_id]))
+							knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
 					cur_knode.addPGEdges(self)
-					prev_k_id = visiting_k_id	
 
 # undirected weighted
 class pFamGraph(Graph):
