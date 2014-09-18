@@ -412,32 +412,30 @@ class FamStorage():
 	def addPGNode(self,fid,gene_list):
 		nid=len(self.pg_initial)
 		self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
-		self.pg_ptrs.append(nid)
+		self.pg_ptrs.append(self.pg_initial[-1])
 		return len(self.pg_ptrs)-1
 	def getPGNode(self, node_idx):
-		cur_ref=self.pg_ptrs[node_idx]
-		result=self.pg_initial[cur_ref]
+		result=self.pg_ptrs[node_idx]
 		if result == None:
 			print "Debug: None type"
 		return result
 	def addInfoPGNode(self, nid, gene_list):
 		if nid == None:
 			print "Debug: whats going on?"
-		pgref=self.pg_ptrs[nid]
-		cur_node=self.pg_initial[pgref]
+		cur_node=self.getPGNode(nid)
 		cur_node.addInfo(gene_list)
 	#using the idx provided make the main node subsume the target node
+	#don't have to destroy target...
 	def updatePGNode(self, main_idx, target_idx):
-		main_idx2 = self.pg_ptrs[main_idx]
-		main_node = self.pg_initial[main_idx2]
-		target_idx2 = self.pg_ptrs[target_idx]
-		target_node = self.pg_initial[target_idx2]
+		main_node = self.pg_ptrs[main_idx]
+		target_node = self.pg_initial[target_idx]
 		if main_node == None or target_node == None or target_idx==18:
 			print "Debug: None type here"
-		main_node.subsumeNode(target_node)
-		#now point all future references to target_node at main_node
-		self.pg_ptrs[target_idx]=main_idx2
-		self.pg_initial[target_idx2]=None #destroy target
+		if main_node.node_id != target_node.node_id:
+			main_node.subsumeNode(target_node)
+			#now point all future references to target_node at main_node
+			self.pg_ptrs[target_idx]=main_node
+			self.pg_initial[target_node.node_id]=None #destroy target
 		 
 			
 
@@ -833,8 +831,7 @@ class pFamGraph(Graph):
 		for n in storage.pg_initial:
 			if n:
 				for e in n.edges:
-					n2_idx=storage.pg_ptrs[e]
-					n2=storage.pg_initial[n2_idx]
+					n2=storage.getPGNode(e)
 					self.add_edge(n.famSubset, n2.famSubset)
 					if not 'instances' in self[n.famSubset][n2.famSubset]:
 						self[n.famSubset][n2.famSubset]['instances']=set()
