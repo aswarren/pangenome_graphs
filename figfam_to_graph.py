@@ -428,7 +428,7 @@ class FamStorage():
 	#don't have to destroy target...
 	def updatePGNode(self, main_idx, target_idx):
 		main_node = self.pg_ptrs[main_idx]
-		target_node = self.pg_initial[target_idx]
+		target_node = self.pg_ptrs[target_idx]
 		if main_node == None or target_node == None or target_idx==18:
 			print "Debug: None type here"
 		if main_node.node_id != target_node.node_id:
