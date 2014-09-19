@@ -10,7 +10,9 @@ import DOMLight, json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
-
+#requires 2.7 or greater
+if sys.version_info < (2, 7):
+	raise "must use python 2.7 or greater"
 
 from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
 #try:
@@ -103,6 +105,7 @@ class kmerNode():
 		self.weight=None
                 self.linkOut={}#four classes of edges
 		self.visited=False
+		self.queued=False
 		self.self_edge=False
 		self.curRevStatus=rev_status
 	#each cell in list stores info[LetterOfKmer]=geneInfo()
@@ -141,8 +144,11 @@ class kmerNode():
 		elif in_edge_status & 8:
 			update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
 		for cur_pos, prev_pos in enumerate(update_pos):
-			if prev_pos != None and prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
-				storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
+			if prev_pos != None:
+				if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
+					self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
+				elif prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
+					storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
 				
 			
 	#if the node has not been visited before transfer previous references
@@ -170,7 +176,10 @@ class kmerNode():
 			update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
 		for cur_pos, prev_pos in enumerate(update_pos):
 			if prev_pos != None:
-				self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
+				if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
+					self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
+				elif prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
+					storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
 
 	#apply this kmers location info to current pg-node references
 	def applyInfo(self,storage):
@@ -400,6 +409,7 @@ class FamStorage():
 		self.parseFeatures(feature_file)
 		self.parseSummary(summary_file)
                 self.parseFamilyInfo(family_file)
+		self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
 		
 	class taxInfo():
 		def __init__(self, genome_name, summary_id):
@@ -500,10 +510,11 @@ class FamStorage():
 			k_list.reverse()
 			rev_status=True
 		result=id_sep.join(k_list)
-		if prev_key and prev_key[-1] == result:
+		if result in recentK:
 			self.kmerLevel+=1
 		else:
 			self.kmerLevel=0
+		recentK.append(result)
 		return ((self.kmerLevel, result), rev_status)
 	##get the id_set used for degree of similarity for protein family
 	#Parameters fID-figfamID; kmer-the kmer ID
@@ -664,7 +675,7 @@ class FamStorage():
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
 	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
 	def bfsExpand(self, minOrg):
-		print "expanding kmer graph in to pg-graph"
+		print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.kmerList))
 		for start_k_id, start_knode in enumerate(self.kmerList):
 			if start_knode.visited:
 				continue
@@ -675,6 +686,7 @@ class FamStorage():
 				in_edge_status=None # type of edge arrived by
 				while len(knode_q) > 0:
 					visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
+					print "visiting kNode "+str(visiting_k_id)+" length of q is "+str(len(knode_q))
 					cur_knode=self.kmerList[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
@@ -683,7 +695,7 @@ class FamStorage():
 					else:
 						cur_knode.visitNode(None, None, self)
 					for k_id in cur_knode.linkOut:
-						if k_id == visiting_k_id:#self loop
+						if k_id == visiting_k_id:#self loop this should not happen because of kmer levels
 							continue
 							#something selfish
 							#cur_knode.self_edge=True
@@ -692,11 +704,14 @@ class FamStorage():
 							#handle return loop. create single edge back and apply labels
 							#return_node=self.kmerList[k_id]
 							#return_node.applyInfo(self)
-						elif self.kmerList[k_id].visited:	
+						elif self.kmerList[k_id].visited or self.kmerList[k_id].queued:	
 							return_node=self.kmerList[k_id]
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
+							if k_id ==208:
+								print "Debug: why is this being queued so much?"
 							knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
+							self.kmerList[k_id].queued=True
 					cur_knode.addPGEdges(self)
 
 # undirected weighted
