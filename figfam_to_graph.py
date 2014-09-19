@@ -242,8 +242,7 @@ class kmerNode():
 			#handle new portion exposed in this kmer
 			#case 1|4 =5
 			if (in_edge_status & 5):
-				fID=self.infoList.keys()[-1]
-				g_id=storage.addPGNode(fID,self.infoList[fID])
+				g_id=storage.addPGNode(self.infoList[-1][0],self.infoList[-1][-1])
 				self.pgRefs[-1]=g_id
 			#some information may be unique to this kmer. apply it to the pg-nodes
 			self.applyInfo(storage)
@@ -253,13 +252,13 @@ class kmerNode():
 	def getReplicons(self):
 		result=set([])
 		#all the replicons should be the same for each fam in this kmer
-		fam=self.infoList.values()[0]
-		for info in fam: 
-			result.add(info.getReplicon())
+		for fam in self.infoList:
+			for info in fam[-1]: 
+				result.add(info.getReplicon())
 		return result
 	def testNode(self):
 		#make sure that all the families in the kmer come from same replicons
-		ref_set=set([x.getReplicon() for x in self.infoList[0][-1]])
+		ref_set=set([info.getReplicon() for info in self.infoList[0][-1]])
 		for tup in self.infoList:
 			test_set=set([])
 			for info in tup[-1]:
