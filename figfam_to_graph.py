@@ -97,7 +97,7 @@ class geneInfo():
 ##specific way.
 class kmerNode():
 	def __init__(self,nid, ksize, rev_status):
-		self.infoList=OrderedDict()#stores information about location of the figfams that make up kmer as geneInfo objects infoList[figfam ID] = geneInfo() Does not store direction.
+		self.infoList=[None for i in range(ksize)]#stores information about location of the figfams that make up kmer as geneInfo objects [(figfam ID, [geneInfo()]] Does not store direction.
 		self.pgRefs=[None for i in range(ksize)]#an ordered list of pg-node pointers which will be updated as k-nodes are processed
 		self.peInfo=[set() for i in range(ksize-1)]#pan-edge info regarding space between families
 		self.nodeID=nid
@@ -109,9 +109,14 @@ class kmerNode():
 		self.self_edge=False
 		self.curRevStatus=rev_status
 	#each cell in list stores info[LetterOfKmer]=geneInfo()
-	def addInfo(self, cur_key, info):
-		try: self.infoList[cur_key].append(info)
-		except: self.infoList[cur_key]=[info]
+	def addInfo(self, position, cur_fam, info):
+		if self.infoList[position] != None:
+			if self.infoList[position][0]!=cur_fam:
+				sys.stderr.write("logical error: trying to insert information about wrong family\n")
+				sys.exit()
+			self.infoList[position][-1].append(info)
+		else:
+			self.infoList[position]=(cur_fam,[info])
 	#add intergenic information to what will eventually become pan-genome edges
 	def addPGEInfo(self, inter_info, position):
 		if position > len(self.peInfo)-1:
@@ -183,14 +188,12 @@ class kmerNode():
 
 	#apply this kmers location info to current pg-node references
 	def applyInfo(self,storage):
-		count =0
 		#infoList is an OrderedDict
 		if self.nodeID == 1 or self.nodeID ==2:
 			print "Debug: pgRefs and in_edge_status screwed up"
-		for fID,gene_list in self.infoList.iteritems():
+		for count,info in enumerate(self.infoList):
 			nid=self.pgRefs[count]
-			storage.addInfoPGNode(nid,gene_list)#adds the node. edges are implied within every k-mer 
-			count +=1
+			storage.addInfoPGNode(nid,info[-1])#adds the node. edges are implied within every k-mer 
 
 	def addPGEdges(self,storage):
 		if self.nodeID == 1 or self.nodeID ==2 :
@@ -215,22 +218,19 @@ class kmerNode():
 		if self.nodeID ==3261:
 			print "Debug: investigate here"
 		if prev_node == None:
-			count =0
-			for fID,gene_list in self.infoList.iteritems():
-				g_id=storage.addPGNode(fID,gene_list)#adds the node. edges are implied within every k-mer 
+			for count,info in enumerate(self.infoList):
+				g_id=storage.addPGNode(info[0],info[-1])#adds the node. edges are implied within every k-mer 
 				self.pgRefs[count]=g_id
-				count +=1
 		else:
 			
 			if (not in_edge_status in edgePossible):
-				sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
+				sys.stderr.write("unforseen case: transitioning from "+"|".join([x[0] for x in prev_node.infoList])+" to "+"|".join([x[0] for x in self.infoList]))
 
 			#if the beginnning of this kmer is new create a pg-node for it and a reference to it in this kmer
 			#handle new portion exposed in this kmer
 			#case 2|8 =10
 			if (in_edge_status & 10):
-				fID=self.infoList.keys()[0]
-				g_id=storage.addPGNode(fID,self.infoList[fID])
+				g_id=storage.addPGNode(self.infoList[0][0],self.infoList[0][-1])
 				self.pgRefs[0]=g_id
 
 			#transfer references from previous k-mer
@@ -259,10 +259,10 @@ class kmerNode():
 		return result
 	def testNode(self):
 		#make sure that all the families in the kmer come from same replicons
-		ref_set=set([x.getReplicon() for x in self.infoList.values()[0]])
-		for fam in self.infoList.values():
+		ref_set=set([x.getReplicon() for x in self.infoList[0][-1]])
+		for tup in self.infoList:
 			test_set=set([])
-			for info in fam:
+			for info in tup[-1]:
 				test_set.add(info.getReplicon())
 			if test_set != ref_set:
 				warning("kmer "+self.nodeID+" has inconsistent replicons")
@@ -405,11 +405,11 @@ class FamStorage():
 		self.replicon_edges_dict={}#stores which replicons have which edges
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
+		self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
 		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
 		self.parseFeatures(feature_file)
 		self.parseSummary(summary_file)
                 self.parseFamilyInfo(family_file)
-		self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
 		
 	class taxInfo():
 		def __init__(self, genome_name, summary_id):
@@ -474,7 +474,7 @@ class FamStorage():
 			prev_knode.addEdges(nodeID, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
 		prev_fam=None
 		e_counter=0 #for keeping track of which intergenic space
-		for fig_info in fig_list:
+		for position, fig_info in enumerate(fig_list):
 			#print fig_info
 			fID, replicon_id, organism_id, start, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.start, fig_info.function
 			gene_lookup=(replicon_id, start)
@@ -484,7 +484,7 @@ class FamStorage():
 				self.geneHash[gene_lookup]=target
 			else:
 				target=self.geneHash[gene_lookup]
-			cur_knode.addInfo(fID, target)#add information about kmer location
+			cur_knode.addInfo(position, fID, target)#add information about kmer location
 			if prev_fam != None:
 				if rev_status and (e_counter==0 or (prev_fam and prev_key == None)):
 					intergenic=fig_info.getInterFeature(prev_fam)
@@ -510,11 +510,11 @@ class FamStorage():
 			k_list.reverse()
 			rev_status=True
 		result=id_sep.join(k_list)
-		if result in recentK:
+		if result in self.recentK:
 			self.kmerLevel+=1
 		else:
 			self.kmerLevel=0
-		recentK.append(result)
+		self.recentK.append(result)
 		return ((self.kmerLevel, result), rev_status)
 	##get the id_set used for degree of similarity for protein family
 	#Parameters fID-figfamID; kmer-the kmer ID
@@ -686,7 +686,6 @@ class FamStorage():
 				in_edge_status=None # type of edge arrived by
 				while len(knode_q) > 0:
 					visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
-					print "visiting kNode "+str(visiting_k_id)+" length of q is "+str(len(knode_q))
 					cur_knode=self.kmerList[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
