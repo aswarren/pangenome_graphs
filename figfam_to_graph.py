@@ -985,9 +985,9 @@ def main(init_args):
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
-	result_handle=open(out_file+".json", 'w')
-	pgraph.toJSON(result_handle)
-	result_handle.close()
+	#result_handle=open(out_file+".json", 'w')
+	#pgraph.toJSON(result_handle)
+	#result_handle.close()
 	
 if __name__ == "__main__":
 	main(sys.argv[1:])
