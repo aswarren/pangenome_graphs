@@ -630,9 +630,9 @@ class FamStorage():
 	
 	def nodeTaxSummary(self,cnode):
 		result=set()
-		for i in cnode.infoList:
-			if(i[-1].org_id in self.summaryLookup):
-				result.add(self.summaryLookup[i[-1].org_id].get_summary_id())
+		for i in cnode.instances:
+			if(i.org_id in self.summaryLookup):
+				result.add(self.summaryLookup[i.org_id].get_summary_id())
 		return result
 
 	#Get the total number of unique taxonomy labels 
@@ -778,8 +778,8 @@ class pFamGraph(Graph):
 	#so that they can be written by graphml writer
 	def update_node_attr_final(self, weight_func, divisor=1, remove_attrs=[]):
 		for n in self.nodes():
-			weight_set=weight_func(self.node[n])
-			try: self.node[n]['weight']=len(self.node[n][weight_attr])/float(divisor)
+			weight_set=weight_func(n)
+			try: self.node[n]['weight']=len(weight_set)/float(divisor)
 			except: pass
 			for r in remove_attrs:
 				try: self.node[n].pop(r,None)
