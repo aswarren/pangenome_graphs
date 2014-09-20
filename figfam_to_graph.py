@@ -88,9 +88,13 @@ class geneInfo():
 			warning("parsing problem. couldn't parse line: "+line)
 			pass
 	def getLocation(self):
-		return (self.replicon_id, self.start)
+		return [self.replicon_id, self.start, self.end]
+	def getLocationString(self):
+		return ":".join([self.replicon_id, str(self.start), str(self.end)])
 	def getReplicon(self):
 		return self.replicon_id
+	def getOrganism(self):
+		return self.org_id
 
 ##Class for storing all the geneInfo in a particular node
 ##along with the kmer information. does not store information in direction
@@ -626,9 +630,9 @@ class FamStorage():
 	
 	def nodeTaxSummary(self,cnode):
 		result=set()
-		for i in cnode.infoList.values()[0]:
-			if(i.org_id in self.summaryLookup):
-				result.add(self.summaryLookup[i.org_id].get_summary_id())
+		for i in cnode.infoList:
+			if(i[-1].org_id in self.summaryLookup):
+				result.add(self.summaryLookup[i[-1].org_id].get_summary_id())
 		return result
 
 	#Get the total number of unique taxonomy labels 
@@ -740,17 +744,23 @@ class pFamGraph(Graph):
 
 	#update the edge weight based on a designated attribute
 	#also flatten to a string since writing list objects isn't supported
-	def update_edges(self, weight_attr, divisor=1, label_attr='replicons', remove_attrs=[]):
+	#weight_attr has to be weight. label_attr = (what to get, and what to label it)
+	def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
 		for e in self.edges():
 			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
 			#except: pass
 			self.adj[e[0]][e[1]]['label']=''
-			try: self.adj[e[0]][e[1]]['weight']=len(self.adj[e[0]][e[1]][weight_attr])/float(divisor)
+			weight_set=set()
+			label_set=set()
+			for i in self.adj[e[0]][e[1]]['instances']:
+				weight_set.add(getattr(i,weight_attr))
+				label_set.add(getattr(i,label_attr[0]))
+			try: self.adj[e[0]][e[1]]['weight']=len(weight_set)/float(divisor)
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
 				except: pass
 			if label_attr:
-				try: self.adj[e[0]][e[1]][label_attr]=", ".join(self.adj[e[0]][e[1]][label_attr])
+				try: self.adj[e[0]][e[1]][label_attr[1]]=", ".join(list(label_set))
 				except: pass
 			for r in remove_attrs:
 				try: self.adj[e[0]][e[1]].pop(r,None)
@@ -766,8 +776,9 @@ class pFamGraph(Graph):
 	
 	#calculate the node weight and change the set attributes to string
 	#so that they can be written by graphml writer
-	def update_node_attr_final(self, weight_attr, divisor=1, remove_attrs=[]):
+	def update_node_attr_final(self, weight_func, divisor=1, remove_attrs=[]):
 		for n in self.nodes():
+			weight_set=weight_func(self.node[n])
 			try: self.node[n]['weight']=len(self.node[n][weight_attr])/float(divisor)
 			except: pass
 			for r in remove_attrs:
@@ -850,8 +861,8 @@ class pFamGraph(Graph):
 						self[n.famSubset][n2.famSubset]['instances']=set()
 					self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
 		
-		self.update_edges(weight_attr='orgs',divisor=float(num_orgs), label_attr='replicons', remove_attrs=['orgs'])
-		self.update_node_attr_final('tax_summary', divisor=float(total_tax), remove_attrs=['organisms'])
+		self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
+		self.update_node_attr_final(storage.nodeTaxSummary, divisor=float(total_tax), remove_attrs=['instances'])
 		
 		#create attribute called paths which represents edges per replicon
 		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
