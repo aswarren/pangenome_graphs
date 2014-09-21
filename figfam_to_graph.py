@@ -274,7 +274,7 @@ class kmerNode():
 class pgShell():
 	def __init__(self, nid,fid,gene_list):
 		self.node_id=nid
-		self.famSubset=famVersion(fid,gene_list)
+		self.famSubset=famVersion(nid, fid,gene_list)
 		self.edges={}#key is nodeRef, value is set of geneInfo intergenic
 	def addEdge(self, nodeRef, e_info):
 		if not nodeRef in self.edges:
@@ -295,7 +295,9 @@ class pgShell():
 #provides a summary of where this family occurs
 #a family may be differentiated into multiple version depending on its ocurrence in kmers
 class famVersion():
-	def __init__(self, famID, id_list):
+	def __init__(self, id, famID, id_list):
+		self.id=id
+		self.famID=famID
 		self.instances=set(id_list) #set of locations that identify this version of family
 		self.organisms=set()
 		self.tax_summary=set()
@@ -673,6 +675,10 @@ class FamStorage():
                         except:
                            warning("problem parsing family info line: "+line) 
 		in_handle.close()
+	def getFamilyInfo(self, fid):
+		if fid in self.familyInfo:
+			return self.familyInfo[fid]
+		else: return None
 
         #transform the kmerNode graph (rf-graph) into a pg-graph
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
@@ -776,14 +782,17 @@ class pFamGraph(Graph):
 	
 	#calculate the node weight and change the set attributes to string
 	#so that they can be written by graphml writer
-	def update_node_attr_final(self, weight_func, divisor=1, remove_attrs=[], minOrg=2):
+	def update_node_attr_final(self, weight_func, family_func, divisor=1, remove_attrs=[], minOrg=2):
 		remove_set=set()
 		for n in self.nodes():
 			weight_set=weight_func(n)
 			node_summary=n.get_summary()
 			if len(node_summary['organisms']) < minOrg:
 				remove_set.add(n)
-			try: self.node[n]['weight']=len(weight_set)/float(divisor)
+			try:
+				self.node[n]['weight']=len(weight_set)/float(divisor)
+				self.node[n]['id']=str(n.id)+":"+str(n.famID)
+				self.node[n]['label']=family_func(n.famID)
 			except: pass
 			for r in remove_attrs:
 				try: self.node[n].pop(r,None)
@@ -868,7 +877,7 @@ class pFamGraph(Graph):
 					self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
 		
 		self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
-		self.update_node_attr_final(storage.nodeTaxSummary, divisor=float(total_tax), remove_attrs=['instances'])
+		self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'])
 		
 		#create attribute called paths which represents edges per replicon
 		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
