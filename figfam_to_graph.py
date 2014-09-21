@@ -776,9 +776,13 @@ class pFamGraph(Graph):
 	
 	#calculate the node weight and change the set attributes to string
 	#so that they can be written by graphml writer
-	def update_node_attr_final(self, weight_func, divisor=1, remove_attrs=[]):
+	def update_node_attr_final(self, weight_func, divisor=1, remove_attrs=[], minOrg=2):
+		remove_set=set()
 		for n in self.nodes():
 			weight_set=weight_func(n)
+			node_summary=n.get_summary()
+			if len(node_summary['organisms']) < minOrg:
+				remove_set.add(n)
 			try: self.node[n]['weight']=len(weight_set)/float(divisor)
 			except: pass
 			for r in remove_attrs:
@@ -787,6 +791,8 @@ class pFamGraph(Graph):
 			for a in self.node[n]:
 				if type(self.node[n][a])==set:
 					self.node[n][a] = ','.join(self.node[n][a])
+		for n in remove_set:
+			self.remove_node(n)
 
 	## create a graph node from a kmer
 	#Expands Each kmer to FIGFAM nodes ensuring that the kmer represents a certain number of unique positions/organisms before expanding
