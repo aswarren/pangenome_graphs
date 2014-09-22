@@ -427,10 +427,11 @@ class FamStorage():
 	def addPGNode(self,fid,gene_list):
 		nid=len(self.pg_initial)
 		self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
-		self.pg_ptrs.append(self.pg_initial[-1])
+		self.pg_ptrs.append(nid)
 		return len(self.pg_ptrs)-1
 	def getPGNode(self, node_idx):
-		result=self.pg_ptrs[node_idx]
+		cur_ref=self.pg_ptrs[node_idx]
+		result=self.pg_initial[cur_ref]
 		if result == None:
 			print "Debug: None type"
 		return result
@@ -442,15 +443,17 @@ class FamStorage():
 	#using the idx provided make the main node subsume the target node
 	#don't have to destroy target...
 	def updatePGNode(self, main_idx, target_idx):
-		main_node = self.pg_ptrs[main_idx]
-		target_node = self.pg_ptrs[target_idx]
+		main_idx2=self.pg_ptrs[main_idx]
+		main_node = self.pg_initial[main_idx2]
+		target_idx2 = self.pg_ptrs[target_idx]
+		target_node = self.pg_initial[target_idx2]
 		if main_node == None or target_node == None or target_idx==18:
 			print "Debug: None type here"
 		if main_node.node_id != target_node.node_id:
 			main_node.subsumeNode(target_node)
 			#now point all future references to target_node at main_node
-			self.pg_ptrs[target_idx]=main_node
-			self.pg_initial[target_node.node_id]=None #destroy target
+			self.pg_ptrs[target_idx]=main_idx2
+			self.pg_initial[target_node.node_id]=main_node #destroy target
 		 
 			
 
