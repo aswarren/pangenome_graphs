@@ -274,6 +274,8 @@ class kmerNode():
 class pgShell():
 	def __init__(self, nid,fid,gene_list):
 		self.node_id=nid
+		self.subsumed=False
+		self.consumed_list=[]#ids of the things its consumed
 		self.famSubset=famVersion(nid, fid,gene_list)
 		self.edges={}#key is nodeRef, value is set of geneInfo intergenic
 	def addEdge(self, nodeRef, e_info):
@@ -290,7 +292,9 @@ class pgShell():
 			else:
 				self.edges[nid]=target.edges[nid] #Does this need to be copied?? It is a reference to a set after all...
 		self.famSubset.instances.update(target.famSubset.instances)
-		
+		target.famSubset.subsumed=True
+		self.consumed_list.append(target.node_id)
+		self.consumed_list.extend(target.consumed_list)
 		 
 #provides a summary of where this family occurs
 #a family may be differentiated into multiple version depending on its ocurrence in kmers
@@ -452,8 +456,9 @@ class FamStorage():
 		if main_node.node_id != target_node.node_id:
 			main_node.subsumeNode(target_node)
 			#now point all future references to target_node at main_node
-			self.pg_ptrs[target_idx]=main_idx2
-			self.pg_initial[target_node.node_id]=main_node #destroy target
+			for c in main_node.consumed_list:
+				self.pg_ptrs[c]=main_idx2
+			self.pg_initial[target_node.node_id]=None #destroy target
 		 
 			
 
@@ -871,9 +876,12 @@ class pFamGraph(Graph):
 		for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
 		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
 		for n in storage.pg_initial:
-			if n:
+			if n != None:
 				for e in n.edges:
 					n2=storage.getPGNode(e)
+					if n.subsumed or n2.subsumed:
+						sys.stderr.write("Logic Error: A node that should have been subsumed and removed is in the graph\n")
+						sys.exit()
 					self.add_edge(n.famSubset, n2.famSubset)
 					if not 'instances' in self[n.famSubset][n2.famSubset]:
 						self[n.famSubset][n2.famSubset]['instances']=set()
