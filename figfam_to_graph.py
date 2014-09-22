@@ -313,7 +313,7 @@ class famVersion():
 		for i in self.instances:
 			self.replicons.add(i.replicon_id)
 			self.organisms.add(i.org_id)
-			self.locations.add(':'.join(i.getLocation()))
+			self.locations.add(':'.join(i.getLocationString()))
 			self.functions.add(i.function)
 		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations, "functions":self.functions}
 		return result
@@ -801,6 +801,9 @@ class pFamGraph(Graph):
 				self.node[n]['weight']=len(weight_set)/float(divisor)
 				self.node[n]['id']=str(n.id)+":"+str(n.famID)
 				self.node[n]['label']=family_func(n.famID)
+				self.node[n]['locations']=','.join(list(node_summary['locations']))
+				self.node[n]['organisms']=','.join(list(node_summary['organisms']))
+				
 			except: pass
 			for r in remove_attrs:
 				try: self.node[n].pop(r,None)
