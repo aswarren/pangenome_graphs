@@ -17,7 +17,9 @@ ts = time.time()
 #brucella = 234
 #abortus = 29461
 taxURL="http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?"
-taxQuery="q=rast_cds:[1+TO+*]+AND+taxon_lineage_ids:"
+taxQuery="q=rast_cds:[1+TO+*]+AND+"
+taxidQuery="+taxon_lineage_ids:"
+gidQuery="gid:"
 taxFormat="&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids"
 feature_url="http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q="
 feature_conditions="+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id"
@@ -58,9 +60,15 @@ def get_solr_result(query_url):
     return results
 				
 
-def get_tax_info(tax_id, target_path):
-    
-    currentQuery=taxURL+taxQuery+str(tax_id)+taxFormat
+def get_tax_info(tax_ids, gids, target_path):
+    query_pieces=[]
+    currentQuery=taxURL+taxQuery
+    if len(tax_ids):
+        query_pieces.append(taxidQuery+"("+" OR ".join([str(i) for i in tax_ids])+")")
+    if len(gids):
+        query_pieces.append(gidQuery+"("+" OR ".join([str(i) for i in gids])+")")
+    currentQuery=currentQuery+"+OR+".join(query_pieces)+taxFormat
+    print currentQuery
     
 
     #get replicon results
@@ -70,7 +78,6 @@ def get_tax_info(tax_id, target_path):
     if len(taxonomy_results) and 'genome_name' in taxonomy_results[0]:
         print "Creating tax table from SOLR for "+currentQuery
 
-    gidQuery="gid:"
     gids=set()
     for r in taxonomy_results:
         try:
@@ -116,7 +123,7 @@ def get_figfam_info(figfams, target_path):
 
 def main(init_args):
     target_path='./'
-    gids=get_tax_info(29461,target_path)
+    gids=get_tax_info(tax_ids=[],gids=[129921,107702,234832,230480,177265,161400,163141,163998,153380,162956],target_path=target_path)
     figfams=get_patric_feature_info(gids, target_path)
     #table=pd.read_table('./1410652018.19.feature_info.txt',names=['figfam_id','gid','ncbi_tax_id','sid','start','end'])
     #figfams=set(table['figfam_id'])
