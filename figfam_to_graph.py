@@ -1007,7 +1007,6 @@ def main(init_args):
 		ignore_fams=init_args[6].replace(' ','').split(',')
 	#ignore_fams=set(['FIG00638284','FIG01306568'])
 	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
-)
 	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[3])
