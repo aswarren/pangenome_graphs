@@ -313,7 +313,7 @@ class famVersion():
 		for i in self.instances:
 			self.replicons.add(i.replicon_id)
 			self.organisms.add(i.org_id)
-			self.locations.add(':'.join(i.getLocationString()))
+			self.locations.add(i.getLocationString())
 			self.functions.add(i.function)
 		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations, "functions":self.functions}
 		return result
