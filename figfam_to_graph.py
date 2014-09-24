@@ -992,8 +992,8 @@ def modGexf(in_handle, out_file, k_size, minOrg, storage):
 
 #calculate graph statistics
 def stats(graph):
-	num_nodes=len(graph.order())
-	num_edges=len(graph.size())
+	num_nodes=graph.order()
+	num_edges=graph.size()
 	avg_degree= float(num_edges)/num_nodes
 	print "\t"[str(num_nodes),str(num_edges),str(avg_degree)]
 
@@ -1005,7 +1005,8 @@ def main(init_args):
 	minOrg=int(init_args[5])
 	if len(init_args)>=7:
 		ignore_fams=init_args[6].replace(' ','').split(',')
-	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	#ignore_fams=set(['FIG00638284','FIG01306568'])
+	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set())
 	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[3])
