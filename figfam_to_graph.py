@@ -995,7 +995,7 @@ def stats(graph):
 	num_nodes=graph.order()
 	num_edges=graph.size()
 	avg_degree= float(num_edges)/num_nodes
-	print "\t"[str(num_nodes),str(num_edges),str(avg_degree)]
+	print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
 
 def main(init_args):
 	if(len(init_args)<5):
