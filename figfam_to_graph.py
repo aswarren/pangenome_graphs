@@ -989,8 +989,13 @@ def modGexf(in_handle, out_file, k_size, minOrg, storage):
 	gexf_handle.write(header.encode(encoding))
 	gexf_xml.write(gexf_handle, encoding=encoding)
 	gexf_handle.close()
-	
 
+#calculate graph statistics
+def stats(graph):
+	num_nodes=len(graph.order())
+	num_edges=len(graph.size())
+	avg_degree= float(num_edges)/num_nodes
+	print "\t"[str(num_nodes),str(num_edges),str(avg_degree)]
 
 def main(init_args):
 	if(len(init_args)<5):
@@ -1014,6 +1019,7 @@ def main(init_args):
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
+	stats(pgraph)
 	#result_handle=open(out_file+".json", 'w')
 	#pgraph.toJSON(result_handle)
 	#result_handle.close()

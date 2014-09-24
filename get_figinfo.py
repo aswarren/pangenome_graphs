@@ -122,8 +122,8 @@ def get_figfam_info(figfams, target_path):
            
 
 def main(init_args):
-    target_path='./'
-    gids=get_tax_info(tax_ids=[],gids=[129921,107702,234832,230480,177265,161400,163141,163998,153380,162956],target_path=target_path)
+    target_path='./diversity_groups/group10_strep/'
+    gids=get_tax_info(tax_ids=[],gids=[207247,212656,206705,188988,98725,59115,193364,166962,165713,211266],target_path=target_path)
     figfams=get_patric_feature_info(gids, target_path)
     #table=pd.read_table('./1410652018.19.feature_info.txt',names=['figfam_id','gid','ncbi_tax_id','sid','start','end'])
     #figfams=set(table['figfam_id'])
