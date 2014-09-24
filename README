@@ -8,3 +8,37 @@ Right now I suspect the ordering of the kmer graph. To try to get similar result
 I am testing the solr_parsing branch with a new OrderedDict vs. a branch of master (with old parsing) also using OrderedDict. The results are going into a folder called test_ordering.
 
 The previous results will remain as new_data_old_parsing etc.
+
+diversity groups
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(129921 OR 107702 OR 234832 OR 230480 OR 177265 OR 161400 OR 163141 OR 163998 OR 153380 OR 162956)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(129921 OR 107702 OR 234832 OR 230480 OR 177265 OR 161400 OR 163141 OR 163998 OR 153380 OR 162956)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(2086 OR 45588 OR 33733 OR 29832 OR 46442 OR 10955 OR 77120 OR 32972 OR 83274 OR 33670)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(2086 OR 45588 OR 33733 OR 29832 OR 46442 OR 10955 OR 77120 OR 32972 OR 83274 OR 33670)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(200913 OR 192582 OR 78757 OR 21360 OR 70743 OR 122270 OR 169286 OR 142773 OR 21498 OR 155631)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(200913 OR 192582 OR 78757 OR 21360 OR 70743 OR 122270 OR 169286 OR 142773 OR 21498 OR 155631)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q=gid:142773+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id&indent=on&wt=json
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(28239 OR 109945 OR 86222 OR 92729 OR 92249 OR 230062 OR 75385 OR 146994 OR 103899 OR 107850)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(28239 OR 109945 OR 86222 OR 92729 OR 92249 OR 230062 OR 75385 OR 146994 OR 103899 OR 107850)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q=gid:92249+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id&indent=on&wt=json
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(6986 OR 89738 OR 230737 OR 238520 OR 231244 OR 228121 OR 233768 OR 188083 OR 42581 OR 62175)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(6986 OR 89738 OR 230737 OR 238520 OR 231244 OR 228121 OR 233768 OR 188083 OR 42581 OR 62175)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q=gid:89738+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id&indent=on&wt=json
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(150788 OR 184551 OR 78662 OR 11237 OR 46188 OR 17996 OR 25146 OR 45763 OR 1058 OR 126050)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(150788 OR 184551 OR 78662 OR 11237 OR 46188 OR 17996 OR 25146 OR 45763 OR 1058 OR 126050)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q=gid:45763+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id&indent=on&wt=json
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(91161 OR 44891 OR 148439 OR 157809 OR 155290 OR 232925 OR 157882 OR 113771 OR 204175 OR 207898)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(91161 OR 44891 OR 148439 OR 157809 OR 155290 OR 232925 OR 157882 OR 113771 OR 204175 OR 207898)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+http://macleod.vbi.vt.edu:8080/solr/dnafeature/select/?q=gid:157809+AND+figfam_id:[*+TO+*]&sort=sequence_info_id+asc,start_max+asc&fl=figfam_id,gid,ncbi_tax_id,sequence_info_id,start_max,end_min,na_feature_id&indent=on&wt=json
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(112616 OR 25810 OR 151184 OR 223667 OR 13872 OR 95304 OR 63003 OR 113327 OR 187356 OR 252759)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(112616 OR 25810 OR 151184 OR 223667 OR 13872 OR 95304 OR 63003 OR 113327 OR 187356 OR 252759)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+
+http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(207247 OR 212656 OR 206705 OR 188988 OR 98725 OR 59115 OR 193364 OR 166962 OR 165713 OR 211266)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(207247 OR 212656 OR 206705 OR 188988 OR 98725 OR 59115 OR 193364 OR 166962 OR 165713 OR 211266)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
