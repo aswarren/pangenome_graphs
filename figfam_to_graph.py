@@ -678,10 +678,16 @@ class FamStorage():
 			if line.startswith('#'):
 				continue
 			info_list=line.strip().split("\t")
-                        try:
-                            self.familyInfo[info_list[fi["fam_id"]]]=info_list[fi["fam_description"]]
-                        except:
-                           warning("problem parsing family info line: "+line) 
+			try:
+				self.familyInfo[info_list[fi["fam_id"]]]=info_list[fi["fam_description"]]
+			except:
+				warning("problem parsing family info line: "+line)
+				try:
+					self.familyInfo[info_list[fi["fam_id"]]]="No Label"
+				except:
+					sys.exit()
+				pass
+ 
 		in_handle.close()
 	def getFamilyInfo(self, fid):
 		if fid in self.familyInfo:
