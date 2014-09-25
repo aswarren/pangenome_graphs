@@ -774,7 +774,7 @@ class pFamGraph(Graph):
 			label_set=set()
 			for i in self.adj[e[0]][e[1]]['instances']:
 				weight_set.add(getattr(i,weight_attr))
-				label_set.add(getattr(i,label_attr[0]))
+				label_set.add(getattr(i,label_attr[0])())
 			try: self.adj[e[0]][e[1]]['weight']=len(weight_set)/float(divisor)
 			except:
 				try:self.adj[e[0]][e[1]]['weight']=0
