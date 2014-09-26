@@ -897,7 +897,7 @@ class pFamGraph(Graph):
 					self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
 		
 		self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
-		self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg)
+		self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg=minOrg)
 		
 		#create attribute called paths which represents edges per replicon
 		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
