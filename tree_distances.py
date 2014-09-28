@@ -11,8 +11,13 @@ from ete2 import Tree
 def get_distances(input_dir, group, genomes):
 	results = {}
 	in_file=os.path.join(input_dir,group+".nwk")
-	t = Tree(in_file)
-	a=t.get_common_ancestor(*genomes)
+	try:
+		t = Tree(in_file)
+		a=t.get_common_ancestor(*genomes)
+	except Exception, e:
+		sys.stderr.write("Problem with newick "+in_file+"\n")
+		print "Unexpected error:", str(e)
+		sys.exit()
 	for leaf in genomes:
 		results[leaf]=t.get_distance(a,leaf)
 	return results
@@ -40,8 +45,10 @@ def main(init_args):
 		genomes=cols[1:]
 		cur_dists=get_distances(input_dir, group, genomes)
 		results[group]=cur_dists
+		avg_dist = sum(cur_dists.values())/float(len(cur_dists))
+		print "\t".join([group,str(max(cur_dists.values())),str(avg_dist)])
 	table_handle.close()
-	print json.dumps(results)
+	#print json.dumps(results)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
