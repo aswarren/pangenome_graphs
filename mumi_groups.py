@@ -14,21 +14,27 @@ def GetMUMi(input_dir, g1, g2):
 	mumi_com="./give_mumi2.pl mum_out.tmp -l1 "
 	fna1=os.path.join(input_dir,g1+".fna")#set genbank file name
 	fna2=os.path.join(input_dir,g2+".fna")#set genbank file name
-	mumi_dist=-1
+	mumi_dist="Error NoDistance"
 	if(os.path.isfile(fna1) and os.path.isfile(fna2)):
 		mummer_com+=" ".join([fna1, fna2, ">mum_out.tmp"])
 		#Run mummer
-		subprocess.call(mummer_com, shell=(sys.platform!="win32"))
+		sys.stderr.write(mummer_com+"\n")
+		returncode=subprocess.call(mummer_com, shell=(sys.platform!="win32"))	
+		sys.stderr.write(str(returncode)+"\n")
 		#Find the length of the sequences
 		len_com="grep -v \">\" "+fna1+" | tr -d '\\012' | wc -m"
 		child = subprocess.Popen(len_com, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=(sys.platform!="win32"))
 		seq_len1, error=child.communicate()
+		sys.stderr.write(error+"\n")
 		len_com="grep -v \">\" "+fna2+" | tr -d '\\012' | wc -m"
 		child = subprocess.Popen(len_com, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=(sys.platform!="win32"))
 		seq_len2, error=child.communicate()
+		sys.stderr.write(error+"\n")
 		mumi_com+=seq_len1+" -l2 "+seq_len2
 		child = subprocess.Popen(mumi_com, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=(sys.platform!="win32"))
 		mumi_dist, error=child.communicate()
+	else:	
+		sys.stderr.write("input sequences not found: "+fna1+ " or "+fna2+"\n")
 	return float(mumi_dist.split()[-1])
 
 def AvgMUMi(input_dir, genomes):
