@@ -38,9 +38,10 @@ def AvgMUMi(input_dir, genomes):
 	while i< len(genomes):
 		j=i+1
 		while j< len(genomes):
-			sum_score+=GetMUMi(input_dir, genomes[i], genomes[j])
+			cur_score=GetMUMi(input_dir, genomes[i], genomes[j])
+			sum_score+=cur_score
 			count+=1
-			print "\t".join([genomes[i], genomes[j], str(sum_score)])
+			print "\t".join([genomes[i], genomes[j], str(cur_score)])
 			j+=1
 		i+=1
 	return float(sum_score)/float(count)
@@ -62,7 +63,7 @@ def main(init_args):
 			table_file=v
 	table_handle=open(table_file, 'r')
 	for line in table_handle:
-		cols=line.split()
+		cols=line.strip().split()
 		genomes=cols[1:]
 		avg_i=AvgMUMi(input_dir, genomes)
 		print cols[0]+"\t"+str(avg_i)
