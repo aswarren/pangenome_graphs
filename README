@@ -42,3 +42,9 @@ Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesumma
 
 http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(207247 OR 212656 OR 206705 OR 188988 OR 98725 OR 59115 OR 193364 OR 166962 OR 165713 OR 211266)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
 Creating tax table from SOLR for http://macleod.vbi.vt.edu:8080/solr/genomesummary/select/?q=rast_cds:[1+TO+*]+AND+gid:(207247 OR 212656 OR 206705 OR 188988 OR 98725 OR 59115 OR 193364 OR 166962 OR 165713 OR 211266)&indent=on&wt=json&fl=genome_name,genome_info_id,ncbi_tax_id,taxon_lineage_ids
+
+
+COMMAND for getting counts of families per organism
+awk -F '\t' '{print $1}' ./diversity_groups/group10_strep/1411584097.89.feature_info.txt | sort | uniq -c | sort -nr
+
+COMMANDS to create original datasets
