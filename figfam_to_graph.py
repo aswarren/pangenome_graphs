@@ -972,7 +972,7 @@ class pFamGraph(Graph):
 def toGML(cur_graph, file_name):
 		readwrite.graphml.write_graphml(cur_graph, file_name)
 		
-def modGexf(in_handle, out_file, k_size, minOrg, storage):
+def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
 	#register_namespace('',"http://www.gexf.net/1.1draft")
 	encoding='utf-8'
 	header='<?xml version="1.0" encoding="%s"?>'%encoding
@@ -981,14 +981,21 @@ def modGexf(in_handle, out_file, k_size, minOrg, storage):
 	metadata_element.append(Element("ksize",value=str(k_size)))
 	metadata_element.append(Element("minorg",value=str(minOrg)))
 	gn_element=Element("org_map")
-	org_map={}
+	org_map={}#maps which genome ids have which names
+	sid_to_edge={}#maps which sequence ids have which edges
+	for e in pgraph.edges():
+		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
+			sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
 	for k,v in storage.summaryLookup.iteritems():
 		org_map[k]=v.genome_name
 	gn_element.text=CDATA(json.dumps(org_map))
 	metadata_element.append(gn_element)
 	contig_element= Element("contig_map")
-	contig_element.text = CDATA(json.dumps(storage.replicon_map))	
+	contig_element.text = CDATA(json.dumps(storage.replicon_map))
 	metadata_element.append(contig_element)
+	sid_element = Element("edge_map")
+	sid_element.text = CDATA(json.dumps(sid_to_edge))
+	metadata_element.append(sid_element)
 	root=gexf_xml.getroot()
 	root.insert(0, metadata_element)
 	gexf_handle=open(out_file, 'w')
@@ -1022,7 +1029,7 @@ def main(init_args):
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
 	readwrite.write_gexf(pgraph, gexf_capture)
-	modGexf(gexf_capture, out_file+".gexf", k_size, minOrg, fstorage)
+	modGexf(gexf_capture, out_file+".gexf", k_size, minOrg, fstorage, pgraph)
 	result_handle=open(out_file+".xgmml", 'w')
 	pgraph.toXGMML(result_handle)
 	result_handle.close()
