@@ -1039,7 +1039,7 @@ def main(init_args):
 	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
-	create_maps(storage, pgraph)
+	create_maps(fstorage, pgraph)
 	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=[])
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
