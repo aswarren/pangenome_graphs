@@ -971,6 +971,26 @@ class pFamGraph(Graph):
 
 def toGML(cur_graph, file_name):
 		readwrite.graphml.write_graphml(cur_graph, file_name)
+
+#create data maps for keeping track of relationships between graph entities
+def create_maps(storage, pgraph):
+	storage.org_map={}#maps which genome ids have which names
+	storage.sid_to_edge={}#maps which sequence ids have which edges
+	for e in pgraph.edges():
+		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
+			storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
+	for k,v in storage.summaryLookup.iteritems():
+		storage.org_map[k]=v.genome_name
+
+#remove certain attributes that are no longer useful or prohibiitively large from graph output
+def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
+	if from_edges:
+		for e in pgraph.edges():
+			for r in from_edges:
+				try: self.adj[e[0]][e[1]].pop(r,None)
+				except: pass
+	#from nodes need to implement
+ 
 		
 def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
 	#register_namespace('',"http://www.gexf.net/1.1draft")
@@ -981,20 +1001,13 @@ def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
 	metadata_element.append(Element("ksize",value=str(k_size)))
 	metadata_element.append(Element("minorg",value=str(minOrg)))
 	gn_element=Element("org_map")
-	org_map={}#maps which genome ids have which names
-	sid_to_edge={}#maps which sequence ids have which edges
-	for e in pgraph.edges():
-		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
-			sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
-	for k,v in storage.summaryLookup.iteritems():
-		org_map[k]=v.genome_name
-	gn_element.text=CDATA(json.dumps(org_map))
+	gn_element.text=CDATA(json.dumps(storage.org_map))
 	metadata_element.append(gn_element)
 	contig_element= Element("contig_map")
 	contig_element.text = CDATA(json.dumps(storage.replicon_map))
 	metadata_element.append(contig_element)
 	sid_element = Element("edge_map")
-	sid_element.text = CDATA(json.dumps(sid_to_edge))
+	sid_element.text = CDATA(json.dumps(storage.sid_to_edge))
 	metadata_element.append(sid_element)
 	root=gexf_xml.getroot()
 	root.insert(0, metadata_element)
@@ -1026,6 +1039,8 @@ def main(init_args):
 	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
+	create_maps(storage, pgraph)
+	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=[])
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
 	readwrite.write_gexf(pgraph, gexf_capture)
