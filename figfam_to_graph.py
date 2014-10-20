@@ -765,26 +765,29 @@ class pFamGraph(Graph):
 	#update the edge weight based on a designated attribute
 	#also flatten to a string since writing list objects isn't supported
 	#weight_attr has to be weight. label_attr = (what to get, and what to label it)
+	#also setting ID so that it can be used in building map from sid to edge
 	def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
-		for e in self.edges():
+		edge_counter=itertools.count()
+		for u,v,data in self.edges_iter(data=True):
 			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
 			#except: pass
-			self.adj[e[0]][e[1]]['label']=''
+			data['label']=''
 			weight_set=set()
 			label_set=set()
-			for i in self.adj[e[0]][e[1]]['instances']:
+			for i in data['instances']:
 				weight_set.add(getattr(i,weight_attr))
 				label_set.add(getattr(i,label_attr[0])())
-			try: self.adj[e[0]][e[1]]['weight']=len(weight_set)/float(divisor)
+			try: data['weight']=len(weight_set)/float(divisor)
 			except:
-				try:self.adj[e[0]][e[1]]['weight']=0
+				try:data['weight']=0
 				except: pass
 			if label_attr:
-				try: self.adj[e[0]][e[1]][label_attr[1]]=", ".join(list(label_set))
+				try: data[label_attr[1]]=", ".join(list(label_set))
 				except: pass
 			for r in remove_attrs:
-				try: self.adj[e[0]][e[1]].pop(r,None)
+				try: data.pop(r,None)
 				except: pass
+			data['id']=next(edge_counter)
 				
 	def update_node_cumul_attr(self, n_id, **kwargs ):
 		if n_id in self.node:
