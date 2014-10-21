@@ -990,9 +990,14 @@ def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
 	if from_edges:
 		for e in pgraph.edges():
 			for r in from_edges:
-				try: self.adj[e[0]][e[1]].pop(r,None)
+				try: pgraph.adj[e[0]][e[1]].pop(r,None)
 				except: pass
 	#from nodes need to implement
+	if from_nodes:
+		for n in pgraph.nodes():
+			for r in from_nodes:
+				try: delattr(n,r)
+				except: pass
  
 		
 def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
@@ -1043,7 +1048,7 @@ def main(init_args):
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
 	create_maps(fstorage, pgraph)
-	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=[])
+	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=["locations","organisms"])
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
 	readwrite.write_gexf(pgraph, gexf_capture)
