@@ -6,6 +6,7 @@ import json
 import copy
 from networkx import Graph
 from networkx import readwrite
+from Bio import bgzf
 import DOMLight, json
 from collections import deque
 from collections import OrderedDict
@@ -808,7 +809,8 @@ class pFamGraph(Graph):
 				remove_set.add(n)
 			try:
 				self.node[n]['weight']=len(weight_set)/float(divisor)
-				self.node[n]['id']=str(n.id)+":"+str(n.famID)
+				self.node[n]['id']=str(n.id)
+				self.node[n]['familyID']=str(n.famID)
 				self.node[n]['label']=family_func(n.famID)
 				self.node[n]['locations']=','.join(list(node_summary['locations']))
 				self.node[n]['organisms']=','.join(list(node_summary['organisms']))
@@ -822,58 +824,6 @@ class pFamGraph(Graph):
 					self.node[n][a] = ','.join(self.node[n][a])
 		for n in remove_set:
 			self.remove_node(n)
-
-	## create a graph node from a kmer
-	#Expands Each kmer to FIGFAM nodes ensuring that the kmer represents a certain number of unique positions/organisms before expanding
-	#parameters: storage- the figfam storage used to look things up
-	#kmer - the kmer being processedq total_tax- the total number of taxonomy groups represented in the graph; minOrg- the number of positions that need to be represented to qualify as a part of the summary graph
-	def kmer_to_node(self, storage, kmer, total_tax, minOrg):
-		cur_node=storage.kmerLookup[kmer][0]
-		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
-		#print org_part1
-
-		if(len(org_part1)>=minOrg):
-			#get a list of individual figfams that make up the kmer
-			pfamily_ids=storage.getParts(cur_node.nodeID)
-			#for each figfam get list of locations and call checkIdentity
-			for famID in pfamily_ids: storage.checkIdentity(famID, cur_node.nodeID,threshold=1)
-				
-	def kmer_to_node2(self, storage, kmer, total_tax, minOrg):
-		cur_node=storage.kmerLookup[kmer][0]
-		org_part1=storage.nodeOrgSummary(cur_node)#a set of the organisms involved in this part of the graph
-		if(len(org_part1)>=minOrg):
-			tax_ids=storage.nodeTaxSummary(cur_node)#summarizes set of tax ids for this node
-			pfamily_ids=storage.getParts(cur_node.nodeID)
-			nodeList2=[]
-			summaryList=[]
-			for memID in pfamily_ids:
-				target_set=storage.getHashSet(memID,cur_node.nodeID)
-				fam_version=storage.locationHash[list(target_set)[0]]
-				nodeList2.append(fam_version[0]+':'+fam_version[1])
-				summary_info=storage.figfamHash[fam_version[0]].versions[int(fam_version[1])].get_summary()
-				summary_info['tax_summary']=tax_ids
-				summaryList.append(summary_info)
-				#if fam_version[0] =="FIG00229272" and fam_version[1]=="0":
-				#	pass
-			#for this kmer get all the replicons it is involved in
-			replicons=cur_node.getReplicons()
-			#cur_node.testNode()
-			edges_added = self.add_path_cumul_attr(nodeList2, orgs=org_part1, replicons=replicons) #this also creats nodes in the graph
-			#create map of which edges occur for which replicons
-			#for r in replicons:
-			#	edge_set=storage.replicon_edges_dict.get(r,None)
-			#	if edge_set == None:
-			#		edge_set=storage.replicon_edges_dict[r]=set()
-			#	edge_set.update(edges_added)
-			for idx, n in enumerate(nodeList2):#now that the nodesare created you can update them with attributes
-				attr_list={}
-				#HACK exclude replicons from list since locations already have them
-				for k in summaryList[idx].keys():
-					if k == 'functions':
-						attr_list['label']=summaryList[idx][k] 
-					if k != 'replicons':
-						attr_list[k]=summaryList[idx][k]
-				self.update_node_cumul_attr(n, **attr_list)
 
 								
 							
@@ -975,13 +925,41 @@ class pFamGraph(Graph):
 def toGML(cur_graph, file_name):
 		readwrite.graphml.write_graphml(cur_graph, file_name)
 
+def node_to_gff(gff_handle, node, feature_counter, graphID):
+	for i in node.instances:
+		fid=next(feature_counter)
+		replicon_id, start, end = node.getLocationString()
+		#for now don't know direction, or feature id
+		line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join["ID="+str(fid),"Name="+node.fam_id,"graphID="+str(graphID)]])
+		gff_handle.write(line)
+
+def edge_to_gff(gff_handle, edge):
+	return 0
+
 #create data maps for keeping track of relationships between graph entities
-def create_maps(storage, pgraph):
+#finalaize node ids and edge ids
+#create GFF records
+#org_map genome id to name
+#sid_to_edge sequence id to edge id
+#takes number of nodes so that edges can have unique ids wrt to nodes
+def create_indices(storage, pgraph, csize, gff_outfile):
+	bgzf_handle = bgzf.BgzfWriter(gff_outfile,'wb')
+	edge_counter=itertools.count()
+	node_counter=itertools.count()
+	feature_counter=itertools.count()
 	storage.org_map={}#maps which genome ids have which names
 	storage.sid_to_edge={}#maps which sequence ids have which edges
+	for n in self.nodes():
+		ncount=str(next(node_counter))
+		pgraph.node[n]['id']=ncount
+		for r in (pgraph.node[n]['replicons']).split(','):
+			node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
 	for e in pgraph.edges():
+		ecount=next(edge_counter)
+		pgraph.adj[e[0]][e[1]]]['id']=str(ecount+csize)
 		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
 			storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
+			#edge_to_gff(bgzf_handle)
 	for k,v in storage.summaryLookup.iteritems():
 		storage.org_map[k]=v.genome_name
 
@@ -1047,7 +1025,7 @@ def main(init_args):
 	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
-	create_maps(fstorage, pgraph)
+	create_indices(fstorage, pgraph)
 	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=["locations","organisms"])
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
