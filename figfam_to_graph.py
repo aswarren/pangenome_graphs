@@ -928,9 +928,9 @@ def toGML(cur_graph, file_name):
 def node_to_gff(gff_handle, node, feature_counter, graphID):
 	for i in node.instances:
 		fid=next(feature_counter)
-		replicon_id, start, end = node.getLocationString()
+		replicon_id, start, end = i.getLocation()
 		#for now don't know direction, or feature id
-		line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join["ID="+str(fid),"Name="+node.fam_id,"graphID="+str(graphID)]])
+		line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
 		gff_handle.write(line)
 
 def edge_to_gff(gff_handle, edge):
@@ -949,14 +949,17 @@ def create_indices(storage, pgraph, csize, gff_outfile):
 	feature_counter=itertools.count()
 	storage.org_map={}#maps which genome ids have which names
 	storage.sid_to_edge={}#maps which sequence ids have which edges
-	for n in self.nodes():
+	storage.graph_to_offset={}#maps graph ID (node or edge) to offset location start,end
+	for n in pgraph.nodes():
 		ncount=str(next(node_counter))
 		pgraph.node[n]['id']=ncount
-		for r in (pgraph.node[n]['replicons']).split(','):
-			node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
+		start_voff=bgzf_handle.tell()
+		node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
+		end_voff=bgzf_handle.tell()
+		storage.graph_to_offset[ncount]=[start_voff,end_voff]
 	for e in pgraph.edges():
 		ecount=next(edge_counter)
-		pgraph.adj[e[0]][e[1]]]['id']=str(ecount+csize)
+		pgraph.adj[e[0]][e[1]]['id']=str(ecount+csize)
 		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
 			storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
 			#edge_to_gff(bgzf_handle)
@@ -1025,7 +1028,7 @@ def main(init_args):
 	out_file=os.path.join(out_folder,out_basename)
 	pgraph=pFamGraph(fstorage,minOrg=minOrg)
 	csize=pgraph.order()
-	create_indices(fstorage, pgraph)
+	create_indices(fstorage, pgraph, csize, out_file+".gff.gz")
 	remove_attributes(pgraph, from_edges=["replicons"], from_nodes=["locations","organisms"])
 	toGML(pgraph, out_file+".graphml")
 	gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
