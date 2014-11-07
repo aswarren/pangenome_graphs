@@ -37,6 +37,8 @@ def GetMUMi(input_dir, g1, g2):
 		sys.stderr.write("input sequences not found: "+fna1+ " or "+fna2+"\n")
 	return float(mumi_dist.split()[-1])
 
+
+#hack to max
 def AvgMUMi(input_dir, genomes):
 	sum_score=0
 	i=0
@@ -45,12 +47,12 @@ def AvgMUMi(input_dir, genomes):
 		j=i+1
 		while j< len(genomes):
 			cur_score=GetMUMi(input_dir, genomes[i], genomes[j])
-			sum_score+=cur_score
+			sum_score=max(cur_score,sum_score)
 			count+=1
 			print "\t".join([genomes[i], genomes[j], str(cur_score)])
 			j+=1
 		i+=1
-	return float(sum_score)/float(count)
+	return float(sum_score)
 
 def UsageMess():
 	print "Usage: mg_mumi_groups.py [-i fasta seq dir] [-t groups table]"

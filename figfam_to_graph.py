@@ -11,6 +11,7 @@ import DOMLight, json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
+from guppy import hpy
 #requires 2.7 or greater
 if sys.version_info < (2, 7):
 	raise "must use python 2.7 or greater"
@@ -52,50 +53,80 @@ def warning(*objs):
 class geneInfo():
         #expand to parse out this information from different sources
 	def __init__(self, line=None):
-		self.replicon_id=''
-		self.org_id=''
-		self.start=-1
-		self.end=-1
-		self.function=''
-                self.fam_id=''
-                if line:
-			self.parse_line(line)
+		#self.replicon_id=''
+		#self.org_id=''
+		#self.start=-1
+		#self.end=-1
+		#self.function=''
+                #self.fam_id=''
+		self.line = line
+                #if line:
+		#	self.parse_line(line)
 
 	def getString(self):
-		result="|".join([self.replicon_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
-		return result
+		#result="|".join([self.replicon_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
+		#return result
+		return line
+	def getParts(self):
+		return line.split("\t")
+
+	def dict_to_line(self, target):
+		line_list=[None for i in range(len(ip))]
+		for k in ip:
+			line_list[ip[k]]=str(target[k])
+		return "\t".join(line_list)
 
 	#calculate region between genes
 	def getInterFeature(self,nxt_feature):
 		#print "from "+self.fam_id+" to "+nxt_feature.fam_id
-		result=geneInfo()
-		result.replicon_id=self.replicon_id
-		result.org_id=self.org_id
-		result.start=int(self.end)+1
-		result.end=int(nxt_feature.start)-1
-		result.function=None
-		result.fam_id=None
+		cur_info=self.parse_line(self.line)
+		nxt_info=self.parse_line(nxt_feature.line)
+		edge_info={}
+		edge_info['contig_id']=cur_info['contig_id']
+		edge_info['org_id']=cur_info['org_id']
+		edge_info['start']=int(cur_info['end'])+1
+		edge_info['end']=int(nxt_info['start'])-1
+		edge_info['fam_id']="EDGE"
+		edge_info['locus_id']="None"
+		result=geneInfo(self.dict_to_line(edge_info))
 		return result
 
-	def parse_line(self, line):
+	def parse_line(self, line=None):
+		result={}
+		if line == None:
+			line =self.line
 		try:
 			parts=line.strip().split("\t")
-			self.fam_id=parts[ip['fam_id']]
-			self.replicon_id=parts[ip['contig_id']]
-			self.org_id=parts[ip['org_id']]
-			self.start=parts[ip['start']]
-			self.end=parts[ip['end']]
+			result['fam_id']=parts[ip['fam_id']]
+			result['contig_id']=parts[ip['contig_id']]
+			result['org_id']=parts[ip['org_id']]
+			result['start']=parts[ip['start']]
+			result['end']=parts[ip['end']]
 		except:
 			warning("parsing problem. couldn't parse line: "+line)
-			pass
+		return result
 	def getLocation(self):
-		return [self.replicon_id, self.start, self.end]
+		result=self.parse_line(self.line)
+		return [result['contig_id'],result['start'],result['end']]
+		#return [self.replicon_id, self.start, self.end]
 	def getLocationString(self):
-		return ":".join([self.replicon_id, str(self.start), str(self.end)])
+		result=self.parse_line(self.line)
+		return ":".join([result['contig_id'],str(result['start']),str(result['end'])])
+		#return ":".join([self.replicon_id, str(self.start), str(self.end)])
+	def getFeatureString(self, delim=":"):
+		result=self.parse_line(self.line)
+		return delim.join([result['contig_id'],str(result['start']),str(result['end']), str(result['fam_id']), result['org_id']])
+		#return delim.join([self.replicon_id, str(self.start), str(self.end), str(fam_id), str(org_id)])
 	def getReplicon(self):
-		return self.replicon_id
+		result=self.parse_line(self.line)
+		return result['contig_id']
 	def getOrganism(self):
-		return self.org_id
+		result=self.parse_line(self.line)
+		return result['org_id']
+	def getFam(self):
+		result=self.parse_line(self.line)
+		return result['fam_id']
+		#return self.org_id
 
 ##Class for storing all the geneInfo in a particular node
 ##along with the kmer information. does not store information in direction
@@ -314,10 +345,9 @@ class famVersion():
 	def get_summary(self):
 		if not self.summary_status:
 			for i in self.instances:
-				self.replicons.add(i.replicon_id)
-				self.organisms.add(i.org_id)
+				self.replicons.add(i.getReplicon())
+				self.organisms.add(i.getOrganism())
 				self.locations.add(i.getLocationString())
-				self.functions.add(i.function)
 			self.summary_status=True
 		result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations, "functions":self.functions}
 		return result
@@ -421,6 +451,8 @@ class FamStorage():
 		self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
 		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
 		self.parseFeatures(feature_file)
+		h=hpy()
+		print h.heap()	
 		self.parseSummary(summary_file)
                 self.parseFamilyInfo(family_file)
 		
@@ -493,7 +525,8 @@ class FamStorage():
 		e_counter=0 #for keeping track of which intergenic space
 		for position, fig_info in enumerate(fig_list):
 			#print fig_info
-			fID, replicon_id, organism_id, start, fam_function= fig_info.fam_id, fig_info.replicon_id, fig_info.org_id, fig_info.start, fig_info.function
+			cur_info=fig_info.parse_line()
+			fID, replicon_id, organism_id, start, fam_function= cur_info['fam_id'], cur_info['contig_id'], cur_info['org_id'], cur_info['start'], "None"
 			gene_lookup=(replicon_id, start)
 			#key the gene lookup by replicon_id and position
 			if not gene_lookup in self.geneHash:
@@ -519,7 +552,7 @@ class FamStorage():
 	def makeKey(self, k_info_list, prev_key):
 		k_list=[]
 		for k in k_info_list:
-			k_list.append(k.fam_id)
+			k_list.append(k.getFam())
 		id_sep="|"
 		result=None
 		rev_status=False
@@ -591,15 +624,19 @@ class FamStorage():
 				continue
 
 			fig_info=geneInfo(line=line)
-                        if fig_info.org_id not in self.replicon_map:
-				self.replicon_map[fig_info.org_id]=set()
+			cur_info=fig_info.parse_line()
+			org_id=cur_info['org_id']
+			fam_id = cur_info['fam_id']
+			replicon_id = cur_info['contig_id']
+                        if org_id not in self.replicon_map:
+				self.replicon_map[org_id]=set()
 			else:
-				self.replicon_map[fig_info.org_id].add(fig_info.replicon_id)
+				self.replicon_map[org_id].add(replicon_id)
 
-			if ignore and fig_info.fam_id in self.ignore_fams:
+			if ignore and fam_id in self.ignore_fams:
 				continue
 			num_fam+=1
-			cur_seq=fig_info.replicon_id
+			cur_seq=replicon_id
 			self.replicon_ids.add(cur_seq)
 			if(prev_seq != cur_seq and num_fam>1):
 				kmer_q=deque()#clear kmer stack because switching replicons
@@ -645,8 +682,9 @@ class FamStorage():
 	def nodeTaxSummary(self,cnode):
 		result=set()
 		for i in cnode.instances:
-			if(i.org_id in self.summaryLookup):
-				result.add(self.summaryLookup[i.org_id].get_summary_id())
+			org_id=i.getOrganism()
+			if(org_id in self.summaryLookup):
+				result.add(self.summaryLookup[org_id].get_summary_id())
 		return result
 
 	#Get the total number of unique taxonomy labels 
@@ -701,347 +739,349 @@ class FamStorage():
         #transform the kmerNode graph (rf-graph) into a pg-graph
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
 	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
-		def bfsExpand(self, minOrg):
-			print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.kmerList))
-			for start_k_id, start_knode in enumerate(self.kmerList):
-				if start_knode.visited:
-					continue
-				else:
-					knode_q=deque()
-					knode_q.append((start_k_id,None,None))
-					prev_k_id=None
-					in_edge_status=None # type of edge arrived by
-					while len(knode_q) > 0:
-						visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
-						cur_knode=self.kmerList[visiting_k_id]
-						#do work for expanding this kmer node into pg-graph nodes
-						#if prev_knode and incoming_status != None :
-						if prev_k_id != None:
-							cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
+	def bfsExpand(self, minOrg):
+		print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.kmerList))
+		for start_k_id, start_knode in enumerate(self.kmerList):
+			if start_knode.visited:
+				continue
+			else:
+				knode_q=deque()
+				knode_q.append((start_k_id,None,None))
+				prev_k_id=None
+				in_edge_status=None # type of edge arrived by
+				while len(knode_q) > 0:
+					visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
+					cur_knode=self.kmerList[visiting_k_id]
+					#do work for expanding this kmer node into pg-graph nodes
+					#if prev_knode and incoming_status != None :
+					if prev_k_id != None:
+						cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
+					else:
+						cur_knode.visitNode(None, None, self)
+					for k_id in cur_knode.linkOut:
+						if k_id == visiting_k_id:#self loop this should not happen because of kmer levels
+							continue
+							#something selfish
+							#cur_knode.self_edge=True
+						elif k_id == prev_k_id:#return loop
+							continue
+							#handle return loop. create single edge back and apply labels
+							#return_node=self.kmerList[k_id]
+							#return_node.applyInfo(self)
+						elif self.kmerList[k_id].visited or self.kmerList[k_id].queued:	
+							return_node=self.kmerList[k_id]
+							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
-							cur_knode.visitNode(None, None, self)
-						for k_id in cur_knode.linkOut:
-							if k_id == visiting_k_id:#self loop this should not happen because of kmer levels
-								continue
-								#something selfish
-								#cur_knode.self_edge=True
-							elif k_id == prev_k_id:#return loop
-								continue
-								#handle return loop. create single edge back and apply labels
-								#return_node=self.kmerList[k_id]
-								#return_node.applyInfo(self)
-							elif self.kmerList[k_id].visited or self.kmerList[k_id].queued:	
-								return_node=self.kmerList[k_id]
-								return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
-							else:
-								#if k_id ==208:
-								#	print "Debug: why is this being queued so much?"
-								knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
-								self.kmerList[k_id].queued=True
-						cur_knode.addPGEdges(self)
+							#if k_id ==208:
+							#	print "Debug: why is this being queued so much?"
+							knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
+							self.kmerList[k_id].queued=True
+					cur_knode.addPGEdges(self)
 
-	# undirected weighted
-	class pFamGraph(Graph):
-		def __init__(self, storage, minOrg=2):
-			#Graph.__init__(self, weighted=True)
-			Graph.__init__(self)
-			self.createGraph(storage, minOrg)
-		def add_path_cumul_attr(self,nlist,**kwargs):
-			edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
-			edge_ids=[]
-			for e in edges:
-				if self.has_edge(*e):
-					for k in kwargs:
-						if type(kwargs[k])==set:
-							try: self.adj[e[0]][e[1]][k] |= kwargs[k]#  union of attribute
-							except: 
-								try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
-								except: self.adj[e[0]][e[1]]=kwargs[k]
-				else:
-					kwargs['id']=str(self.number_of_edges())
-					self.add_edge(e[0],e[1],kwargs)
-					if kwargs['id']=="0":
-						warning("edge 0 is "+e[0]+" "+e[1])
-				try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
-				except: warning("no ID for edge "+e[0]+" "+e[1])
-			return edge_ids 
-
-		#update the edge weight based on a designated attribute
-		#also flatten to a string since writing list objects isn't supported
-		#weight_attr has to be weight. label_attr = (what to get, and what to label it)
-		#also setting ID so that it can be used in building map from sid to edge
-		def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
-			edge_counter=itertools.count()
-			for u,v,data in self.edges_iter(data=True):
-				#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
-				#except: pass
-				data['label']=''
-				weight_set=set()
-				label_set=set()
-				for i in data['instances']:
-					weight_set.add(getattr(i,weight_attr))
-					label_set.add(getattr(i,label_attr[0])())
-				try: data['weight']=len(weight_set)/float(divisor)
-				except:
-					try:data['weight']=0
-					except: pass
-				if label_attr:
-					try: data[label_attr[1]]=", ".join(list(label_set))
-					except: pass
-				for r in remove_attrs:
-					try: data.pop(r,None)
-					except: pass
-				data['id']=next(edge_counter)
-					
-		def update_node_cumul_attr(self, n_id, **kwargs ):
-			if n_id in self.node:
+# undirected weighted
+class pFamGraph(Graph):
+	def __init__(self, storage, minOrg=2):
+		#Graph.__init__(self, weighted=True)
+		Graph.__init__(self)
+		self.createGraph(storage, minOrg)
+	def add_path_cumul_attr(self,nlist,**kwargs):
+		edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
+		edge_ids=[]
+		for e in edges:
+			if self.has_edge(*e):
 				for k in kwargs:
-					try: self.node[n_id][k]=kwargs[k] | self.node[n_id][k]
-					except:
-						try: self.node[n_id][k]=kwargs[k].copy()
-						except: print "cannot add attribute to node "+str(n_id)
-		
-		#calculate the node weight and change the set attributes to string
-		#so that they can be written by graphml writer
-		def update_node_attr_final(self, weight_func, family_func, divisor=1, remove_attrs=[], minOrg=2):
-			remove_set=set()
-			for n in self.nodes():
-				weight_set=weight_func(n)
-				node_summary=n.get_summary()
-				if len(node_summary['organisms']) < minOrg:
-					remove_set.add(n)
-				try:
-					self.node[n]['weight']=len(weight_set)/float(divisor)
-					self.node[n]['id']=str(n.id)
-					self.node[n]['familyID']=str(n.famID)
-					self.node[n]['label']=family_func(n.famID)
-					self.node[n]['locations']=','.join(list(node_summary['locations']))
-					self.node[n]['organisms']=','.join(list(node_summary['organisms']))
-					
-				except: pass
-				for r in remove_attrs:
-					try: self.node[n].pop(r,None)
-					except: pass
-				for a in self.node[n]:
-					if type(self.node[n][a])==set:
-						self.node[n][a] = ','.join(self.node[n][a])
-			for n in remove_set:
-				self.remove_node(n)
+					if type(kwargs[k])==set:
+						try: self.adj[e[0]][e[1]][k] |= kwargs[k]#  union of attribute
+						except: 
+							try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
+							except: self.adj[e[0]][e[1]]=kwargs[k]
+			else:
+				kwargs['id']=str(self.number_of_edges())
+				self.add_edge(e[0],e[1],kwargs)
+				if kwargs['id']=="0":
+					warning("edge 0 is "+e[0]+" "+e[1])
+			try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
+			except: warning("no ID for edge "+e[0]+" "+e[1])
+		return edge_ids 
 
-									
+	#update the edge weight based on a designated attribute
+	#also flatten to a string since writing list objects isn't supported
+	#weight_attr has to be weight. label_attr = (what to get, and what to label it)
+	#also setting ID so that it can be used in building map from sid to edge
+	def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
+		edge_counter=itertools.count()
+		for u,v,data in self.edges_iter(data=True):
+			#try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
+			#except: pass
+			data['label']=''
+			weight_set=set()
+			label_set=set()
+			for i in data['instances']:
+				weight_set.add(getattr(i,weight_attr))
+				label_set.add(getattr(i,label_attr[0])())
+			try: data['weight']=len(weight_set)/float(divisor)
+			except:
+				try:data['weight']=0
+				except: pass
+			if label_attr:
+				try: data[label_attr[1]]=", ".join(list(label_set))
+				except: pass
+			for r in remove_attrs:
+				try: data.pop(r,None)
+				except: pass
+			data['id']=next(edge_counter)
+				
+	def update_node_cumul_attr(self, n_id, **kwargs ):
+		if n_id in self.node:
+			for k in kwargs:
+				try: self.node[n_id][k]=kwargs[k] | self.node[n_id][k]
+				except:
+					try: self.node[n_id][k]=kwargs[k].copy()
+					except: print "cannot add attribute to node "+str(n_id)
+	
+	#calculate the node weight and change the set attributes to string
+	#so that they can be written by graphml writer
+	def update_node_attr_final(self, weight_func, family_func, divisor=1, remove_attrs=[], minOrg=2):
+		remove_set=set()
+		for n in self.nodes():
+			weight_set=weight_func(n)
+			node_summary=n.get_summary()
+			if len(node_summary['organisms']) < minOrg:
+				remove_set.add(n)
+			try:
+				self.node[n]['weight']=len(weight_set)/float(divisor)
+				self.node[n]['id']=str(n.id)
+				self.node[n]['familyID']=str(n.famID)
+				self.node[n]['label']=family_func(n.famID)
+				self.node[n]['locations']=','.join(list(node_summary['locations']))
+				self.node[n]['organisms']=','.join(list(node_summary['organisms']))
+				
+			except: pass
+			for r in remove_attrs:
+				try: self.node[n].pop(r,None)
+				except: pass
+			for a in self.node[n]:
+				if type(self.node[n][a])==set:
+					self.node[n][a] = ','.join(self.node[n][a])
+		for n in remove_set:
+			self.remove_node(n)
+
 								
-						
+							
 					
-					
-		##this function takes the storage class and constructs the graph from it
-		def createGraph(self, storage, minOrg):
-			num_orgs=len(storage.summaryLookup.keys())
-			temp_size=len(storage.kmerLookup.keys())
-			total_tax=len(storage.completeTaxSummary())
-			for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
-			print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
-			for n in storage.pg_initial:
-				if n != None:
-					for e in n.edges:
-						n2=storage.getPGNode(e)
-						if n.subsumed or n2.subsumed:
-							sys.stderr.write("Logic Error: A node that should have been subsumed and removed is in the graph\n")
-							sys.exit()
-						self.add_edge(n.famSubset, n2.famSubset)
-						if not 'instances' in self[n.famSubset][n2.famSubset]:
-							self[n.famSubset][n2.famSubset]['instances']=set()
-						self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
+				
+				
+	##this function takes the storage class and constructs the graph from it
+	def createGraph(self, storage, minOrg):
+		num_orgs=len(storage.summaryLookup.keys())
+		temp_size=len(storage.kmerLookup.keys())
+		total_tax=len(storage.completeTaxSummary())
+		for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
+		print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
+		for n in storage.pg_initial:
+			if n != None:
+				for e in n.edges:
+					n2=storage.getPGNode(e)
+					if n.subsumed or n2.subsumed:
+						sys.stderr.write("Logic Error: A node that should have been subsumed and removed is in the graph\n")
+						sys.exit()
+					self.add_edge(n.famSubset, n2.famSubset)
+					if not 'instances' in self[n.famSubset][n2.famSubset]:
+						self[n.famSubset][n2.famSubset]['instances']=set()
+					self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
+	
+	def labelGraph(self, storage, minOrg):	
+		num_orgs=len(storage.summaryLookup.keys())
+		total_tax=len(storage.completeTaxSummary())
+		self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
+		self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg=minOrg)
 		
-		def labelGraph(self, storage, minOrg):	
-			self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
-			self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg=minOrg)
+		#create attribute called paths which represents edges per replicon
+		#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
 			
-			#create attribute called paths which represents edges per replicon
-			#self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
+
+		#get list of nodes and edges for testing
+		#node_handle=open('new_loop_node_list.txt','w')
+		#for n in self.nodes_iter():
+		#	node_handle.write(n+"\n")
+		#node_handle.close()
+		#edge_handle=open('new_loop_edge_list.txt','w')
+		#for e in self.edges_iter():
+		#	edge_handle.write(str(e)+"\n")
+		#edge_handle.close()
+
+
+
+	def toXGMML(self, fhandle):
+		xml = DOMLight.XMLMaker()
+		fhandle.write("""<?xml version="1.0" encoding="UTF-8"?>
+		<graph xmlns="http://www.cs.rpi.edu/XGMML" directed="0" label="PFam assembly">
+		""")
+		cid = 0
+		cur_ids = {}
+		for cn in self.nodes_iter():
+			cur_ids[cn] = cid
+			fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(self.node[cn]['weight'])+'"/>')) + "\n")
+			cid += 1
+		count = 0
+		for edge in self.edges_weight_iter():
+			dom_edge=xml.edge()
+			dom_edge.set({'weight': edge[2]['weight'], 'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'label': ""}, '<att type="real" name="weight" value="'+str(edge[2]['weight'])+'"/>')
+			fhandle.write(str(dom_edge) + "\n")
+			#if count == 1000:
+			#	break
+			count += 1
+		fhandle.write("</graph>")
+							
+	def toJSON(self, fhandle):
+		cid = 0
+		cur_ids = {}
+		#fhandle.write("{\n\tnodes:[\n")
+		results={"nodes" : [], "links" :[]}
+		for cn in self.nodes_iter():
+			cur_ids[cn] = cid
+			results["nodes"].append({'id': cid, 'label': cn, 'weight': self.node[cn]['weight']})
+			#fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
+			cid += 1
+		#fhandle.write("\t],\n")
+		#fhandle.write("\tlinks:[\n")
+		count = 0
+		for edge in self.edges_weight_iter():
+			#fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
+			results["links"].append({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})
+			#if count == 1000:
+			#	break
+			count += 1
+		#fhandle.write("\t]\n}")
+		fhandle.write(json.dumps(results, indent=1))
+
+	## Get weighted edgesD from this graph.
+	#def edges(self):
+		# This is just the code from networkx.graph - except call our
+	#	return list(self.edges_iter())
 				
 
-			#get list of nodes and edges for testing
-			#node_handle=open('new_loop_node_list.txt','w')
-			#for n in self.nodes_iter():
-			#	node_handle.write(n+"\n")
-			#node_handle.close()
-			#edge_handle=open('new_loop_edge_list.txt','w')
-			#for e in self.edges_iter():
-			#	edge_handle.write(str(e)+"\n")
-			#edge_handle.close()
+	## Overwrite Graph edges_iter method so we get weight information too
+	def edges_weight_iter(self, nbunch=None):
+		for edge in Graph.edges_iter(self, nbunch, data=True):
+			yield edge
+
+def toGML(cur_graph, file_name):
+		readwrite.graphml.write_graphml(cur_graph, file_name)
+
+def node_to_gff(gff_handle, node, feature_counter, graphID):
+	for i in node.instances:
+		fid=next(feature_counter)
+		replicon_id, start, end = i.getLocation()
+		#for now don't know direction, or feature id
+		line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
+		gff_handle.write(line)
+
+def edge_to_gff(gff_handle, edge):
+	return 0
+
+#create data maps for keeping track of relationships between graph entities
+#finalaize node ids and edge ids
+#create GFF records
+#org_map genome id to name
+#sid_to_edge sequence id to edge id
+#takes number of nodes so that edges can have unique ids wrt to nodes
+def create_indices(storage, pgraph, csize, gff_outfile):
+	bgzf_handle = bgzf.BgzfWriter(gff_outfile,'wb')
+	edge_counter=itertools.count()
+	node_counter=itertools.count()
+	feature_counter=itertools.count()
+	storage.org_map={}#maps which genome ids have which names
+	storage.sid_to_edge={}#maps which sequence ids have which edges
+	storage.graph_to_offset={}#maps graph ID (node or edge) to offset location start,end
+	for n in pgraph.nodes():
+		ncount=str(next(node_counter))
+		pgraph.node[n]['id']=ncount
+		start_voff=bgzf_handle.tell()
+		node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
+		end_voff=bgzf_handle.tell()
+		storage.graph_to_offset[ncount]=[start_voff,end_voff]
+	for e in pgraph.edges():
+		ecount=next(edge_counter)
+		pgraph.adj[e[0]][e[1]]['id']=str(ecount+csize)
+		for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
+			storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
+			#edge_to_gff(bgzf_handle)
+	for k,v in storage.summaryLookup.iteritems():
+		storage.org_map[k]=v.genome_name
 
 
 
-		def toXGMML(self, fhandle):
-			xml = DOMLight.XMLMaker()
-			fhandle.write("""<?xml version="1.0" encoding="UTF-8"?>
-			<graph xmlns="http://www.cs.rpi.edu/XGMML" directed="0" label="PFam assembly">
-			""")
-			cid = 0
-			cur_ids = {}
-			for cn in self.nodes_iter():
-				cur_ids[cn] = cid
-				fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(self.node[cn]['weight'])+'"/>')) + "\n")
-				cid += 1
-			count = 0
-			for edge in self.edges_weight_iter():
-				dom_edge=xml.edge()
-				dom_edge.set({'weight': edge[2]['weight'], 'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'label': ""}, '<att type="real" name="weight" value="'+str(edge[2]['weight'])+'"/>')
-				fhandle.write(str(dom_edge) + "\n")
-				#if count == 1000:
-				#	break
-				count += 1
-			fhandle.write("</graph>")
-								
-		def toJSON(self, fhandle):
-			cid = 0
-			cur_ids = {}
-			#fhandle.write("{\n\tnodes:[\n")
-			results={"nodes" : [], "links" :[]}
-			for cn in self.nodes_iter():
-				cur_ids[cn] = cid
-				results["nodes"].append({'id': cid, 'label': cn, 'weight': self.node[cn]['weight']})
-				#fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
-				cid += 1
-			#fhandle.write("\t],\n")
-			#fhandle.write("\tlinks:[\n")
-			count = 0
-			for edge in self.edges_weight_iter():
-				#fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
-				results["links"].append({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})
-				#if count == 1000:
-				#	break
-				count += 1
-			#fhandle.write("\t]\n}")
-			fhandle.write(json.dumps(results, indent=1))
-
-		## Get weighted edgesD from this graph.
-		#def edges(self):
-			# This is just the code from networkx.graph - except call our
-		#	return list(self.edges_iter())
-					
-
-		## Overwrite Graph edges_iter method so we get weight information too
-		def edges_weight_iter(self, nbunch=None):
-			for edge in Graph.edges_iter(self, nbunch, data=True):
-				yield edge
-
-	def toGML(cur_graph, file_name):
-			readwrite.graphml.write_graphml(cur_graph, file_name)
-
-	def node_to_gff(gff_handle, node, feature_counter, graphID):
-		for i in node.instances:
-			fid=next(feature_counter)
-			replicon_id, start, end = i.getLocation()
-			#for now don't know direction, or feature id
-			line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
-			gff_handle.write(line)
-
-	def edge_to_gff(gff_handle, edge):
-		return 0
-
-	#create data maps for keeping track of relationships between graph entities
-	#finalaize node ids and edge ids
-	#create GFF records
-	#org_map genome id to name
-	#sid_to_edge sequence id to edge id
-	#takes number of nodes so that edges can have unique ids wrt to nodes
-	def create_indices(storage, pgraph, csize, gff_outfile):
-		bgzf_handle = bgzf.BgzfWriter(gff_outfile,'wb')
-		edge_counter=itertools.count()
-		node_counter=itertools.count()
-		feature_counter=itertools.count()
-		storage.org_map={}#maps which genome ids have which names
-		storage.sid_to_edge={}#maps which sequence ids have which edges
-		storage.graph_to_offset={}#maps graph ID (node or edge) to offset location start,end
-		for n in pgraph.nodes():
-			ncount=str(next(node_counter))
-			pgraph.node[n]['id']=ncount
-			start_voff=bgzf_handle.tell()
-			node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
-			end_voff=bgzf_handle.tell()
-			storage.graph_to_offset[ncount]=[start_voff,end_voff]
+#remove certain attributes that are no longer useful or prohibiitively large from graph output
+def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
+	if from_edges:
 		for e in pgraph.edges():
-			ecount=next(edge_counter)
-			pgraph.adj[e[0]][e[1]]['id']=str(ecount+csize)
-			for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
-				storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
-				#edge_to_gff(bgzf_handle)
-		for k,v in storage.summaryLookup.iteritems():
-			storage.org_map[k]=v.genome_name
+			for r in from_edges:
+				try: pgraph.adj[e[0]][e[1]].pop(r,None)
+				except: pass
+	#from nodes need to implement
+	if from_nodes:
+		for n in pgraph.nodes():
+			for r in from_nodes:
+				try: delattr(n,r)
+				except: pass
+ 
+#possibly assembly mistakes
+#or genome rearrangement points
+def find_rearrangements(pgraph, storage, out_file, gminimum=None):
+	out_handle=open(out_file,'w')
+	if not gminimum:
+		gminimum=len(storage.summaryLookup)#default to all genomes in 
+	for u,v,data in pgraph.edges_iter(data=True):
+		us=u.get_summary()
+		vs=v.get_summary()
+		if len(data['instances']) == 1 and len(us['organisms']) >= gminimum and len(vs['organisms']) >= gminimum:
+			out_handle.write(next(iter(data['instances'])).getLocationString()+"\n")
+	out_handle.close()
+		
+		
+def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
+	#register_namespace('',"http://www.gexf.net/1.1draft")
+	encoding='utf-8'
+	header='<?xml version="1.0" encoding="%s"?>'%encoding
+	gexf_xml=ElementTree(fromstring(in_handle.getvalue()))
+	metadata_element=Element("meta")
+	metadata_element.append(Element("ksize",value=str(k_size)))
+	metadata_element.append(Element("minorg",value=str(minOrg)))
+	gn_element=Element("org_map")
+	gn_element.text=CDATA(json.dumps(storage.org_map))
+	metadata_element.append(gn_element)
+	contig_element= Element("contig_map")
+	contig_element.text = CDATA(json.dumps(storage.replicon_map))
+	metadata_element.append(contig_element)
+	sid_element = Element("edge_map")
+	sid_element.text = CDATA(json.dumps(storage.sid_to_edge))
+	metadata_element.append(sid_element)
+	root=gexf_xml.getroot()
+	root.insert(0, metadata_element)
+	gexf_handle=open(out_file, 'w')
+	gexf_handle.write(header.encode(encoding))
+	gexf_xml.write(gexf_handle, encoding=encoding)
+	gexf_handle.close()
 
+#calculate graph statistics
+def stats(graph):
+	num_nodes=graph.order()
+	num_edges=graph.size()
+	avg_degree= float(num_edges)/num_nodes
+	print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
 
-
-	#remove certain attributes that are no longer useful or prohibiitively large from graph output
-	def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
-		if from_edges:
-			for e in pgraph.edges():
-				for r in from_edges:
-					try: pgraph.adj[e[0]][e[1]].pop(r,None)
-					except: pass
-		#from nodes need to implement
-		if from_nodes:
-			for n in pgraph.nodes():
-				for r in from_nodes:
-					try: delattr(n,r)
-					except: pass
-	 
-	#possibly assembly mistakes
-	#or genome rearrangement points
-	def find_rearrangements(pgraph, storage, out_file, gminimum=None):
-		out_handle=open(out_file,'w')
-		if not gsupport:
-			gminimum=len(storage.summaryLookup)#default to all genomes in 
-		for u,v,data in pgraph.edges_iter(data=True):
-			us=u.get_summary()
-			vs=v.get_summary()
-			if len(data['instances']) == 1 and len(us.organisms) >= gsupport and len(vs.organisms) >= gsupport:
-				out_handle.write(data['instances'].getLocationString()+"\n")
-		out_handle.close()
-			
-			
-	def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
-		#register_namespace('',"http://www.gexf.net/1.1draft")
-		encoding='utf-8'
-		header='<?xml version="1.0" encoding="%s"?>'%encoding
-		gexf_xml=ElementTree(fromstring(in_handle.getvalue()))
-		metadata_element=Element("meta")
-		metadata_element.append(Element("ksize",value=str(k_size)))
-		metadata_element.append(Element("minorg",value=str(minOrg)))
-		gn_element=Element("org_map")
-		gn_element.text=CDATA(json.dumps(storage.org_map))
-		metadata_element.append(gn_element)
-		contig_element= Element("contig_map")
-		contig_element.text = CDATA(json.dumps(storage.replicon_map))
-		metadata_element.append(contig_element)
-		sid_element = Element("edge_map")
-		sid_element.text = CDATA(json.dumps(storage.sid_to_edge))
-		metadata_element.append(sid_element)
-		root=gexf_xml.getroot()
-		root.insert(0, metadata_element)
-		gexf_handle=open(out_file, 'w')
-		gexf_handle.write(header.encode(encoding))
-		gexf_xml.write(gexf_handle, encoding=encoding)
-		gexf_handle.close()
-
-	#calculate graph statistics
-	def stats(graph):
-		num_nodes=graph.order()
-		num_edges=graph.size()
-		avg_degree= float(num_edges)/num_nodes
-		print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
-
-	def main(init_args):
-		if(len(init_args)<5):
-			sys.stderr.write("Usage: figfam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
-			sys.exit()
-		k_size=int(init_args[4])
-		minOrg=int(init_args[5])
-		if len(init_args)>=7:
-			ignore_fams=init_args[6].replace(' ','').split(',')
-		#ignore_fams=set(['FIG00638284','FIG01306568'])
-		fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
-		fstorage.bfsExpand(minOrg)
+def main(init_args):
+	if(len(init_args)<5):
+		sys.stderr.write("Usage: figfam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
+		sys.exit()
+	k_size=int(init_args[4])
+	minOrg=int(init_args[5])
+	if len(init_args)>=7:
+		ignore_fams=init_args[6].replace(' ','').split(',')
+	#ignore_fams=set(['FIG00638284','FIG01306568'])
+	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[3])
 	out_file=os.path.join(out_folder,out_basename)
