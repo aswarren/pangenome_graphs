@@ -60,6 +60,14 @@ class featureInfo():
         self.group_num=None
 		self.start=None
 		self.end=None
+        self.rf_increase=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
+        self.rf_decrease=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
+
+    def addRFPointer(direction, pointer):
+        if direction=="increase":
+            self.rf_increase=pointer
+        else:
+            self.rf_decrease=pointer
 
     def getContextValue(self, context):
         if context=="genome":
@@ -139,16 +147,22 @@ class featureInfo():
 ##specific way.
 class rfNode():
 	def __init__(self, nodeID, feature_list, ksize, reverse, palindrome):
-		self.right_side=[feature_list[-1]]#for space efficency only store right most feature in kmer
+		self.features=[[],[]]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
+        self.addFeatures(reverse, feature_list)
         self.duplicate=False #whether this node is duplicated in any context bin
 		self.nodeID=nodeID
 		self.weightLabel=None
 		self.weight=None
-                self.linkOut={}#four classes of edges
+        self.linkOut={}#four classes of edges
 		self.visited=False
 		self.queued=False
 		self.self_edge=False
 		self.curRevStatus=rev_status
+    def addFeatures(self, reverse, feature_list):
+        if(reverse):
+            features[-1].append(feature_list[-1])#for space efficency only store right most feature in kmer
+        else:
+            features[0].append(feature_list[-1])#for space efficency only store right most feature in kmer
 	#each cell in list stores info[LetterOfKmer]=geneInfo()
 	def addInfo(self, position, cur_fam, info):
 		if self.infoList[position] != None:
@@ -541,18 +555,19 @@ class GraphMaker():
 	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
 	def addRFNode(self, feature_list):
-		reverse,palindrome,kmer_key=self.hashKmer(feature_list)#put IDs together to make kmer
+		reverse,palindrome,kmer_key,feature_indices=self.hashKmer(feature_list)#put IDs together to make kmer
 		nodeID=None
         duplicate=False
 		if not kmer_key in self.kmerLookup:
 			nodeID = len(self.rf_node_list)
-			self.rf_node_list.append(rfNode(nodeID, feature_list, self.ksize, reverse, palindrome))
+			self.rf_node_list.append(rfNode(nodeID, feature_indices, self.ksize, reverse, palindrome))
 		    self.cur_rf_node=self.rf_node_list[-1]
 			self.kmerLookup[kmer_key]=self.rf_node_list[-1]
         else:
             duplicate=kmer_key in self.context_bin
 		    self.cur_rf_node=self.kmerLookup[kmer_key]
             self.cur_rf_node.reverse=reverse # even if kmer seen before reverse needs to be updated to correctly calculate flip
+            self.cur_rf_node.addFeatures(reverse, feature_indices)
             if duplicate:
                 cur_rf_node.duplicate=True
         self.context_bin.add(kmer_key)
@@ -574,6 +589,8 @@ class GraphMaker():
                 else:# +1 +1
                     leaving_position=0
                     reverse_lp=self.ksize-1
+            self.feature_index[feature_indices[leaving_position]].addRFPointer(direction="increase", nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
+            self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", nodeID) # to enable thread based navigation.
             flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
             self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
             self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
@@ -603,7 +620,8 @@ class GraphMaker():
 	##Separate the kmer back into its parts
 	def getParts(self, kmer):
 		return(kmer.split('.'))
-			
+	
+    #create a kmer based on the group ids in the features. Also append the feature to a feature_index
     def hashKmer(self, feature_list):
         kmer_hash=[]
         for feature in feature_list:
@@ -617,7 +635,7 @@ class GraphMaker():
             feature.feature_id= len(self.feature_index)
             self.feature_index.append(feature)
         reverese, palindrome, kmer_hash = flipKmer(kmer_hash)
-        return reverse, palindrome, ".".join(kmer_hash)
+        return reverse, palindrome, kmer_hash, ".".join(kmer_hash)
             
 
 
