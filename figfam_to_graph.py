@@ -50,21 +50,27 @@ def warning(*objs):
 		print >> sys.stderr, o
 
 ##Class for storing information about the origin of a Kmer
-class geneInfo():
+class featureInfo():
         #expand to parse out this information from different sources
 	def __init__(self, line=None):
-		#self.replicon_id=''
-		#self.org_id=''
-		#self.start=-1
-		#self.end=-1
-		#self.function=''
-                #self.fam_id=''
-		self.line = line
-                #if line:
-		#	self.parse_line(line)
+		self.contig_id=None
+		self.genome_id=None
+        self.feature_id=None
+        self.group_id=None
+        self.group_num=None
+		self.start=None
+		self.end=None
+
+    def getContextValue(self, context):
+        if context=="genome":
+            return self.genome_id
+        else if self.context=="contig":
+            return self.contig_id
+        else:
+            return None
 
 	def getString(self):
-		#result="|".join([self.replicon_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
+		#result="|".join([self.contig_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
 		#return result
 		return line
 	def getParts(self):
@@ -108,15 +114,15 @@ class geneInfo():
 	def getLocation(self):
 		result=self.parse_line(self.line)
 		return [result['contig_id'],result['start'],result['end']]
-		#return [self.replicon_id, self.start, self.end]
+		#return [self.contig_id, self.start, self.end]
 	def getLocationString(self):
 		result=self.parse_line(self.line)
 		return ":".join([result['contig_id'],str(result['start']),str(result['end'])])
-		#return ":".join([self.replicon_id, str(self.start), str(self.end)])
+		#return ":".join([self.contig_id, str(self.start), str(self.end)])
 	def getFeatureString(self, delim=":"):
 		result=self.parse_line(self.line)
 		return delim.join([result['contig_id'],str(result['start']),str(result['end']), str(result['fam_id']), result['org_id']])
-		#return delim.join([self.replicon_id, str(self.start), str(self.end), str(fam_id), str(org_id)])
+		#return delim.join([self.contig_id, str(self.start), str(self.end), str(fam_id), str(org_id)])
 	def getReplicon(self):
 		result=self.parse_line(self.line)
 		return result['contig_id']
@@ -131,12 +137,11 @@ class geneInfo():
 ##Class for storing all the geneInfo in a particular node
 ##along with the kmer information. does not store information in direction
 ##specific way.
-class kmerNode():
-	def __init__(self,nid, ksize, rev_status):
-		self.infoList=[None for i in range(ksize)]#stores information about location of the figfams that make up kmer as geneInfo objects [(figfam ID, [geneInfo()]] Does not store direction.
-		self.pgRefs=[None for i in range(ksize)]#an ordered list of pg-node pointers which will be updated as k-nodes are processed
-		self.peInfo=[set() for i in range(ksize-1)]#pan-edge info regarding space between families
-		self.nodeID=nid
+class rfNode():
+	def __init__(self, nodeID, feature_list, ksize, reverse, palindrome):
+		self.right_side=[feature_list[-1]]#for space efficency only store right most feature in kmer
+        self.duplicate=False #whether this node is duplicated in any context bin
+		self.nodeID=nodeID
 		self.weightLabel=None
 		self.weight=None
                 self.linkOut={}#four classes of edges
@@ -421,23 +426,56 @@ class famInfo():
 
 
 		
-		
-		
+class featureParser():
+    def __init__(self, **kwargs):
+        self.feature_file=kwargs.feature_file
+        self.file_type=kwargs.file_type
+        self.parse=None
+        if self.file_type=="tab":
+            self.parse=self.parseFeatureTab
+    def parseFeatureTab(self):
+        ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
+        in_handle=open(self.feature_file)
+        result=featureInfo()
+        for line in in_handle:
+			if line.startswith('#'):
+				continue
+            try:
+                parts=line.strip().split("\t")
+                result.group_id=parts[ip['fam_id']]
+                result.contig_id=parts[ip['contig_id']]
+                result.genome_id=parts[ip['org_id']]
+                result.start==parts[ip['start']]
+                result.end=parts[ip['end']]
+            except:
+                warning("parsing problem. couldn't parse line: "+line)
+        yield result
+
+
+            
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
 
-##This class is for parsing figfam and summary file (table of taxonomy information) and storing it in a dictionary structure
+##This class is for storing dictionary structures that facilitate different pan-genome graph calculations
 ##Parameters are filepaths and the size of kmer to use
-class FamStorage():
-	def __init__(self, feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
+class GraphMaker():
+	def __init__(self, **kwargs)#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
 		print feature_file
 		print summary_file
 		print str(ksize)
-		self.kmerList=[] #set kmer_ids to position here.
-		self.replicon_ids=set()
+        self.feature_parser=None
+        #convert option passed to file_type
+        if "feature_tab" in kwargs:
+            self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_format="tab")
+        self.context=kwargs["context"] #should be ["genome", "contig", None]
+		self.rfnode_list=[] #set kmer_ids to position here.
+        self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
 		self.ignore_fams=ignore_fams
 		self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
-		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer
+		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
+        self.cur_rf_node=None
+        self.prev_node=None
+
 		self.pg_initial=[] #initial node storage
 		self.pg_ptrs=[] #idx of nodes. for merging identity
 		self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
@@ -449,10 +487,10 @@ class FamStorage():
 		self.summary_level=None#taxon level at which to summarize
 		self.ksize=ksize #size of the kmer to store
 		self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
-		self.replicon_map={}#stores relationships between org_ids and contig_ids (replicon_ids)
+		self.replicon_map={}#stores relationships between org_ids and contig_ids (contig_ids)
 		self.parseFeatures(feature_file)
-		h=hpy()
-		print h.heap()	
+		#h=hpy()
+		#print h.heap()	
 		self.parseSummary(summary_file)
                 self.parseFamilyInfo(family_file)
 		
@@ -502,49 +540,44 @@ class FamStorage():
 	#and links kmer graph data structure appropriately
 	#store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
-	def addKmer(self, prev_key, kmer_q):
-		fig_list=list(kmer_q)
-		kmer_key, rev_status=self.makeKey(list(kmer_q),prev_key)#put IDs together to make kmer
+	def addRFNode(self, feature_list):
+		reverse,palindrome,kmer_key=self.hashKmer(feature_list)#put IDs together to make kmer
 		nodeID=None
-		if rev_status:
-			fig_list.reverse()
-		if not kmer_key in self.kmerLookup: 
-			nodeID = len(self.kmerList)
-			self.kmerList.append(kmerNode(nodeID, self.ksize, rev_status))
-			self.kmerLookup[kmer_key]=self.kmerList[-1]
-		cur_knode=self.kmerLookup[kmer_key]
-		cur_knode.curRevStatus=rev_status
-		#if nodeID == 2:
-		#	print "Debug: Why are you linking backwards?"
-		nodeID= cur_knode.nodeID
-		if(prev_key!=None):
-			#self.kkmerLookup[prev][1].add(kmer_key.split(',')[-1])#add the last figfam ID to the previous kmer so that it can find this kmer
-			prev_knode=self.kmerLookup[prev_key]
-			prev_knode.addEdges(nodeID, rev_status)#add the last figfam ID to the previous kmer so that it can find this kmer
-		prev_fam=None
-		e_counter=0 #for keeping track of which intergenic space
-		for position, fig_info in enumerate(fig_list):
-			#print fig_info
-			cur_info=fig_info.parse_line()
-			fID, replicon_id, organism_id, start, fam_function= cur_info['fam_id'], cur_info['contig_id'], cur_info['org_id'], cur_info['start'], "None"
-			gene_lookup=(replicon_id, start)
-			#key the gene lookup by replicon_id and position
-			if not gene_lookup in self.geneHash:
-				target=fig_info
-				self.geneHash[gene_lookup]=target
-			else:
-				target=self.geneHash[gene_lookup]
-			cur_knode.addInfo(position, fID, target)#add information about kmer location
-			if prev_fam != None:
-				if rev_status and (e_counter==0 or (prev_fam and prev_key == None)):
-					intergenic=fig_info.getInterFeature(prev_fam)
-					cur_knode.addPGEInfo(intergenic,e_counter)
-				elif e_counter==self.ksize-2 or (prev_fam and prev_key == None):
-					intergenic=prev_fam.getInterFeature(fig_info)
-					cur_knode.addPGEInfo(intergenic,e_counter)
-				e_counter+=1	
-			prev_fam=fig_info
-                return kmer_key
+        duplicate=False
+		if not kmer_key in self.kmerLookup:
+			nodeID = len(self.rf_node_list)
+			self.rf_node_list.append(rfNode(nodeID, feature_list, self.ksize, reverse, palindrome))
+		    self.cur_rf_node=self.rf_node_list[-1]
+			self.kmerLookup[kmer_key]=self.rf_node_list[-1]
+        else:
+            duplicate=kmer_key in self.context_bin
+		    self.cur_rf_node=self.kmerLookup[kmer_key]
+            self.cur_rf_node.reverse=reverse # even if kmer seen before reverse needs to be updated to correctly calculate flip
+            if duplicate:
+                cur_rf_node.duplicate=True
+        self.context_bin.add(kmer_key)
+        self.rf_graph.add_node(self.cur_rf_node)
+
+        #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
+        if self.prev_node and not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
+            if self.prev_node.reverse:
+                if self.cur_rf_node.reverse: # -1 -1
+                    leaving_position=self.ksize-1
+                    reverse_lp=0
+                else: # -1 +1
+                    leaving_position=self.ksize-1
+                    reverse_lp=self.ksize-1
+            else:
+                if self.cur_rf_node.reverse:# +1 -1
+                    leaving_position=0
+                    reverse_lp=0
+                else:# +1 +1
+                    leaving_position=0
+                    reverse_lp=self.ksize-1
+            flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
+            self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
+            self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
+
 	##Create an ID for kmer
 	##In case directionality is flipped for entire genome I am flipping each kmer
 	##This shouldn't adversely affect inversions nor the overall result
@@ -566,93 +599,72 @@ class FamStorage():
 			self.kmerLevel=0
 		self.recentK.append(result)
 		return ((self.kmerLevel, result), rev_status)
-	##get the id_set used for degree of similarity for protein family
-	#Parameters fID-figfamID; kmer-the kmer ID
-	#Return a hash value (set) of all the positions of a figfam
-	def getHashSet(self, fID, kmer):
-		result=set()
-		cur_info_list=[]
-		try:
-			cur_info_list=self.kmerLookup[kmer][0].infoList[fID]
-		except:
-			print "could not find "+fID+" in "+self.kmerLookup[kmer][0].infoList.keys()
-			pass
-		for c in cur_info_list:
-			result.add(c)
-		return result
-		
-				
-	##check to see if the figfam should be considered the same or not
-	#Parameters fID-figfam ID, id_set-
-	#The graph is composed of figfams that represent many positions in many genomes
-	#when expanding out from kmers to figfams the figfams need to be checked to see if they represent
-	#equivalent positions
-	#there is potentially a flaw if  the same figfam occurs at the same base in two different genomes
-	def checkIdentity(self, fID, kmer, threshold):
-		id_set = self.getHashSet(fID,kmer)				
-
-		#check if the figfam is in storage
-		if fID in self.figfamHash:
-			#iterate through all the sets of coordinates for the figfam
-			#to find if this figfam-node has already been encountered
-			#if it has make sure to update the positions with the union
-			#if it hasn't add these positions to the list.
-			#each node (consists of a figfam that can occur in multiple organisms)
-			self.figfamHash[fID].add_instance(id_set, threshold, self.locationHash)	
-		else:	
-			self.figfamHash[fID]=famInfo(fID)
-			self.figfamHash[fID].add_instance(id_set, threshold, self.locationHash)
-		#MODIFY Some kindof kmer data structure to keep track of which figfams are which version of themselves.
-		return 0
 					
 	##Separate the kmer back into its parts
 	def getParts(self, kmer):
-		return(kmer.split('|'))
+		return(kmer.split('.'))
 			
-	def parseFeatures(self, feature_file, ignore=True):
+    def hashKmer(self, feature_list):
+        kmer_hash=[]
+        for feature in feature_list:
+            if not feature.group_name in self.groups_seen:
+                feature.group_num=len(self.group_index)
+                self.groups_seen[feature.group_id]=feature.group_num
+                self.group_index.append(feature.group_num)
+            else:
+                feature.group_num=self.groups_seen[feature.group_name]
+            kmer_hash.append(feature.group_num)
+            feature.feature_id= len(self.feature_index)
+            self.feature_index.append(feature)
+        reverese, palindrome, kmer_hash = flipKmer(kmer_hash)
+        return reverse, palindrome, ".".join(kmer_hash)
+            
+
+
+    def flipKmer(self, feature_list)
+        i=0
+        k_size=len(id_list)
+        palindrome=0
+        reverse=0
+        while i<(len(k_size)/2):
+            if id_list[i].group_name < id_list[k_size-(i+1)].group_name:
+                return (reverse, palidrome, feature_list)
+            else if feature_list[i].group_name > feature_list[k_size-(i+1)].group_name:
+                reverse=1
+                return (reverse, palindrome, feature_list.reverse())
+            i+=1
+        palindrome =1
+        return (reverse, palindrome, feature_list)
+
+
+	def processFeatures(self):
 		print "parsing features and constructing kmer graph"	
-		num_fam=0
-		inHandle=open(feature_file, 'r')
-		#header=inHandle.readline()
 		kmer_q=deque()
-		prev_seq=""
-		cur_seq=""
-		prev_kmer=None
+		prev_feature=None
 		#loop through figfams to create kmers
-		for line in inHandle:
-			if line.startswith('#'):
-				continue
-
-			fig_info=geneInfo(line=line)
-			cur_info=fig_info.parse_line()
-			org_id=cur_info['org_id']
-			fam_id = cur_info['fam_id']
-			replicon_id = cur_info['contig_id']
-                        if org_id not in self.replicon_map:
-				self.replicon_map[org_id]=set()
+		for feature in self.feature_parser.parse:
+            if feature.genome_id not in self.replicon_map:
+				self.replicon_map[feature.genome_id]=set()
 			else:
-				self.replicon_map[org_id].add(replicon_id)
-
-			if ignore and fam_id in self.ignore_fams:
-				continue
-			num_fam+=1
-			cur_seq=replicon_id
-			self.replicon_ids.add(cur_seq)
-			if(prev_seq != cur_seq and num_fam>1):
+				self.replicon_map[feature.genome_id].add(feature.contig_id)
+			if(prev_feature and prev_feature.contig_id != feature.contig_id):
 				kmer_q=deque()#clear kmer stack because switching replicons
-				prev_kmer=None
-
-			kmer_q.append(fig_info)#append the figfam ID
+				self.prev_node=None
+            #depending on the context populate the context bin with appropriate ids to detect duplicates
+            if self.context:
+                if(prev_feature and prev_feature.getContextValue(self.context) != feature.getContextValue(self.context)):
+                    self.context_bin.clear()
+			kmer_q.append(feature)#append the feature to the queue
 			if(len(kmer_q)>self.ksize):
 				kmer_q.popleft()
-				kmer=self.addKmer(prev_kmer, kmer_q)
+				self.addRFNode(kmer_q)
 			elif(len(kmer_q)== self.ksize):
-				kmer=self.addKmer(prev_kmer, kmer_q)#right now only passing in the last figfams information
+				self.addRFNode(kmer_q)#right now only passing in the last figfams information
 			else:#kmer size is less than ksize
 				kmer=None
-			prev_seq=cur_seq # record which replicon we are on
-			prev_kmer=kmer
-		inHandle.close()
+            prev_feature=feature
+			self.prev_node=self.cur_rf_node
+		in_handle.close()
 		
 	#for a given kmer return a set of the organisms involved
 	def getOrgSummary(self, kmer):
@@ -740,8 +752,8 @@ class FamStorage():
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
 	#dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
 	def bfsExpand(self, minOrg):
-		print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.kmerList))
-		for start_k_id, start_knode in enumerate(self.kmerList):
+		print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.rf_node_list))
+		for start_k_id, start_knode in enumerate(self.rf_node_list):
 			if start_knode.visited:
 				continue
 			else:
@@ -751,11 +763,11 @@ class FamStorage():
 				in_edge_status=None # type of edge arrived by
 				while len(knode_q) > 0:
 					visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
-					cur_knode=self.kmerList[visiting_k_id]
+					cur_knode=self.rf_node_list[visiting_k_id]
 					#do work for expanding this kmer node into pg-graph nodes
 					#if prev_knode and incoming_status != None :
 					if prev_k_id != None:
-						cur_knode.visitNode(self.kmerList[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
+						cur_knode.visitNode(self.rf_node_list[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
 					else:
 						cur_knode.visitNode(None, None, self)
 					for k_id in cur_knode.linkOut:
@@ -768,14 +780,14 @@ class FamStorage():
 							#handle return loop. create single edge back and apply labels
 							#return_node=self.kmerList[k_id]
 							#return_node.applyInfo(self)
-						elif self.kmerList[k_id].visited or self.kmerList[k_id].queued:	
-							return_node=self.kmerList[k_id]
+						elif self.rf_node_list[k_id].visited or self.rf_node_list[k_id].queued:	
+							return_node=self.rf_node_list[k_id]
 							return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
 						else:
 							#if k_id ==208:
 							#	print "Debug: why is this being queued so much?"
 							knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
-							self.kmerList[k_id].queued=True
+							self.rf_node_list[k_id].queued=True
 					cur_knode.addPGEdges(self)
 
 # undirected weighted
@@ -972,9 +984,9 @@ def toGML(cur_graph, file_name):
 def node_to_gff(gff_handle, node, feature_counter, graphID):
 	for i in node.instances:
 		fid=next(feature_counter)
-		replicon_id, start, end = i.getLocation()
+		contig_id, start, end = i.getLocation()
 		#for now don't know direction, or feature id
-		line="\t".join([replicon_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
+		line="\t".join([contig_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
 		gff_handle.write(line)
 
 def edge_to_gff(gff_handle, edge):
@@ -1080,7 +1092,7 @@ def main(init_args):
 	if len(init_args)>=7:
 		ignore_fams=init_args[6].replace(' ','').split(',')
 	#ignore_fams=set(['FIG00638284','FIG01306568'])
-	fstorage=FamStorage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
+	fstorage=Storage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
 	fstorage.bfsExpand(minOrg)
 	out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
 	out_folder=os.path.expanduser(init_args[3])
