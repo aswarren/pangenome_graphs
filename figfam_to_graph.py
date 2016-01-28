@@ -790,12 +790,14 @@ class GraphMaker():
         node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
         node_queue=deque()
         visited_nodes=set([])
+        seen_targets=set([])
         #put this conditional in expand_features
         #if cur_node.anchorNode():
             #expand_features assigns features to pg-nodes, queues rf-nodes for visiting, and organizes feature threads to pass to each
             #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue, node_bundles=node_bundles)
             #figure out targets not seen before
         self.expand_features(cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
+        seen_targets.update(targets)
         #NOW need to think carefully about where targets will be set. I guess always right side? They need be divided into decreasing and increasing.
         #Also this means projection based on edge will need to be well thought out. 
         while len(node_queue):
@@ -807,11 +809,12 @@ class GraphMaker():
                 return_targets = self.TFSExpand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
                 visited_nodes.add(next_node)
                 if not cur_node.anchorNode():
-                    new_return_targets=return_targets.difference(targets)
+                    new_return_targets=return_targets.difference(seen_targets)
                     #just got new targets returned from a DFS. expand them, and update queue based on them
                     if(len(new_return_targets)):
                         new_guide= iter(targets).next() #can be any feature just assigned.
                         self.expand_features(cur_node, targets=new_return_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
+                        seen_targets.update(new_return_targets)
         return (node_bundles[prev_node.nodeID])
 
 
