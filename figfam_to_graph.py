@@ -147,10 +147,14 @@ class featureInfo():
 ##specific way.
 class rfNode():
 	def __init__(self, nodeID, feature_list, ksize, reverse, palindrome):
-		self.features=[[],[]]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
+		self.features=[set([]),set([])]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
+		self.assigned_features=[set([]),set([])]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
+        self.num_features=0
         self.addFeatures(reverse, feature_list)
         self.duplicate=False #whether this node is duplicated in any context bin
 		self.nodeID=nodeID
+        self.reverse=reverse
+        self.palindrome=palindrome
 		self.weightLabel=None
 		self.weight=None
         self.linkOut={}#four classes of edges
@@ -158,6 +162,13 @@ class rfNode():
 		self.queued=False
 		self.self_edge=False
 		self.curRevStatus=rev_status
+    def anchorNode(self):
+        return (not self.duplicate) and (not self.palindrome)
+    def numFeatures(self):
+        if self.num_features == 0:
+            self.num_features=len(self.features[0])+len(self.features[1])
+        return self.num_features
+
     def addFeatures(self, reverse, feature_list):
         if(reverse):
             features[-1].append(feature_list[-1])#for space efficency only store right most feature in kmer
@@ -571,7 +582,7 @@ class GraphMaker():
             if duplicate:
                 cur_rf_node.duplicate=True
         self.context_bin.add(kmer_key)
-        self.rf_graph.add_node(self.cur_rf_node)
+        self.rf_graph.add_node(self.cur_rf_node.nodeID)
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node and not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
@@ -683,6 +694,14 @@ class GraphMaker():
             prev_feature=feature
 			self.prev_node=self.cur_rf_node
 		in_handle.close()
+        #determine list of starting nodes
+        for node in rf_node_list:
+            if node.anchorNode():
+                self.rf_starting_list.append(node)
+        #start with nodes that have the most features
+        sorted(self.rf_starting_list, key=methodcaller('numFeatures'))
+
+
 		
 	#for a given kmer return a set of the organisms involved
 	def getOrgSummary(self, kmer):
@@ -765,6 +784,62 @@ class GraphMaker():
 		if fid in self.familyInfo:
 			return self.familyInfo[fid]
 		else: return None
+
+    #recursive function with a visit queue.
+    def TFSExpand(self, prev_node, cur_node, targets, guide):
+        node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
+        node_queue=deque()
+        visited_nodes=set([])
+        #put this conditional in expand_features
+        #if cur_node.anchorNode():
+            #expand_features assigns features to pg-nodes, queues rf-nodes for visiting, and organizes feature threads to pass to each
+            #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue, node_bundles=node_bundles)
+            #figure out targets not seen before
+        self.expand_features(cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
+        #NOW need to think carefully about where targets will be set. I guess always right side? They need be divided into decreasing and increasing.
+        #Also this means projection based on edge will need to be well thought out. 
+        while len(node_queue):
+            next_node_id, next_guide=node_queue.popleft()
+            if next_node_id != prev_node.nodeID: #prevent recursing "up"
+                next_node=self.rf_node_index[next_node_id]
+                next_targets=node_bundles[next_node_id]
+                #careful here sets are passed by reference
+                return_targets = self.TFSExpand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+                visited_nodes.add(next_node)
+                if not cur_node.anchorNode():
+                    new_return_targets=return_targets.difference(targets)
+                    #just got new targets returned from a DFS. expand them, and update queue based on them
+                    if(len(new_return_targets)):
+                        new_guide= iter(targets).next() #can be any feature just assigned.
+                        self.expand_features(cur_node, targets=new_return_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
+        return (node_bundles[prev_node.nodeID])
+
+
+        
+
+
+        #Incoming
+        #for existing 'threads' gather edges, assign to pg-nodes, add to queue
+        if consistent and len(prev_assigned.forward) >0:
+            adjust_by=range(1,k+1)
+        for feat in prev_assigned.forward:
+            for i in adjust_by:
+                if feat+i in cur_node.family_members[i-1]:
+                    #make assigned
+            
+        visit_queue=set()
+        if not cur_node.duplicate:
+            storage.ExpandNode(cur_node)
+        for fam in cur_node.family_members:
+            for feat in fam:
+                visit_queue.add(feat)
+        #Processing
+
+        #Outgoing
+        #Receiving
+        #Returning
+
+
 
         #transform the kmerNode graph (rf-graph) into a pg-graph
 	#if the minOrg requirment is not met the node is added to the graph but is marked in active.
