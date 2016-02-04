@@ -148,20 +148,23 @@ class featureInfo():
 class rfNode():
 	def __init__(self, nodeID, feature_list, ksize, reverse, palindrome):
 		self.features=[set([]),set([])]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
+        self.positive_features=[0]
+        self.negative_features=[1]
 		self.assigned_features=[set([]),set([])]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
         self.num_features=0
         self.addFeatures(reverse, feature_list)
         self.duplicate=False #whether this node is duplicated in any context bin
-		self.nodeID=nodeID
+        self.nodeID=nodeID
         self.reverse=reverse
         self.palindrome=palindrome
-		self.weightLabel=None
-		self.weight=None
+        self.weightLabel=None
+        self.weight=None
         self.linkOut={}#four classes of edges
-		self.visited=False
-		self.queued=False
-		self.self_edge=False
-		self.curRevStatus=rev_status
+        self.visited=False
+        self.queued=False
+        self.self_edge=False
+        self.curRevStatus=rev_status
+
     def anchorNode(self):
         return (not self.duplicate) and (not self.palindrome)
     def numFeatures(self):
@@ -278,7 +281,7 @@ class rfNode():
 	#4th when checking outbound k nodes see if prev_node == next_node OR cur_node == next_node
 	#NOTES direction does not matter at the pg-edge/node level
 	#model letters in k-mer more explicitly than stupid | separated     	
-        def visitNode(self, prev_node, in_edge_status, storage):
+    def visitNode(self, prev_node, in_edge_status, storage):
 		#if self.nodeID == 1 or self.nodeID ==2 or (prev_node != None and (prev_node.nodeID ==1 or prev_node.nodeID ==2)):
 		#	print "Debug: pgRefs and in_edge_status screwed up"
 		#if self.nodeID ==3261:
@@ -785,8 +788,58 @@ class GraphMaker():
 			return self.familyInfo[fid]
 		else: return None
 
+
+    def expand_features(self, cur_node, targets, guide, node_queue, node_bundles):
+        num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
+        anchor_guide_cat=None # used if there are new things in this anchor node
+        anchor_guide=None #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
+
+        if (num_targets): 
+            # if there are targets then this isn't the first node visited
+            # this means only one new feature aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
+            target_cat=[0,1]
+            #targets organized as targets["right" & "left" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
+            for t1 in target_cat:
+                for t2 in target_cat:
+                    for feature in targets[t1][t2]:
+                        if anchor_guide == None:
+                            anchor_guide=feature
+                            anchor_guide_cat=t2
+                        cur_node.features[t2].remove(feature)
+                        cur_node.assigned_features[t2].add(feature)
+                        new_feature_adj= t1 * t2 * -1 * (self.ksize-1)
+                        new_feature=feature + new_feature_adj
+        if cur_node.anchorNode():
+            #if this is an anchor node then everything needs to expanded/assigned to a pg-node
+            #at this point anything remaining is regarded as 'new' and can be passed as targets up or down
+            
+            #TODO
+            #HERE guide needs to be assigned from targets if there were some used.
+            #ALSO need to write the logic for if guide was passed in as a parameter
+            #ALSO still need to write the logic/function call for assigning the feature to a pg-node (here and above)
+            #ALSO I'm not sure you really need cur_node.assigned_features since you need to maintain separation of a stack/state-variable-set based on TFS
+            #ALSO need to write queue fill logic based on rfid in both spots.
+
+            for t1 in target_cat:
+                for feature in cur_node.features[t1]:
+                    while i < self.ksize:
+                        new_feature_adj= t1 * -1 * i # here t1 is increasing decreasing unlike above
+                        cur_node.assigned_features.add(feature+new_feature_adj)
+                        if anchor_guide != None:
+                            #assign pg-node by guide
+                        else:
+                            #assign by new pg-node
+                        i+=1
+                cur_node.features[t1]=set([])
+
+            #positive features
+            for f in cur_node.positive_features:
+
+
+
+
     #recursive function with a visit queue.
-    def TFSExpand(self, prev_node, cur_node, targets, guide):
+    def tfs_expand(self, prev_node, cur_node, targets, guide):
         node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
         node_queue=deque()
         visited_nodes=set([])
@@ -806,7 +859,7 @@ class GraphMaker():
                 next_node=self.rf_node_index[next_node_id]
                 next_targets=node_bundles[next_node_id]
                 #careful here sets are passed by reference
-                return_targets = self.TFSExpand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+                return_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
                 visited_nodes.add(next_node)
                 if not cur_node.anchorNode():
                     new_return_targets=return_targets.difference(seen_targets)
