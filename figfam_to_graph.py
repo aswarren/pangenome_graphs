@@ -498,6 +498,7 @@ class GraphMaker():
         self.context=kwargs["context"] #should be ["genome", "contig", None]
 		self.rfnode_list=[] #set kmer_ids to position here.
         self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
+        self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
 		self.ignore_fams=ignore_fams
 		self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
@@ -794,6 +795,9 @@ class GraphMaker():
         anchor_guide_cat=None # used if there are new things in this anchor node
         anchor_guide=None #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
 
+        #NEED TO MARK START AND END NODES. ALSO WRITE EXPANSION FUNCTION THAT CAN USE TARGETS? SO THAT IF DUPLICATE AND START/END
+        #CAN STILL EXPAND FULLY? REQUIRES CAREFUL THOUGHT
+
         if (num_targets): 
             # if there are targets then this isn't the first node visited
             # this means only one new feature aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
@@ -834,6 +838,8 @@ class GraphMaker():
 
             #positive features
             for f in cur_node.positive_features:
+        else:
+            self.non_anchor_guides
 
 
 
@@ -841,33 +847,46 @@ class GraphMaker():
     #recursive function with a visit queue.
     def tfs_expand(self, prev_node, cur_node, targets, guide):
         node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
-        node_queue=deque()
+        prev_bundles={}
+        node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
         visited_nodes=set([])
-        seen_targets=set([])
+        return_targets=set([])
+        #seen_targets=set([])
         #put this conditional in expand_features
         #if cur_node.anchorNode():
             #expand_features assigns features to pg-nodes, queues rf-nodes for visiting, and organizes feature threads to pass to each
-            #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue, node_bundles=node_bundles)
+            #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue)
             #figure out targets not seen before
         self.expand_features(cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
-        seen_targets.update(targets)
+        #seen_targets.update(targets)
         #NOW need to think carefully about where targets will be set. I guess always right side? They need be divided into decreasing and increasing.
         #Also this means projection based on edge will need to be well thought out. 
         while len(node_queue):
-            next_node_id, next_guide=node_queue.popleft()
+            #next_guide needs to be populated IF AND WHEN new targets come back from the DFS AND 
+            #they proceed to a Node that has already been visited WHICH surely has to be a 
+            #duplicate/palindrome node else IT WOULD RETURN NEW TARGETS that would be passed down to the node from which NEW TARGETS comes
+            next_node_id, next_guide= node_queue.popleft() 
             if next_node_id != prev_node.nodeID: #prevent recursing "up"
                 next_node=self.rf_node_index[next_node_id]
                 next_targets=node_bundles[next_node_id]
                 #careful here sets are passed by reference
-                return_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
-                visited_nodes.add(next_node)
+                #EITHER the next rf-node is still in the queue in which case it is OK to accumulate bundle info from new_targets found in other visits
+                #OR the bundle information is being transmitted right here in which case only the new stuff should be transmitted down next time
+                #so clear out the bundle info here
+                node_bundles[next_node_id]=set([])
+                #Recursion!
+                new_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
                 if not cur_node.anchorNode():
-                    new_return_targets=return_targets.difference(seen_targets)
+                    #not needed because expand_features will put features in node bundles new_return_targets=return_targets.difference(seen_targets)
+                    #must process 
                     #just got new targets returned from a DFS. expand them, and update queue based on them
-                    if(len(new_return_targets)):
+                    if(len(new_targets)):
                         new_guide= iter(targets).next() #can be any feature just assigned.
-                        self.expand_features(cur_node, targets=new_return_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
-                        seen_targets.update(new_return_targets)
+                        #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
+                        #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
+                        #so if there is a guide: 
+                        self.expand_features(cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
+                        #seen_targets.update(new_return_targets)
         return (node_bundles[prev_node.nodeID])
 
 
