@@ -60,14 +60,14 @@ class featureInfo():
         self.group_num=None
 		self.start=None
 		self.end=None
-        self.rf_increase=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
-        self.rf_decrease=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
+        self.rf_forward=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
+        self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
 
     def addRFPointer(direction, pointer):
         if direction=="increase":
-            self.rf_increase=pointer
+            self.rf_foward=pointer
         else:
-            self.rf_decrease=pointer
+            self.rf_reverse=pointer
 
     def getContextValue(self, context):
         if context=="genome":
@@ -789,14 +789,40 @@ class GraphMaker():
 			return self.familyInfo[fid]
 		else: return None
 
+    #i'm sorry universe this is going to be confusing
+    #given the side of the kmer the feature is found on and its orientation relative to the kmer
+    #return whether it leaves in the forward or reverse direction of the original kmer (before it was potentially flipped by hashing)
+    #kmer_side=0 is right side, kmer_side=1 is left
+    #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
+    def nextRFNode(self, kmer_side,orientation,feature):
+        #right(0) and increasing(0) is the "back" of the kmer
+        #left(1) and increasing(0) is the "back" of the kmer
+        if (kmer_side==0 and orientation=0) or (kmer_side==1 and increasing==0):
+            #progression="reverse"
+            return self.feature_index[feature].rf_reverse
+
+        #right(0) and decreasing(1) is the "front" of the kmer
+        #left(1) and decreasing(1) is the "front" of the kmer
+        else:
+            #progression="forward"
+            return self.feature_index[feature].rf_forward
+
+    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, q_construct, node_queue, node_bundles):
+        nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
+        #here look up edge and edge information using cur_node, nxt_rf_id
+        #project from leaving feature and orientation to what next feature should be with correct 
+        #structure for node_queue and node_bundles
+        if not nxt_rf_id in q_construct:
+            q_construct[next_rf_id]=[leaving_feature]
+
 
     def expand_features(self, cur_node, targets, guide, node_queue, node_bundles):
-        num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
-        anchor_guide_cat=None # used if there are new things in this anchor node
-        anchor_guide=None #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
-
-        #NEED TO MARK START AND END NODES. ALSO WRITE EXPANSION FUNCTION THAT CAN USE TARGETS? SO THAT IF DUPLICATE AND START/END
-        #CAN STILL EXPAND FULLY? REQUIRES CAREFUL THOUGHT
+        q_construct={}#keyed by rfid
+        num_targets=0
+        if (targets!=None):
+            num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
+        rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
+        rhs_guide_cat=guide[1] #used if there are new things in this anchor node
 
         if (num_targets): 
             # if there are targets then this isn't the first node visited
@@ -806,38 +832,51 @@ class GraphMaker():
             for t1 in target_cat:
                 for t2 in target_cat:
                     for feature in targets[t1][t2]:
-                        if anchor_guide == None:
-                            anchor_guide=feature
-                            anchor_guide_cat=t2
                         cur_node.features[t2].remove(feature)
                         cur_node.assigned_features[t2].add(feature)
-                        new_feature_adj= t1 * t2 * -1 * (self.ksize-1)
+                        new_feature_adj= t1 *(self.ksize-1) * t2 * -1
+                        leaving_feature_adj=(not t1)*(self.ksize-1)*t2*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
+                        leaving_feature=feature+leaving_feature_adj 
+                        self.queueFeature((not t1), t2, leaving_feature, q_construct, node_queue, node_bundles)
+                        
                         new_feature=feature + new_feature_adj
+                        if rhs_guide == None:
+                            rhs_guide=feature
+                            rhs_guide_cat=t2
+                            self.assign_pg_node(new_feature=new_feature, guide=None)
+                        else:
+                            new_guide=(t1*(self.ksize-1)*rhs_guide_cat*-1)+rhs_guide
+                            self.assign_pg_node(new_feature=new_feature, guide=new_guide)
         if cur_node.anchorNode():
-            #if this is an anchor node then everything needs to expanded/assigned to a pg-node
+            #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
+            #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down
             
             #TODO
-            #HERE guide needs to be assigned from targets if there were some used.
-            #ALSO need to write the logic for if guide was passed in as a parameter
-            #ALSO still need to write the logic/function call for assigning the feature to a pg-node (here and above)
             #ALSO I'm not sure you really need cur_node.assigned_features since you need to maintain separation of a stack/state-variable-set based on TFS
             #ALSO need to write queue fill logic based on rfid in both spots.
-
             for t1 in target_cat:
                 for feature in cur_node.features[t1]:
                     while i < self.ksize:
-                        new_feature_adj= t1 * -1 * i # here t1 is increasing decreasing unlike above
-                        cur_node.assigned_features.add(feature+new_feature_adj)
-                        if anchor_guide != None:
+                        new_feature_adj= t1 * -1 * i # here t1 is used as increasing/decreasing category. unlike above
+                        cur_node.assigned_features[t1].add(feature)
+                        if rhs_guide != None:
                             #assign pg-node by guide
+                            new_feature=feature+new_feature_adj
+                            new_guide=(rhs_guide_cat*-1*i)+rhs_guide
+                            if new_guide != new_feature:
+                                self.assign_pg_node(new_feature=new_feature, guide=new_guide)
+                            else:#the first time through new pg-nodes will be created
+                                self.assign_pg_node(new_feature=new_feature, guide=None)
                         else:
                             #assign by new pg-node
+                            self.assign_pg_node(new_feature=feature+new_feature_adj, guide=None)
+                            rhs_guide=feature #will only be assigned to right side. first time through. used after that to
+                            rhs_guide_cat=t1
                         i+=1
-                cur_node.features[t1]=set([])
+                #NEED a method for determing whats new so that can fill queue based on that.
+                cur_node.features[t1]=set([])#after assigning all features clear it out.
 
-            #positive features
-            for f in cur_node.positive_features:
         else:
             self.non_anchor_guides
 
