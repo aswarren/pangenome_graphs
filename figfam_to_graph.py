@@ -504,6 +504,20 @@ class GraphMaker():
 		self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
         self.cur_rf_node=None
         self.prev_node=None
+        #based on the feature that is leaving the kmer: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
+        self.projection_table=[[[
+            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
+            ],[
+            {"nxt_position":1,"rhs_adj":1,"feature_adj":self.ksize},# ++ lp=0
+            {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize} # ++ lp=k-1
+            ]],[[
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":-self.ksize},# -+ lp=0
+            {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
+            ],[
+            {"nxt_position":0,"rhs_adj":-1,"feature_adj":self.ksize},# +- lp=0
+            {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize} # +- lp=k-1
+            ]]]
 
 		self.pg_initial=[] #initial node storage
 		self.pg_ptrs=[] #idx of nodes. for merging identity
@@ -792,12 +806,12 @@ class GraphMaker():
     #i'm sorry universe this is going to be confusing
     #given the side of the kmer the feature is found on and its orientation relative to the kmer
     #return whether it leaves in the forward or reverse direction of the original kmer (before it was potentially flipped by hashing)
-    #kmer_side=0 is right side, kmer_side=1 is left
+    #kmer_side=0 is left side, kmer_side=1 is right
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
     def nextRFNode(self, kmer_side,orientation,feature):
-        #right(0) and increasing(0) is the "back" of the kmer
-        #left(1) and increasing(0) is the "back" of the kmer
-        if (kmer_side==0 and orientation=0) or (kmer_side==1 and increasing==0):
+        #left(0) and increasing(0) is the "back" of the kmer
+        #right(1) and increasing(0) is the "back" of the kmer
+        if (kmer_side==1 and orientation=0) or (kmer_side==0 and increasing==0):
             #progression="reverse"
             return self.feature_index[feature].rf_reverse
 
@@ -807,13 +821,36 @@ class GraphMaker():
             #progression="forward"
             return self.feature_index[feature].rf_forward
 
-    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, q_construct, node_queue, node_bundles):
+    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature):
+        if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=0) or (edge_data["leaving_position"]==0 and kmer_side!=1):
+            sys.stderr.write("logic problem. calculated leaving side does not match")
+            assert LogicError
+        #project from leaving feature and orientation to what next feature should be next
+        nxt_orientation=orientation
+        #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
+        nxt_feature_info=self.projection_table[edge_data["flip"]][orientation][kmer_side]
+        #"nxt_position" "feature_adj"
+        nxt_target=leaving_feature+nxt_feature_info["rhs_adj"]
+        if edge_data["flip"]==1:
+            nxt_orientation = not nxt_orientation
+        return(nxt_position, nxt_orientation, nxt_target)
+
+    #kmer_side=0 is left side, kmer_side=1 is right
+    #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
+    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, node_queue, node_bundles, guide=None):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
-        #here look up edge and edge information using cur_node, nxt_rf_id
-        #project from leaving feature and orientation to what next feature should be with correct 
-        #structure for node_queue and node_bundles
-        if not nxt_rf_id in q_construct:
-            q_construct[next_rf_id]=[leaving_feature]
+        if nxt_rf_id:
+            if(not nxt_rf_id in node_bundles):
+                node_bundles[nxt_rf_id]=[[set([]),set([])],[set([]),set([])]]
+            #here look up edge information to project next
+            edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
+            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
+            #structure for node_queue and node_bundles
+            if len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1]) == 0:
+                #no existing targets so needs to be queued
+                node_queue.append((nxt_rf_id,[None, None])) ### HERE NEED TO THINK ABOUT [GUIDE,GUIDE_CAT] AND GETTING IT FROM non_anchor_guides
+                q_construct[next_rf_id]=[leaving_feature]
+            node_bundles[nxt_rf_id][nxt_position][nxt_direction].add(nxt_target)
 
 
     def expand_features(self, cur_node, targets, guide, node_queue, node_bundles):
@@ -828,24 +865,24 @@ class GraphMaker():
             # if there are targets then this isn't the first node visited
             # this means only one new feature aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
             target_cat=[0,1]
-            #targets organized as targets["right" & "left" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
-            for t1 in target_cat:
-                for t2 in target_cat:
-                    for feature in targets[t1][t2]:
-                        cur_node.features[t2].remove(feature)
-                        cur_node.assigned_features[t2].add(feature)
-                        new_feature_adj= t1 *(self.ksize-1) * t2 * -1
-                        leaving_feature_adj=(not t1)*(self.ksize-1)*t2*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
+            #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
+            for kmer_side in target_cat:
+                for direction in target_cat:
+                    for feature in targets[kmer_side][direction]:
+                        cur_node.features[direction].remove(feature)
+                        cur_node.assigned_features[direction].add(feature)
+                        new_feature_adj= (not kmer_side) *(self.ksize-1) * t2 * -1
+                        leaving_feature_adj=(kmer_side)*(self.ksize-1)*t2*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
                         leaving_feature=feature+leaving_feature_adj 
-                        self.queueFeature((not t1), t2, leaving_feature, q_construct, node_queue, node_bundles)
+                        self.queueFeature((not kmer_side), direction, leaving_feature, node_queue, node_bundles)
                         
                         new_feature=feature + new_feature_adj
                         if rhs_guide == None:
                             rhs_guide=feature
-                            rhs_guide_cat=t2
+                            rhs_guide_cat=direction
                             self.assign_pg_node(new_feature=new_feature, guide=None)
                         else:
-                            new_guide=(t1*(self.ksize-1)*rhs_guide_cat*-1)+rhs_guide
+                            new_guide=((not kmer_side)*(self.ksize-1)*rhs_guide_cat*-1)+rhs_guide
                             self.assign_pg_node(new_feature=new_feature, guide=new_guide)
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
@@ -855,11 +892,11 @@ class GraphMaker():
             #TODO
             #ALSO I'm not sure you really need cur_node.assigned_features since you need to maintain separation of a stack/state-variable-set based on TFS
             #ALSO need to write queue fill logic based on rfid in both spots.
-            for t1 in target_cat:
-                for feature in cur_node.features[t1]:
+            for direction in target_cat:
+                for feature in cur_node.features[direction]:
                     while i < self.ksize:
-                        new_feature_adj= t1 * -1 * i # here t1 is used as increasing/decreasing category. unlike above
-                        cur_node.assigned_features[t1].add(feature)
+                        new_feature_adj= direction * -1 * i # here t1 is used as increasing/decreasing category. unlike above
+                        cur_node.assigned_features[direction].add(feature)
                         if rhs_guide != None:
                             #assign pg-node by guide
                             new_feature=feature+new_feature_adj
@@ -872,10 +909,10 @@ class GraphMaker():
                             #assign by new pg-node
                             self.assign_pg_node(new_feature=feature+new_feature_adj, guide=None)
                             rhs_guide=feature #will only be assigned to right side. first time through. used after that to
-                            rhs_guide_cat=t1
+                            rhs_guide_cat=direction
                         i+=1
                 #NEED a method for determing whats new so that can fill queue based on that.
-                cur_node.features[t1]=set([])#after assigning all features clear it out.
+                cur_node.features[direction]=set([])#after assigning all features clear it out.
 
         else:
             self.non_anchor_guides
@@ -912,7 +949,7 @@ class GraphMaker():
                 #EITHER the next rf-node is still in the queue in which case it is OK to accumulate bundle info from new_targets found in other visits
                 #OR the bundle information is being transmitted right here in which case only the new stuff should be transmitted down next time
                 #so clear out the bundle info here
-                node_bundles[next_node_id]=set([])
+                node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
                 #Recursion!
                 new_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
                 if not cur_node.anchorNode():
