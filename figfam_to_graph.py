@@ -62,6 +62,7 @@ class featureInfo():
 		self.end=None
         self.rf_forward=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
+        self.pg_assignment=None
 
     def addRFPointer(direction, pointer):
         if direction=="increase":
@@ -837,7 +838,9 @@ class GraphMaker():
 
     #kmer_side=0 is left side, kmer_side=1 is right
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
-    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, node_queue, node_bundles, guide=None):
+    #if a guide is passed, it is a feature from the leaving position. find its pg_node,
+    #use that in combination with the nxt_rf_id to see if a guide/cat should be passed
+    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, node_queue, node_bundles, repeat_queue=False):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         if nxt_rf_id:
             if(not nxt_rf_id in node_bundles):
@@ -846,10 +849,15 @@ class GraphMaker():
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
             nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
             #structure for node_queue and node_bundles
-            if len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1]) == 0:
+            if len(node_bundles[nxt_rf_id][0][0])+len(node_bundles[nxt_rf_id][0][1])+len(node_bundles[nxt_rf_id][1][0])+len(node_bundles[nxt_rf_id][1][1]) == 0:
+                pg_node_id=self.feature_index[leaving_feature].pg_assignment
+                nxt_guide=nxt_guide_cat=None
+                if repeat_queue:
+                    nxt_guide, nxt_guide_cat = self.non_anchor_guides[pg_node_id][nxt_rf_id]
+                else:
+                    self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction)
                 #no existing targets so needs to be queued
-                node_queue.append((nxt_rf_id,[None, None])) ### HERE NEED TO THINK ABOUT [GUIDE,GUIDE_CAT] AND GETTING IT FROM non_anchor_guides
-                q_construct[next_rf_id]=[leaving_feature]
+                node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat]))
             node_bundles[nxt_rf_id][nxt_position][nxt_direction].add(nxt_target)
 
 
@@ -861,9 +869,10 @@ class GraphMaker():
         rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
         rhs_guide_cat=guide[1] #used if there are new things in this anchor node
 
+        #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
         if (num_targets): 
             # if there are targets then this isn't the first node visited
-            # this means only one new feature aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
+            # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
             target_cat=[0,1]
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             for kmer_side in target_cat:
@@ -887,7 +896,9 @@ class GraphMaker():
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
-            #at this point anything remaining is regarded as 'new' and can be passed as targets up or down
+            
+            
+            #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             
             #TODO
             #ALSO I'm not sure you really need cur_node.assigned_features since you need to maintain separation of a stack/state-variable-set based on TFS
