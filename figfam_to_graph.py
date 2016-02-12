@@ -840,28 +840,54 @@ class GraphMaker():
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
     #if a guide is passed, it is a feature from the leaving position. find its pg_node,
     #use that in combination with the nxt_rf_id to see if a guide/cat should be passed
-    def queueFeature(self, kmer_side, orientation, leaving_feature, cur_node, node_queue, node_bundles, repeat_queue=False):
+    def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, node_queue, node_bundles):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
+        prev_queued=True #has the rfid EVER been queued on THIS traversal
         if nxt_rf_id:
             if(not nxt_rf_id in node_bundles):
                 node_bundles[nxt_rf_id]=[[set([]),set([])],[set([]),set([])]]
+                prev_queued=False
+            #is the rfid currently queued on this traversal
+            currently_queued=len(node_bundles[nxt_rf_id][0][0])+len(node_bundles[nxt_rf_id][0][1])+len(node_bundles[nxt_rf_id][1][0])+len(node_bundles[nxt_rf_id][1][1]) > 0
             #here look up edge information to project next
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
             nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
             #structure for node_queue and node_bundles
-            if len(node_bundles[nxt_rf_id][0][0])+len(node_bundles[nxt_rf_id][0][1])+len(node_bundles[nxt_rf_id][1][0])+len(node_bundles[nxt_rf_id][1][1]) == 0:
+            if not currently_queued:
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
                 nxt_guide=nxt_guide_cat=None
-                if repeat_queue:
+                if prev_queued: #if its previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
                     nxt_guide, nxt_guide_cat = self.non_anchor_guides[pg_node_id][nxt_rf_id]
-                else:
+                else:#first time queueing. store non_anchor_guides for later
                     self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction)
-                #no existing targets so needs to be queued
+                #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                 node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat]))
+            #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
             node_bundles[nxt_rf_id][nxt_position][nxt_direction].add(nxt_target)
+            return nxt_rf_id
+        return None
+
+    def assign_pg_node(self, prev_feature, new_feature, guide=None):
+        cur_pg_id=None
+        genome_id=self.feature_index[new_feature].genome_id
+        sequence_id=self.feature_index[new_feature].sequence_id
+        if guide:
+            cur_pg_id=self.feature_index[guide].pg_assignment
+        else:
+            cur_pg_id=self.pg_graph.number_of_nodes()
+            self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:new_feature}})
+        self.feature_index[new_feature].pg_assignment=cur_pg_id
+        if prev_feature:
+            prev_id = self.feature_index[prev_feature].pg_assignment
+            edge_data=self.pg_graph.get_edge_data(prev_id, cur_pg_id, default=0)
+            if edge_data:
+                edge_data["genomes"].add(genome_id)
+                edge_data["sequences"].add(sequence_id)
+            else:
+                self.pg_graph.add_edge(prev_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
 
 
-    def expand_features(self, cur_node, targets, guide, node_queue, node_bundles):
+    def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles):
         q_construct={}#keyed by rfid
         num_targets=0
         if (targets!=None):
@@ -877,56 +903,62 @@ class GraphMaker():
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             for kmer_side in target_cat:
                 for direction in target_cat:
-                    for feature in targets[kmer_side][direction]:
-                        cur_node.features[direction].remove(feature)
-                        cur_node.assigned_features[direction].add(feature)
-                        new_feature_adj= (not kmer_side) *(self.ksize-1) * t2 * -1
-                        leaving_feature_adj=(kmer_side)*(self.ksize-1)*t2*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
-                        leaving_feature=feature+leaving_feature_adj 
-                        self.queueFeature((not kmer_side), direction, leaving_feature, node_queue, node_bundles)
-                        
-                        new_feature=feature + new_feature_adj
+                    for rhs_feature in targets[kmer_side][direction]:
+                        if not rhs_feature in cur_node.features[direction]:
+                            assert LogicError
+                        else:
+                            cur_node.features[direction].remove(rhs_feature)
+                        cur_node.assigned_features[direction].add(rhs_feature)
+                        new_feature_adj= (not kmer_side) *(self.ksize-1) * (not direction) * -1
+                        new_feature=rhs_feature + new_feature_adj
+                        prev_feature= rhs_feature + new_feature_adj + direction * 1
+                        leaving_feature_adj=(kmer_side)*(self.ksize-1)*(not direction)*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
+                        leaving_feature=rhs_feature+leaving_feature_adj
+                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles)
+                        if q_rfid == prev_node.nodeID:
+                            assert LogicError
                         if rhs_guide == None:
-                            rhs_guide=feature
+                            rhs_guide=rhs_feature
                             rhs_guide_cat=direction
-                            self.assign_pg_node(new_feature=new_feature, guide=None)
+                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
                             new_guide=((not kmer_side)*(self.ksize-1)*rhs_guide_cat*-1)+rhs_guide
-                            self.assign_pg_node(new_feature=new_feature, guide=new_guide)
+                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
-            
-            
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
-            
-            #TODO
-            #ALSO I'm not sure you really need cur_node.assigned_features since you need to maintain separation of a stack/state-variable-set based on TFS
-            #ALSO need to write queue fill logic based on rfid in both spots.
+            #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
             for direction in target_cat:
-                for feature in cur_node.features[direction]:
-                    while i < self.ksize:
-                        new_feature_adj= direction * -1 * i # here t1 is used as increasing/decreasing category. unlike above
-                        cur_node.assigned_features[direction].add(feature)
+                for rhs_feature in cur_node.features[direction]:
+                    cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
+                    i=0
+                    while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
+                        new_feature_adj= (not direction) * -1 * i  
+                        new_feature=rhs_feature+new_feature_adj
+                        prev_feature= rhs_feature + new_feature_adj + direction * 1
+                        #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
+                        if i == 0:
+                            #this feature is on the rhs of kmer
+                            self.queueFeature(prev_node, cur_node, 1, new_feature, node_queue, node_bundles)
+                            prev_feature=None
+                        if i == self.ksize-1:
+                            #this feature is on the lhs of kmer
+                            self.queueFeature(prev_node, cur_node, 0, new_feature, node_queue, node_bundles)
                         if rhs_guide != None:
                             #assign pg-node by guide
-                            new_feature=feature+new_feature_adj
-                            new_guide=(rhs_guide_cat*-1*i)+rhs_guide
+                            new_guide=(not(rhs_guide_cat)*-1*i)+rhs_guide
                             if new_guide != new_feature:
-                                self.assign_pg_node(new_feature=new_feature, guide=new_guide)
+                                self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
                             else:#the first time through new pg-nodes will be created
-                                self.assign_pg_node(new_feature=new_feature, guide=None)
+                                self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
                             #assign by new pg-node
-                            self.assign_pg_node(new_feature=feature+new_feature_adj, guide=None)
+                            self.assign_pg_node(prev_feature=prev_feature, new_feature=rhs_feature+new_feature_adj, guide=None)
                             rhs_guide=feature #will only be assigned to right side. first time through. used after that to
                             rhs_guide_cat=direction
                         i+=1
-                #NEED a method for determing whats new so that can fill queue based on that.
                 cur_node.features[direction]=set([])#after assigning all features clear it out.
-
-        else:
-            self.non_anchor_guides
 
 
 
