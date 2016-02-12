@@ -11,7 +11,7 @@ import DOMLight, json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
-from guppy import hpy
+# heap analysis from guppy import hpy
 #requires 2.7 or greater
 if sys.version_info < (2, 7):
     raise "must use python 2.7 or greater"
@@ -73,7 +73,7 @@ class featureInfo():
     def getContextValue(self, context):
         if context=="genome":
             return self.genome_id
-        else if self.context=="contig":
+        elif self.context=="contig":
             return self.contig_id
         else:
             return None
@@ -201,7 +201,7 @@ class rfNode():
         edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
         if node_id in self.linkOut:
             self.linkOut[node_id]=self.linkOut[node_id]|edgeStatus #bitwise OR to represent both multi status
-                else:
+        else:
             self.linkOut[node_id]=edgeStatus
 
     #if the node has been visited before update its references
@@ -489,7 +489,7 @@ class featureParser():
 ##Parameters are filepaths and the size of kmer to use
 #GraphMaker(feature_tab=some_file, context="genome")
 class GraphMaker():
-    def __init__(self, **kwargs)#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
+    def __init__(self, **kwargs):#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
         print feature_file
         print summary_file
         print str(ksize)
@@ -498,6 +498,7 @@ class GraphMaker():
         if "feature_tab" in kwargs:
             self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_format="tab")
         self.context=kwargs["context"] #should be ["genome", "contig", None]
+        self.ksize=kwargs["ksize"]
         self.rfnode_list=[] #set kmer_ids to position here.
         self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
@@ -527,7 +528,7 @@ class GraphMaker():
         self.pg_ptrs=[] #idx of nodes. for merging identity
         self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
         self.summaryLookup={}
-                self.familyInfo={}
+        self.familyInfo={}
         self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
         self.geneHash={} #storing information about the individual genes
         self.replicon_edges_dict={}#stores which replicons have which edges
@@ -539,7 +540,7 @@ class GraphMaker():
         #h=hpy()
         #print h.heap()	
         self.parseSummary(summary_file)
-                self.parseFamilyInfo(family_file)
+        self.parseFamilyInfo(family_file)
         
     class taxInfo():
         def __init__(self, genome_name, summary_id):
@@ -622,8 +623,8 @@ class GraphMaker():
                 else:# +1 +1
                     leaving_position=0
                     reverse_lp=self.ksize-1
-            self.feature_index[feature_indices[leaving_position]].addRFPointer(direction="increase", nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
-            self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", nodeID) # to enable thread based navigation.
+            self.feature_index[feature_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
+            self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=nodeID) # to enable thread based navigation.
             flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
             self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
             self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
@@ -672,7 +673,7 @@ class GraphMaker():
             
 
 
-    def flipKmer(self, feature_list)
+    def flipKmer(self, feature_list):
         i=0
         k_size=len(id_list)
         palindrome=0
@@ -680,7 +681,7 @@ class GraphMaker():
         while i<(len(k_size)/2):
             if id_list[i].group_name < id_list[k_size-(i+1)].group_name:
                 return (reverse, palidrome, feature_list)
-            else if feature_list[i].group_name > feature_list[k_size-(i+1)].group_name:
+            elif feature_list[i].group_name > feature_list[k_size-(i+1)].group_name:
                 reverse=1
                 return (reverse, palindrome, feature_list.reverse())
             i+=1
@@ -818,7 +819,7 @@ class GraphMaker():
     def nextRFNode(self, kmer_side,orientation,feature):
         #left(0) and increasing(0) is the "back" of the kmer
         #right(1) and increasing(0) is the "back" of the kmer
-        if (kmer_side==1 and orientation=0) or (kmer_side==0 and increasing==0):
+        if (kmer_side==1 and orientation==0) or (kmer_side==0 and orientation==1):
             #progression="reverse"
             return self.feature_index[feature].rf_reverse
 
@@ -1018,26 +1019,6 @@ class GraphMaker():
         
 
 
-        #Incoming
-        #for existing 'threads' gather edges, assign to pg-nodes, add to queue
-        if consistent and len(prev_assigned.forward) >0:
-            adjust_by=range(1,k+1)
-        for feat in prev_assigned.forward:
-            for i in adjust_by:
-                if feat+i in cur_node.family_members[i-1]:
-                    #make assigned
-            
-        visit_queue=set()
-        if not cur_node.duplicate:
-            storage.ExpandNode(cur_node)
-        for fam in cur_node.family_members:
-            for feat in fam:
-                visit_queue.add(feat)
-        #Processing
-
-        #Outgoing
-        #Receiving
-        #Returning
 
 
 
@@ -1379,7 +1360,8 @@ def stats(graph):
 
 def main(init_args):
     if(len(init_args)< 4):
-        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_folder context k-size")
+        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_folder context k-size\n")
+        sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=init_args[3])
     gmaker.processFeatures()
     readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
