@@ -487,6 +487,7 @@ class featureParser():
 
 ##This class is for storing dictionary structures that facilitate different pan-genome graph calculations
 ##Parameters are filepaths and the size of kmer to use
+#GraphMaker(feature_tab=some_file, context="genome")
 class GraphMaker():
 	def __init__(self, **kwargs)#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
 		print feature_file
@@ -499,6 +500,8 @@ class GraphMaker():
         self.context=kwargs["context"] #should be ["genome", "contig", None]
 		self.rfnode_list=[] #set kmer_ids to position here.
         self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
+        self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
+
         self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
 		self.ignore_fams=ignore_fams
 		self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
@@ -719,6 +722,9 @@ class GraphMaker():
                 self.rf_starting_list.append(node)
         #start with nodes that have the most features
         sorted(self.rf_starting_list, key=methodcaller('numFeatures'))
+        for rf_node in self.rf_starting_list:
+            self.tfs_expand(None, rf_node, None, None)
+
 
 
 		
@@ -1370,7 +1376,16 @@ def stats(graph):
 	avg_degree= float(num_edges)/num_nodes
 	print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
 
+
 def main(init_args):
+    if(len(init_args)< 4):
+        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_folder context k-size")
+    gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=init_args[3])
+    gmaker.processFeatures()
+    readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
+
+
+def old_main(init_args):
 	if(len(init_args)<5):
 		sys.stderr.write("Usage: figfam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
 		sys.exit()
