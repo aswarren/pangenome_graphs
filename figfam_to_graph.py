@@ -4,8 +4,10 @@ import os, sys
 import itertools
 import json
 import copy
-from networkx import Graph
-from networkx import readwrite
+import networkx as nx
+from operator import methodcaller
+#from networkx import Graph
+#from networkx import readwrite
 from Bio import bgzf
 import DOMLight, json
 from collections import deque
@@ -64,7 +66,7 @@ class featureInfo():
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
         self.pg_assignment=None
 
-    def addRFPointer(direction, pointer):
+    def addRFPointer(self, direction, pointer):
         if direction=="increase":
             self.rf_foward=pointer
         else:
@@ -164,7 +166,7 @@ class rfNode():
         self.visited=False
         self.queued=False
         self.self_edge=False
-        self.curRevStatus=rev_status
+        #self.curRevStatus=rev_status
 
     def anchorNode(self):
         return (not self.duplicate) and (not self.palindrome)
@@ -175,9 +177,9 @@ class rfNode():
 
     def addFeatures(self, reverse, feature_list):
         if(reverse):
-            features[-1].append(feature_list[-1])#for space efficency only store right most feature in kmer
+            self.features[-1].add(feature_list[-1])#for space efficency only store right most feature in kmer
         else:
-            features[0].append(feature_list[-1])#for space efficency only store right most feature in kmer
+            self.features[0].add(feature_list[-1])#for space efficency only store right most feature in kmer
     #each cell in list stores info[LetterOfKmer]=geneInfo()
     def addInfo(self, position, cur_fam, info):
         if self.infoList[position] != None:
@@ -457,16 +459,16 @@ class famInfo():
         
 class featureParser():
     def __init__(self, **kwargs):
-        self.feature_file=kwargs.feature_file
-        self.file_type=kwargs.file_type
+        self.feature_file=kwargs['feature_file']
+        self.file_type=kwargs['file_type']
         self.parse=None
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
     def parseFeatureTab(self):
-        ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
+        ip={'org_id':2,'contig_id':3,'locus_id':2,'start':4, 'end':4, 'fam_id':0}
         in_handle=open(self.feature_file)
-        result=featureInfo()
         for line in in_handle:
+            result=featureInfo()
             if line.startswith('#'):
                 continue
             try:
@@ -475,10 +477,11 @@ class featureParser():
                 result.contig_id=parts[ip['contig_id']]
                 result.genome_id=parts[ip['org_id']]
                 result.start==parts[ip['start']]
-                result.end=parts[ip['end']]
+                #result.end=parts[ip['end']]
             except:
                 warning("parsing problem. couldn't parse line: "+line)
-        yield result
+                continue
+            yield result
 
 
             
@@ -490,25 +493,31 @@ class featureParser():
 #GraphMaker(feature_tab=some_file, context="genome")
 class GraphMaker():
     def __init__(self, **kwargs):#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
-        print feature_file
-        print summary_file
-        print str(ksize)
+        #print feature_file
+        #print summary_file
+        #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
         if "feature_tab" in kwargs:
-            self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_format="tab")
+            self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_type="tab")
         self.context=kwargs["context"] #should be ["genome", "contig", None]
         self.ksize=kwargs["ksize"]
         self.rfnode_list=[] #set kmer_ids to position here.
         self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
-
+        self.replicon_map={}
+        self.groups_seen={}
+        self.group_index=[]
+        self.context_bin=set([])
+        self.feature_index=[]
         self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
-        self.ignore_fams=ignore_fams
+        #self.ignore_fams=ignore_fams
         self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
         self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
         self.cur_rf_node=None
         self.prev_node=None
+        self.rf_node_list=[]
+        self.rf_starting_list=[]
         #based on the feature that is leaving the kmer: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
         self.projection_table=[[[
             {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
@@ -524,23 +533,23 @@ class GraphMaker():
             {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize} # +- lp=k-1
             ]]]
 
-        self.pg_initial=[] #initial node storage
-        self.pg_ptrs=[] #idx of nodes. for merging identity
-        self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
-        self.summaryLookup={}
-        self.familyInfo={}
-        self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
-        self.geneHash={} #storing information about the individual genes
-        self.replicon_edges_dict={}#stores which replicons have which edges
-        self.summary_level=None#taxon level at which to summarize
-        self.ksize=ksize #size of the kmer to store
-        self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
-        self.replicon_map={}#stores relationships between org_ids and contig_ids (contig_ids)
-        self.parseFeatures(feature_file)
+        #self.pg_initial=[] #initial node storage
+        #self.pg_ptrs=[] #idx of nodes. for merging identity
+        #self.figfamHash={}#stores sets of coordinates for each figfam used to distinguish between paralogs/orthologs/distant orthologs
+        #self.summaryLookup={}
+        #self.familyInfo={}
+        #self.locationHash={}#stores the disambiguated 'version' of the protein family. hashed by (seq. accession, location)
+        #self.geneHash={} #storing information about the individual genes
+        #self.replicon_edges_dict={}#stores which replicons have which edges
+        #self.summary_level=None#taxon level at which to summarize
+        #self.ksize=ksize #size of the kmer to store
+        #self.recentK=deque(maxlen=ksize-1)#used for elevating k-mers to the next level
+        #self.replicon_map={}#stores relationships between org_ids and contig_ids (contig_ids)
+        #self.parseFeatures(feature_file)
         #h=hpy()
         #print h.heap()	
-        self.parseSummary(summary_file)
-        self.parseFamilyInfo(family_file)
+        #self.parseSummary(summary_file)
+        #self.parseFamilyInfo(family_file)
         
     class taxInfo():
         def __init__(self, genome_name, summary_id):
@@ -589,7 +598,7 @@ class GraphMaker():
     #store kmers according to the combined protein family ids, and a set of IDs for which kmer comes next
         #id of prev kmer, id of this kmer, information about this kmer, whether this kmer has been reversed
     def addRFNode(self, feature_list):
-        reverse,palindrome,kmer_key,feature_indices=self.hashKmer(feature_list)#put IDs together to make kmer
+        reverse,palindrome,feature_indices,kmer_key=self.hashKmer(feature_list)#put IDs together to make kmer
         nodeID=None
         duplicate=False
         if not kmer_key in self.kmerLookup:
@@ -658,35 +667,40 @@ class GraphMaker():
     #create a kmer based on the group ids in the features. Also append the feature to a feature_index
     def hashKmer(self, feature_list):
         kmer_hash=[]
+        feature_indices=[]
         for feature in feature_list:
-            if not feature.group_name in self.groups_seen:
+            if not feature.group_id in self.groups_seen:
                 feature.group_num=len(self.group_index)
                 self.groups_seen[feature.group_id]=feature.group_num
                 self.group_index.append(feature.group_num)
             else:
-                feature.group_num=self.groups_seen[feature.group_name]
+                feature.group_num=self.groups_seen[feature.group_id]
             kmer_hash.append(feature.group_num)
             feature.feature_id= len(self.feature_index)
             self.feature_index.append(feature)
-        reverese, palindrome, kmer_hash = flipKmer(kmer_hash)
-        return reverse, palindrome, kmer_hash, ".".join(kmer_hash)
+            feature_indices.append(feature.feature_id)
+        reverse, palindrome = self.flipKmer(kmer_hash)
+        if reverse:
+            feature_indices.reverse()
+        return reverse, palindrome, feature_indices, ".".join([str(i) for i in kmer_hash])
             
 
 
     def flipKmer(self, feature_list):
         i=0
-        k_size=len(id_list)
+        k_size=len(feature_list)
         palindrome=0
         reverse=0
-        while i<(len(k_size)/2):
-            if id_list[i].group_name < id_list[k_size-(i+1)].group_name:
-                return (reverse, palidrome, feature_list)
-            elif feature_list[i].group_name > feature_list[k_size-(i+1)].group_name:
+        while i<(k_size/2):
+            if feature_list[i]< feature_list[k_size-(i+1)]:
+                return (reverse, palindrome)
+            elif feature_list[i] > feature_list[k_size-(i+1)]:
                 reverse=1
-                return (reverse, palindrome, feature_list.reverse())
+                feature_list.reverse()
+                return (reverse, palindrome)
             i+=1
         palindrome =1
-        return (reverse, palindrome, feature_list)
+        return (reverse, palindrome)
 
 
     def processFeatures(self):
@@ -694,7 +708,7 @@ class GraphMaker():
         kmer_q=deque()
         prev_feature=None
         #loop through figfams to create kmers
-        for feature in self.feature_parser.parse:
+        for feature in self.feature_parser.parse():
             if feature.genome_id not in self.replicon_map:
                 self.replicon_map[feature.genome_id]=set()
             else:
@@ -716,9 +730,8 @@ class GraphMaker():
                 kmer=None
             prev_feature=feature
             self.prev_node=self.cur_rf_node
-        in_handle.close()
         #determine list of starting nodes
-        for node in rf_node_list:
+        for node in self.rf_node_list:
             if node.anchorNode():
                 self.rf_starting_list.append(node)
         #start with nodes that have the most features
@@ -1065,7 +1078,7 @@ class GraphMaker():
                     cur_knode.addPGEdges(self)
 
 # undirected weighted
-class pFamGraph(Graph):
+class pFamGraph(nx.Graph):
     def __init__(self, storage, minOrg=2):
         #Graph.__init__(self, weighted=True)
         Graph.__init__(self)
@@ -1362,9 +1375,9 @@ def main(init_args):
     if(len(init_args)< 4):
         sys.stderr.write("Usage: figfam_to_graph.py feature_table output_folder context k-size\n")
         sys.exit()
-    gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=init_args[3])
+    gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
-    readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
+    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
 
 
 def old_main(init_args):
