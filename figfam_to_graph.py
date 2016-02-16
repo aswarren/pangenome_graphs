@@ -68,7 +68,7 @@ class featureInfo():
 
     def addRFPointer(self, direction, pointer):
         if direction=="increase":
-            self.rf_foward=pointer
+            self.rf_forward=pointer
         else:
             self.rf_reverse=pointer
 
@@ -503,7 +503,7 @@ class GraphMaker():
         self.context=kwargs["context"] #should be ["genome", "contig", None]
         self.ksize=kwargs["ksize"]
         self.rfnode_list=[] #set kmer_ids to position here.
-        self.rf_graph=nx.MultiDiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
+        self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.replicon_map={}
         self.groups_seen={}
@@ -516,21 +516,22 @@ class GraphMaker():
         self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
         self.cur_rf_node=None
         self.prev_node=None
+        self.prev_indices=[]
         self.rf_node_list=[]
         self.rf_starting_list=[]
-        #based on the feature that is leaving the kmer: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
+        #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         self.projection_table=[[[
-            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
-            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
-            ],[
             {"nxt_position":1,"rhs_adj":1,"feature_adj":self.ksize},# ++ lp=0
             {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize} # ++ lp=k-1
-            ]],[[
-            {"nxt_position":0,"rhs_adj":1,"feature_adj":-self.ksize},# -+ lp=0
-            {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
             ],[
+            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
+            ]],[[
             {"nxt_position":0,"rhs_adj":-1,"feature_adj":self.ksize},# +- lp=0
             {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize} # +- lp=k-1
+            ],[
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":-self.ksize},# -+ lp=0
+            {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
             ]]]
 
         #self.pg_initial=[] #initial node storage
@@ -632,11 +633,13 @@ class GraphMaker():
                 else:# +1 +1
                     leaving_position=0
                     reverse_lp=self.ksize-1
-            self.feature_index[feature_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
-            self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=nodeID) # to enable thread based navigation.
+            self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
+            self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
             flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
             self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
             self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
+        self.prev_indices=feature_indices
+
 
     ##Create an ID for kmer
     ##In case directionality is flipped for entire genome I am flipping each kmer
@@ -676,8 +679,6 @@ class GraphMaker():
             else:
                 feature.group_num=self.groups_seen[feature.group_id]
             kmer_hash.append(feature.group_num)
-            feature.feature_id= len(self.feature_index)
-            self.feature_index.append(feature)
             feature_indices.append(feature.feature_id)
         reverse, palindrome = self.flipKmer(kmer_hash)
         if reverse:
@@ -709,6 +710,8 @@ class GraphMaker():
         prev_feature=None
         #loop through figfams to create kmers
         for feature in self.feature_parser.parse():
+            feature.feature_id= len(self.feature_index)
+            self.feature_index.append(feature)
             if feature.genome_id not in self.replicon_map:
                 self.replicon_map[feature.genome_id]=set()
             else:
@@ -716,6 +719,7 @@ class GraphMaker():
             if(prev_feature and prev_feature.contig_id != feature.contig_id):
                 kmer_q=deque()#clear kmer stack because switching replicons
                 self.prev_node=None
+                self.prev_indices=[]
             #depending on the context populate the context bin with appropriate ids to detect duplicates
             if self.context:
                 if(prev_feature and prev_feature.getContextValue(self.context) != feature.getContextValue(self.context)):
@@ -730,6 +734,7 @@ class GraphMaker():
                 kmer=None
             prev_feature=feature
             self.prev_node=self.cur_rf_node
+
         #determine list of starting nodes
         for node in self.rf_node_list:
             if node.anchorNode():
@@ -843,7 +848,7 @@ class GraphMaker():
             return self.feature_index[feature].rf_forward
 
     def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature):
-        if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=0) or (edge_data["leaving_position"]==0 and kmer_side!=1):
+        if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             sys.stderr.write("logic problem. calculated leaving side does not match")
             assert LogicError
         #project from leaving feature and orientation to what next feature should be next
@@ -890,7 +895,7 @@ class GraphMaker():
     def assign_pg_node(self, prev_feature, new_feature, guide=None):
         cur_pg_id=None
         genome_id=self.feature_index[new_feature].genome_id
-        sequence_id=self.feature_index[new_feature].sequence_id
+        sequence_id=self.feature_index[new_feature].contig_id
         if guide:
             cur_pg_id=self.feature_index[guide].pg_assignment
         else:
@@ -912,14 +917,16 @@ class GraphMaker():
         num_targets=0
         if (targets!=None):
             num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
-        rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
-        rhs_guide_cat=guide[1] #used if there are new things in this anchor node
+        rhs_guide=rhs_guide_cat=None
+        if guide:
+            rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
+            rhs_guide_cat=guide[1] #used if there are new things in this anchor node
 
+        target_cat=[0,1]
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
         if (num_targets): 
             # if there are targets then this isn't the first node visited
             # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
-            target_cat=[0,1]
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             for kmer_side in target_cat:
                 for direction in target_cat:
@@ -960,11 +967,11 @@ class GraphMaker():
                         #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
                         if i == 0:
                             #this feature is on the rhs of kmer
-                            self.queueFeature(prev_node, cur_node, 1, new_feature, node_queue, node_bundles)
+                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles)
                             prev_feature=None
                         if i == self.ksize-1:
                             #this feature is on the lhs of kmer
-                            self.queueFeature(prev_node, cur_node, 0, new_feature, node_queue, node_bundles)
+                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles)
                         if rhs_guide != None:
                             #assign pg-node by guide
                             new_guide=(not(rhs_guide_cat)*-1*i)+rhs_guide
@@ -975,7 +982,7 @@ class GraphMaker():
                         else:
                             #assign by new pg-node
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=rhs_feature+new_feature_adj, guide=None)
-                            rhs_guide=feature #will only be assigned to right side. first time through. used after that to
+                            rhs_guide=rhs_feature #will only be assigned to right side. first time through. used after that to
                             rhs_guide_cat=direction
                         i+=1
                 cur_node.features[direction]=set([])#after assigning all features clear it out.
@@ -996,7 +1003,7 @@ class GraphMaker():
             #expand_features assigns features to pg-nodes, queues rf-nodes for visiting, and organizes feature threads to pass to each
             #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue)
             #figure out targets not seen before
-        self.expand_features(cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
+        self.expand_features(prev_node, cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
         #seen_targets.update(targets)
         #NOW need to think carefully about where targets will be set. I guess always right side? They need be divided into decreasing and increasing.
         #Also this means projection based on edge will need to be well thought out. 
@@ -1024,9 +1031,12 @@ class GraphMaker():
                         #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
                         #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
                         #so if there is a guide: 
-                        self.expand_features(cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
+                        self.expand_features(prev_node, cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
                         #seen_targets.update(new_return_targets)
-        return (node_bundles[prev_node.nodeID])
+        if prev_node==None:
+            return None
+        else:
+            return (node_bundles[prev_node.nodeID])
 
 
         
