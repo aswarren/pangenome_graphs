@@ -465,7 +465,7 @@ class featureParser():
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
     def parseFeatureTab(self):
-        ip={'org_id':2,'contig_id':3,'locus_id':2,'start':4, 'end':4, 'fam_id':0}
+        ip={'org_id':2, 'genome_id':1, 'contig_id':3,'locus_id':2,'start':4, 'end':4, 'fam_id':0}
         in_handle=open(self.feature_file)
         for line in in_handle:
             result=featureInfo()
@@ -475,7 +475,7 @@ class featureParser():
                 parts=line.strip().split("\t")
                 result.group_id=parts[ip['fam_id']]
                 result.contig_id=parts[ip['contig_id']]
-                result.genome_id=parts[ip['org_id']]
+                result.genome_id=parts[ip['genome_id']]
                 result.start==parts[ip['start']]
                 #result.end=parts[ip['end']]
             except:
@@ -521,17 +521,17 @@ class GraphMaker():
         self.rf_starting_list=[]
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         self.projection_table=[[[
-            {"nxt_position":1,"rhs_adj":1,"feature_adj":self.ksize},# ++ lp=0
+            {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize},# ++ lp=0
             {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize} # ++ lp=k-1
             ],[
-            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
-            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
+            {"nxt_position":1,"rhs_adj":1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
+            {"nxt_position":0,"rhs_adj":-self.ksize,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
             ]],[[
-            {"nxt_position":0,"rhs_adj":-1,"feature_adj":self.ksize},# +- lp=0
-            {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize} # +- lp=k-1
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize},# +- lp=0
+            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize} # +- lp=k-1
             ],[
-            {"nxt_position":0,"rhs_adj":1,"feature_adj":-self.ksize},# -+ lp=0
-            {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
+            {"nxt_position":0,"rhs_adj":self.ksize,"feature_adj":-self.ksize},# -+ lp=0
+            {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
             ]]]
 
         #self.pg_initial=[] #initial node storage
@@ -613,7 +613,7 @@ class GraphMaker():
             self.cur_rf_node.reverse=reverse # even if kmer seen before reverse needs to be updated to correctly calculate flip
             self.cur_rf_node.addFeatures(reverse, feature_indices)
             if duplicate:
-                cur_rf_node.duplicate=True
+                self.cur_rf_node.duplicate=True
         self.context_bin.add(kmer_key)
         self.rf_graph.add_node(self.cur_rf_node.nodeID)
 
@@ -633,13 +633,14 @@ class GraphMaker():
                 else:# +1 +1
                     leaving_position=0
                     reverse_lp=self.ksize-1
+
             self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
             self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
             flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
             self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
             self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
-
+        self.prev_node=self.cur_rf_node
 
     ##Create an ID for kmer
     ##In case directionality is flipped for entire genome I am flipping each kmer
@@ -720,6 +721,9 @@ class GraphMaker():
                 kmer_q=deque()#clear kmer stack because switching replicons
                 self.prev_node=None
                 self.prev_indices=[]
+            elif prev_feature and prev_feature.contig_id == feature.contig_id:
+                if prev_feature.start > feature.start:
+                    assert InputError
             #depending on the context populate the context bin with appropriate ids to detect duplicates
             if self.context:
                 if(prev_feature and prev_feature.getContextValue(self.context) != feature.getContextValue(self.context)):
@@ -733,7 +737,6 @@ class GraphMaker():
             else:#kmer size is less than ksize
                 kmer=None
             prev_feature=feature
-            self.prev_node=self.cur_rf_node
 
         #determine list of starting nodes
         for node in self.rf_node_list:
@@ -859,16 +862,18 @@ class GraphMaker():
         nxt_target=leaving_feature+nxt_feature_info["rhs_adj"]
         if edge_data["flip"]==1:
             nxt_orientation = not nxt_orientation
-        return(nxt_position, nxt_orientation, nxt_target)
+        return(nxt_feature_info['nxt_position'], nxt_orientation, nxt_target)
 
     #kmer_side=0 is left side, kmer_side=1 is right
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
     #if a guide is passed, it is a feature from the leaving position. find its pg_node,
     #use that in combination with the nxt_rf_id to see if a guide/cat should be passed
-    def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, node_queue, node_bundles):
+    def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, node_queue, node_bundles, up_node=None):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         prev_queued=True #has the rfid EVER been queued on THIS traversal
         if nxt_rf_id:
+            if up_node and nxt_rf_id == up_node.nodeID:
+                nxt_rf_id= -1
             if(not nxt_rf_id in node_bundles):
                 node_bundles[nxt_rf_id]=[[set([]),set([])],[set([]),set([])]]
                 prev_queued=False
@@ -878,13 +883,16 @@ class GraphMaker():
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
             nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
             #structure for node_queue and node_bundles
-            if not currently_queued:
+            if not currently_queued and nxt_rf_id != -1: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
                 nxt_guide=nxt_guide_cat=None
-                if prev_queued: #if its previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
+                if prev_queued: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
                     nxt_guide, nxt_guide_cat = self.non_anchor_guides[pg_node_id][nxt_rf_id]
-                else:#first time queueing. store non_anchor_guides for later
-                    self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction)
+                else:#first time queueing rfnode. store non_anchor_guides for later
+                    if not pg_node_id in self.non_anchor_guides:
+                        self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction)}
+                    else:
+                        self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction)
                 #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                 node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat]))
             #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
@@ -912,7 +920,7 @@ class GraphMaker():
                 self.pg_graph.add_edge(prev_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
 
 
-    def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles):
+    def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
         q_construct={}#keyed by rfid
         num_targets=0
         if (targets!=None):
@@ -941,9 +949,14 @@ class GraphMaker():
                         prev_feature= rhs_feature + new_feature_adj + direction * 1
                         leaving_feature_adj=(kmer_side)*(self.ksize-1)*(not direction)*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
                         leaving_feature=rhs_feature+leaving_feature_adj
-                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles)
+                        if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
+                            #when queueing based on return 'new' features make sure don't do a DFS "up"
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
+                        else:
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
                         if q_rfid == prev_node.nodeID:
-                            assert LogicError
+                            print "log low complexity? queue previous node"
+                        #    assert LogicError
                         if rhs_guide == None:
                             rhs_guide=rhs_feature
                             rhs_guide_cat=direction
@@ -967,11 +980,11 @@ class GraphMaker():
                         #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
                         if i == 0:
                             #this feature is on the rhs of kmer
-                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles)
+                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                             prev_feature=None
                         if i == self.ksize-1:
                             #this feature is on the lhs of kmer
-                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles)
+                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                         if rhs_guide != None:
                             #assign pg-node by guide
                             new_guide=(not(rhs_guide_cat)*-1*i)+rhs_guide
@@ -1011,32 +1024,32 @@ class GraphMaker():
             #next_guide needs to be populated IF AND WHEN new targets come back from the DFS AND 
             #they proceed to a Node that has already been visited WHICH surely has to be a 
             #duplicate/palindrome node else IT WOULD RETURN NEW TARGETS that would be passed down to the node from which NEW TARGETS comes
-            next_node_id, next_guide= node_queue.popleft() 
-            if next_node_id != prev_node.nodeID: #prevent recursing "up"
-                next_node=self.rf_node_index[next_node_id]
-                next_targets=node_bundles[next_node_id]
-                #careful here sets are passed by reference
-                #EITHER the next rf-node is still in the queue in which case it is OK to accumulate bundle info from new_targets found in other visits
-                #OR the bundle information is being transmitted right here in which case only the new stuff should be transmitted down next time
-                #so clear out the bundle info here
-                node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
-                #Recursion!
-                new_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
-                if not cur_node.anchorNode():
-                    #not needed because expand_features will put features in node bundles new_return_targets=return_targets.difference(seen_targets)
-                    #must process 
-                    #just got new targets returned from a DFS. expand them, and update queue based on them
-                    if(len(new_targets)):
-                        new_guide= iter(targets).next() #can be any feature just assigned.
-                        #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
-                        #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
-                        #so if there is a guide: 
-                        self.expand_features(prev_node, cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles)
-                        #seen_targets.update(new_return_targets)
+            next_node_id, next_guide= node_queue.popleft()
+            #if prev_node and next_node_id != prev_node.nodeID: #prevent recursing "up"
+            next_node=self.rf_node_index[next_node_id]
+            next_targets=node_bundles[next_node_id]
+            #careful here sets are passed by reference
+            #EITHER the next rf-node is still in the queue in which case it is OK to accumulate bundle info from new_targets found in other visits
+            #OR the bundle information is being transmitted right here in which case only the new stuff should be transmitted down next time
+            #so clear out the bundle info here
+            node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
+            #Recursion!
+            new_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+            if not cur_node.anchorNode():
+                #not needed because expand_features will put features in node bundles new_return_targets=return_targets.difference(seen_targets)
+                #must process 
+                #just got new targets returned from a DFS. expand them, and update queue based on them
+                if(len(new_targets)):
+                    new_guide= iter(targets).next() #can be any feature just assigned.
+                    #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
+                    #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
+                    #so if there is a guide: 
+                    self.expand_features (prev_node, cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles, up_targets=True)
+                    #seen_targets.update(new_return_targets)
         if prev_node==None:
             return None
-        else:
-            return (node_bundles[prev_node.nodeID])
+        elif None in node_bundles: #None is used to track 'new' threads exposed by anchor node that are to be passed 'up'
+            return (node_bundles[-1])
 
 
         
