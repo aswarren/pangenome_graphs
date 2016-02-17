@@ -635,7 +635,7 @@ class GraphMaker():
 
             self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
             self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
-            if self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
+            if not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
                 flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
                 self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
                 self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
@@ -872,16 +872,19 @@ class GraphMaker():
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         prev_queued=True #has the rfid EVER been queued on THIS traversal
         if nxt_rf_id:
-            if up_node and nxt_rf_id == up_node.nodeID:
-                nxt_rf_id= -1
             if(not nxt_rf_id in node_bundles):
                 node_bundles[nxt_rf_id]=[[set([]),set([])],[set([]),set([])]]
                 prev_queued=False
             #is the rfid currently queued on this traversal
             currently_queued=len(node_bundles[nxt_rf_id][0][0])+len(node_bundles[nxt_rf_id][0][1])+len(node_bundles[nxt_rf_id][1][0])+len(node_bundles[nxt_rf_id][1][1]) > 0
-            #here look up edge information to project next
-            edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
+            try:
+                #here look up edge information to project next
+                edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
+            except KeyError:
+                assert KeyError
             nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
+            if up_node and nxt_rf_id == up_node.nodeID:
+                nxt_rf_id= -1
             #structure for node_queue and node_bundles
             if not currently_queued and nxt_rf_id != -1: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
