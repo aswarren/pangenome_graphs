@@ -502,9 +502,9 @@ class GraphMaker():
             self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_type="tab")
         self.context=kwargs["context"] #should be ["genome", "contig", None]
         self.ksize=kwargs["ksize"]
-        self.rfnode_list=[] #set kmer_ids to position here.
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
+        self.rf_node_index=[]
         self.replicon_map={}
         self.groups_seen={}
         self.group_index=[]
@@ -517,7 +517,6 @@ class GraphMaker():
         self.cur_rf_node=None
         self.prev_node=None
         self.prev_indices=[]
-        self.rf_node_list=[]
         self.rf_starting_list=[]
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         self.projection_table=[[[
@@ -603,10 +602,10 @@ class GraphMaker():
         nodeID=None
         duplicate=False
         if not kmer_key in self.kmerLookup:
-            nodeID = len(self.rf_node_list)
-            self.rf_node_list.append(rfNode(nodeID, feature_indices, self.ksize, reverse, palindrome))
-            self.cur_rf_node=self.rf_node_list[-1]
-            self.kmerLookup[kmer_key]=self.rf_node_list[-1]
+            nodeID = len(self.rf_node_index)
+            self.rf_node_index.append(rfNode(nodeID, feature_indices, self.ksize, reverse, palindrome))
+            self.cur_rf_node=self.rf_node_index[-1]
+            self.kmerLookup[kmer_key]=self.rf_node_index[-1]
         else:
             duplicate=kmer_key in self.context_bin
             self.cur_rf_node=self.kmerLookup[kmer_key]
@@ -739,7 +738,7 @@ class GraphMaker():
             prev_feature=feature
 
         #determine list of starting nodes
-        for node in self.rf_node_list:
+        for node in self.rf_node_index:
             if node.anchorNode():
                 self.rf_starting_list.append(node)
         #start with nodes that have the most features
@@ -944,10 +943,15 @@ class GraphMaker():
                         else:
                             cur_node.features[direction].remove(rhs_feature)
                         cur_node.assigned_features[direction].add(rhs_feature)
-                        new_feature_adj= (not kmer_side) *(self.ksize-1) * (not direction) * -1
+                        new_feature_adj= (not kmer_side)*(self.ksize-1)
+                        prev_feature_adj=(not kmer_side)*(self.ksize-2)
+                        leaving_feature_adj=kmer_side*(self.ksize-1)# the leaving feature in this kmer will be on the opposite side of the incoming feature
+                        if not direction:
+                            new_feature_adj=new_feature_adj * -1
+                            prev_feature_adj=prev_feature_adj * -1
+                            leaving_feature_adj=leaving_feature_adj * -1
                         new_feature=rhs_feature + new_feature_adj
-                        prev_feature= rhs_feature + new_feature_adj + direction * 1
-                        leaving_feature_adj=(kmer_side)*(self.ksize-1)*(not direction)*-1 # the leaving feature in this kmer will be on the opposite side of the incoming feature
+                        prev_feature= rhs_feature + prev_feature_adj
                         leaving_feature=rhs_feature+leaving_feature_adj
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
@@ -962,7 +966,10 @@ class GraphMaker():
                             rhs_guide_cat=direction
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
-                            new_guide=((not kmer_side)*(self.ksize-1)*rhs_guide_cat*-1)+rhs_guide
+                            new_guide_adj=((not kmer_side)*(self.ksize-1)
+                            if not rhs_guide_cat:
+                                new_guide_adj=new_guide_adj*-1
+                            new_guide=rhs_guide+new_guide_adj
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
@@ -974,9 +981,13 @@ class GraphMaker():
                     cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
                     i=0
                     while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
-                        new_feature_adj= (not direction) * -1 * i  
+                        new_feature_adj= i
+                        prev_feature_adj=i-1
+                        if not direction:
+                            new_feature_adj=new_feature_adj*-1
+                            prev_feature_adj=prev_feature_adj*-1
                         new_feature=rhs_feature+new_feature_adj
-                        prev_feature= rhs_feature + new_feature_adj + direction * 1
+                        prev_feature=rhs_feature+prev_feature_adj
                         #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
                         if i == 0:
                             #this feature is on the rhs of kmer
@@ -987,7 +998,10 @@ class GraphMaker():
                             self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                         if rhs_guide != None:
                             #assign pg-node by guide
-                            new_guide=(not(rhs_guide_cat)*-1*i)+rhs_guide
+                            new_guid_adj=i
+                            if not rhs_guide_cat:
+                                new_guide_adj=new_guide_adj*-1
+                            new_guide=rhs_guide+new_guide_adj
                             if new_guide != new_feature:
                                 self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
                             else:#the first time through new pg-nodes will be created
@@ -1048,7 +1062,7 @@ class GraphMaker():
                     #seen_targets.update(new_return_targets)
         if prev_node==None:
             return None
-        elif None in node_bundles: #None is used to track 'new' threads exposed by anchor node that are to be passed 'up'
+        elif -1 in node_bundles: # -1 is used to track 'new' threads exposed by anchor node that are to be passed 'up'
             return (node_bundles[-1])
 
 
