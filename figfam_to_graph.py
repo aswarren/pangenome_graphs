@@ -617,7 +617,7 @@ class GraphMaker():
         self.rf_graph.add_node(self.cur_rf_node.nodeID)
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
-        if self.prev_node and not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
+        if self.prev_node:
             if self.prev_node.reverse:
                 if self.cur_rf_node.reverse: # -1 -1
                     leaving_position=self.ksize-1
@@ -635,9 +635,10 @@ class GraphMaker():
 
             self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
             self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
-            flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
-            self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
-            self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
+            if self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
+                flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
+                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
+                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
         self.prev_node=self.cur_rf_node
 
@@ -998,7 +999,7 @@ class GraphMaker():
                             self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                         if rhs_guide != None:
                             #assign pg-node by guide
-                            new_guid_adj=i
+                            new_guide_adj=i
                             if not rhs_guide_cat:
                                 new_guide_adj=new_guide_adj*-1
                             new_guide=rhs_guide+new_guide_adj
