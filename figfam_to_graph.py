@@ -966,7 +966,7 @@ class GraphMaker():
                             rhs_guide_cat=direction
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
-                            new_guide_adj=((not kmer_side)*(self.ksize-1)
+                            new_guide_adj=(not kmer_side)*(self.ksize-1)
                             if not rhs_guide_cat:
                                 new_guide_adj=new_guide_adj*-1
                             new_guide=rhs_guide+new_guide_adj
