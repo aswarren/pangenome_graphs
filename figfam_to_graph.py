@@ -523,13 +523,13 @@ class GraphMaker():
             {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize},# ++ lp=0
             {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize} # ++ lp=k-1
             ],[
-            {"nxt_position":1,"rhs_adj":1,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
-            {"nxt_position":0,"rhs_adj":-self.ksize,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
+            {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize},#projection_table[0][0][0] -- lp=0
+            {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize} #projection_table[0][0][1] -- lp=k-1
             ]],[[
             {"nxt_position":0,"rhs_adj":1,"feature_adj":self.ksize},# +- lp=0
-            {"nxt_position":1,"rhs_adj":-1,"feature_adj":-self.ksize} # +- lp=k-1
+            {"nxt_position":1,"rhs_adj":-self.ksize,"feature_adj":-self.ksize} # +- lp=k-1
             ],[
-            {"nxt_position":0,"rhs_adj":self.ksize,"feature_adj":-self.ksize},# -+ lp=0
+            {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize},# -+ lp=0
             {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize} # -+ lp=k-1
             ]]]
 
@@ -859,10 +859,11 @@ class GraphMaker():
             #progression="forward"
             return self.feature_index[feature].rf_forward
 
-    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature):
+    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome=False):
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
-            sys.stderr.write("logic problem. calculated leaving side does not match")
-            assert LogicError
+            if not palindrome:
+                sys.stderr.write("logic problem. calculated leaving side does not match")
+                assert LogicError
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
         #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
@@ -895,7 +896,7 @@ class GraphMaker():
                 edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
             except KeyError:
                 assert KeyError
-            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature)
+            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature,palindrome=cur_node.palindrome)
             #structure for node_queue and node_bundles
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
