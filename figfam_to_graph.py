@@ -489,6 +489,16 @@ class featureParser():
             yield result
 
 
+class VisitPack():
+    def __init__(self, prev_node, cur_node, targets, guide):
+        self.prev_node=prev_node
+        self.cur_node=cur_node
+        self.targets=targets
+        self.guide=guide
+        self.node_bundles={}
+        self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
+        self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
+        self.new_targets=deque()
             
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
@@ -1027,16 +1037,6 @@ class GraphMaker():
                 cur_node.features[direction]=set([])#after assigning all features clear it out.
 
 
-    class VisitPack():
-    def __init__(self, prev_node, cur_node, targets, guide):
-        self.prev_node=prev_node
-        self.cur_node=cur_node
-        self.targets=targets
-        self.guide=guide
-        self.node_bundles={}
-        self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
-        self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
-        self.new_targets=deque()
 
 
 
