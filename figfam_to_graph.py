@@ -160,6 +160,11 @@ class rfNode():
         self.nodeID=nodeID
         self.reverse=reverse
         self.palindrome=palindrome
+        #dfs non-recursive variables
+        self.done=False
+        self.visited=False
+        self.descending=True
+        #old variables
         self.weightLabel=None
         self.weight=None
         self.linkOut={}#four classes of edges
@@ -757,7 +762,6 @@ class GraphMaker():
             self.tfs_expand(None, rf_node, None, None)
 
 
-
         
     #for a given kmer return a set of the organisms involved
     def getOrgSummary(self, kmer):
@@ -1023,15 +1027,56 @@ class GraphMaker():
                 cur_node.features[direction]=set([])#after assigning all features clear it out.
 
 
+    class VisitPack():
+    def __init__(self, prev_node, cur_node, targets, guide):
+        self.prev_node=prev_node
+        self.cur_node=cur_node
+        self.targets=targets
+        self.guide=guide
+        self.node_bundles={}
+        self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
+        self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
+        self.new_targets=deque()
 
+
+
+    #non-recursive version of tfs_expand
+    def tfs_expand_nr(self, prev_node, cur_node,targets, guide):
+        tfs_stack=[]
+        tfs_stack.append(VisitPack(prev_node,cur_node,targets,guide))
+        pv=None #pv previous visit
+        while len(tfs_stack):
+            cv=tfs_stack.pop() #cv current visit
+            self.expand_features(cv.prev_node, cv.cur_node, cv.targets, cv.guide, cv.node_queue, cv.node_bundles)
+            next_visit=None # this is temp
+            if len(cv.node_queue):
+                next_node_id, next_guide= cv.node_queue.popleft()
+                next_node=self.rf_node_index[next_node_id]
+                next_targets=cv.node_bundles[next_node_id]
+                cv.node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
+                next_visit=VisitPack(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+            if len(cv.node_queue) == 0 and next_visit==None:
+                if pv!= None and -1 in cv.node_bundles: # -1 is used to track 'new' threads exposed by anchor node that are to be passed 'up'
+                    pv.new_targets.push(cv.node_bundles[-1])
+            else:
+                tfs_stack.append(cv)
+            if next_visit != None:
+                tfs_stack.push(next_visit)
+            if not cv.cur_node.anchorNode():
+                while len(cv.new_targets):
+                    cntargets=cv.new_targets.popleft()
+                    new_guide= iter(cv.targets).next() #can be any feature just assigned.
+                    #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
+                    #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
+                    #so if there is a guide: 
+                    self.expand_features(cv.prev_node, cv.cur_node, targets=cntargets, guide=new_guide, node_queue=cv.node_queue, node_bundles=cv.node_bundles, up_targets=True)
+            pv=cv
 
     #recursive function with a visit queue.
     def tfs_expand(self, prev_node, cur_node, targets, guide):
         node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
         prev_bundles={}
         node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
-        visited_nodes=set([])
-        return_targets=set([])
         #seen_targets=set([])
         #put this conditional in expand_features
         #if cur_node.anchorNode():
