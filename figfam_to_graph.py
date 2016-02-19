@@ -759,7 +759,7 @@ class GraphMaker():
         #start with nodes that have the most features
         sorted(self.rf_starting_list, key=methodcaller('numFeatures'))
         for rf_node in self.rf_starting_list:
-            self.tfs_expand(None, rf_node, None, None)
+            self.tfs_expand_nr(None, rf_node, None, None)
 
 
         
