@@ -154,11 +154,9 @@ class rfNode():
         self.positive_features=[0]
         self.negative_features=[1]
         self.assigned_features=[set([]),set([])]# first position represents a k-lengthed series of features in the positive direction; the second, in reverse
-        self.num_features=0
         self.addFeatures(reverse, feature_list)
         self.duplicate=False #whether this node is duplicated in any context bin
         self.nodeID=nodeID
-        self.reverse=reverse
         self.palindrome=palindrome
         #dfs non-recursive variables
         self.done=False
@@ -176,9 +174,7 @@ class rfNode():
     def anchorNode(self):
         return (not self.duplicate) and (not self.palindrome)
     def numFeatures(self):
-        if self.num_features == 0:
-            self.num_features=len(self.features[0])+len(self.features[1])
-        return self.num_features
+        return len(self.features[0])+len(self.features[1])
 
     def addFeatures(self, reverse, feature_list):
         if(reverse):
@@ -489,16 +485,6 @@ class featureParser():
             yield result
 
 
-class VisitPack():
-    def __init__(self, prev_node, cur_node, targets, guide):
-        self.prev_node=prev_node
-        self.cur_node=cur_node
-        self.targets=targets
-        self.guide=guide
-        self.node_bundles={}
-        self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
-        self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
-        self.new_targets=deque()
             
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
@@ -534,6 +520,7 @@ class GraphMaker():
         self.prev_indices=[]
         self.rf_starting_list=[]
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
+        #gives position of the newest feature in the next kmer, the adjustment to the leaving feature to get the rhs of next kmer
         self.projection_table=[[[
             {"nxt_position":1,"rhs_adj":self.ksize,"feature_adj":self.ksize},# ++ lp=0
             {"nxt_position":0,"rhs_adj":-1,"feature_adj":-self.ksize} # ++ lp=k-1
@@ -574,7 +561,28 @@ class GraphMaker():
         #print h.heap()	
         #self.parseSummary(summary_file)
         #self.parseFamilyInfo(family_file)
-        
+
+
+
+    def checkResults(self):
+        for r in self.rf_node_index:
+            if r.numFeatures() >0:
+                assert LogicError("RFNode unexpanded")
+    def calcStatistics(self):
+        print "rf-graph:"
+        print "nodes "+str(self.rf_graph.number_of_nodes())
+        print "edges "+str(self.rf_graph.number_of_edges())
+        print "pg-graph:"
+        print "nodes "+str(self.pg_graph.number_of_nodes())
+        print "edges "+str(self.pg_graph.number_of_edges())
+
+    def finalizeGraphAttr(self):
+        for e in self.pg_graph.edges_iter():
+            attr=self.pg_graph.get_edge_data(*e)
+            for a in attr:
+                if type(attr[a])==set:
+                    attr[a] = ','.join(attr[a])
+
     class taxInfo():
         def __init__(self, genome_name, summary_id):
             self.genome_name=genome_name
@@ -633,7 +641,6 @@ class GraphMaker():
         else:
             duplicate=kmer_key in self.context_bin
             self.cur_rf_node=self.kmerLookup[kmer_key]
-            self.cur_rf_node.reverse=reverse # even if kmer seen before reverse needs to be updated to correctly calculate flip
             self.cur_rf_node.addFeatures(reverse, feature_indices)
             if duplicate:
                 self.cur_rf_node.duplicate=True
@@ -642,15 +649,15 @@ class GraphMaker():
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node!=None:
-            if self.prev_node.reverse:
-                if self.cur_rf_node.reverse: # -1 -1
+            if self.prev_reverse:
+                if reverse: # -1 -1
                     leaving_position=self.ksize-1
                     reverse_lp=0
                 else: # -1 +1
                     leaving_position=self.ksize-1
                     reverse_lp=self.ksize-1
             else:
-                if self.cur_rf_node.reverse:# +1 -1
+                if reverse:# +1 -1
                     leaving_position=0
                     reverse_lp=0
                 else:# +1 +1
@@ -660,11 +667,16 @@ class GraphMaker():
             self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=self.cur_rf_node.nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
             self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
             if not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
-                flip = self.prev_node.reverse ^ self.cur_rf_node.reverse #xor. if kmers are flipped to relative to each other 
-                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":flip,"leaving_position":leaving_position})
-                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":flip,"leaving_position":reverse_lp})
+                rflip = fflip = self.prev_reverse ^ reverse #xor. if kmers are flipped to relative to each other 
+                if palindrome:
+                    fflip = None
+                if self.prev_node.palindrome:
+                    rflip=None
+                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":fflip,"leaving_position":leaving_position})
+                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":rflip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
         self.prev_node=self.cur_rf_node
+        self.prev_reverse=reverse
 
     ##Create an ID for kmer
     ##In case directionality is flipped for entire genome I am flipping each kmer
@@ -880,12 +892,15 @@ class GraphMaker():
                 assert LogicError
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
+        flip=edge_data["flip"]
+        if flip==None:#palindrome can't reliably use rf-edge info
+            flip= orientation ^ 0 #xor. palindrome is always forward direction
+        if flip==1:
+            nxt_orientation = not orientation
         #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
-        nxt_feature_info=self.projection_table[edge_data["flip"]][orientation][kmer_side]
+        nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
         #"nxt_position" "feature_adj"
         nxt_target=leaving_feature+nxt_feature_info["rhs_adj"]
-        if edge_data["flip"]==1:
-            nxt_orientation = not nxt_orientation
         return(nxt_feature_info['nxt_position'], nxt_orientation, nxt_target)
 
     #kmer_side=0 is left side, kmer_side=1 is right
@@ -895,7 +910,7 @@ class GraphMaker():
     def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, node_queue, node_bundles, up_node=None):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         prev_queued=True #has the rfid EVER been queued on THIS traversal
-        up_queue= up_node and nxt_rf_id == up_node.nodeID
+        up_queue= up_node!=None and nxt_rf_id == up_node.nodeID
         if nxt_rf_id!=None:
             bundle_id=nxt_rf_id
             if up_queue:
@@ -905,11 +920,8 @@ class GraphMaker():
                 prev_queued=False
             #is the rfid currently queued on this traversal
             currently_queued=len(node_bundles[bundle_id][0][0])+len(node_bundles[bundle_id][0][1])+len(node_bundles[bundle_id][1][0])+len(node_bundles[bundle_id][1][1]) > 0
-            try:
-                #here look up edge information to project next
-                edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
-            except KeyError:
-                assert KeyError
+            #here look up edge information to project next
+            edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
             nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature,palindrome=cur_node.palindrome)
             #structure for node_queue and node_bundles
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
@@ -935,9 +947,22 @@ class GraphMaker():
         sequence_id=self.feature_index[new_feature].contig_id
         if guide!=None:
             cur_pg_id=self.feature_index[guide].pg_assignment
+            if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
+                self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
+            elif not sequence_id in self.pg_graph.node[cur_pg_id]['features']:
+                self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+            else:
+                self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+
         else:
             cur_pg_id=self.pg_graph.number_of_nodes()
-            self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:new_feature}})
+            self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:[new_feature]}})
+        anomolous=set([2893])#, 1639, 1636, 3503, 2943, 3524, 3521, 1179, 1176])
+        if cur_pg_id in anomolous:
+            print "hmmm"
+        if self.feature_index[new_feature].pg_assignment != None:
+            print "ERROR!"
+            #assert LogicError
         self.feature_index[new_feature].pg_assignment=cur_pg_id
         if prev_feature != None:
             prev_id = self.feature_index[prev_feature].pg_assignment
@@ -952,6 +977,9 @@ class GraphMaker():
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
         q_construct={}#keyed by rfid
         num_targets=0
+        num_features=len(cur_node.features[0])+len(cur_node.features[1])
+        if num_features == 0:
+            return
         if (targets!=None):
             num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
         rhs_guide=rhs_guide_cat=None
@@ -961,7 +989,7 @@ class GraphMaker():
 
         target_cat=[0,1]
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
-        if (num_targets): 
+        if (num_targets>0): 
             # if there are targets then this isn't the first node visited
             # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
@@ -969,7 +997,11 @@ class GraphMaker():
                 for direction in target_cat:
                     for rhs_feature in targets[kmer_side][direction]:
                         if not rhs_feature in cur_node.features[direction]:
-                            assert LogicError
+                            if not rhs_feature in cur_node.assigned_features[direction]:
+                                assert LogicError
+                            else:
+                                print "returning to node? possible loop"
+                                continue
                         else:
                             cur_node.features[direction].remove(rhs_feature)
                         cur_node.assigned_features[direction].add(rhs_feature)
@@ -1038,30 +1070,43 @@ class GraphMaker():
 
 
 
+    class VisitPack():
+        def __init__(self, prev_node, cur_node, targets, guide):
+            self.prev_node=prev_node
+            self.cur_node=cur_node
+            self.targets=targets
+            self.guide=guide
+            self.node_bundles={}
+            self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
+            self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
+            self.new_targets=deque()
+            self.visited=False
 
 
     #non-recursive version of tfs_expand
     def tfs_expand_nr(self, prev_node, cur_node,targets, guide):
         tfs_stack=[]
-        tfs_stack.append(VisitPack(prev_node,cur_node,targets,guide))
+        tfs_stack.append(self.VisitPack(prev_node,cur_node,targets,guide))
         pv=None #pv previous visit
         while len(tfs_stack):
             cv=tfs_stack.pop() #cv current visit
-            self.expand_features(cv.prev_node, cv.cur_node, cv.targets, cv.guide, cv.node_queue, cv.node_bundles)
+            if not cv.visited:
+                self.expand_features(cv.prev_node, cv.cur_node, cv.targets, cv.guide, cv.node_queue, cv.node_bundles)
+                cv.visited=True
             next_visit=None # this is temp
             if len(cv.node_queue):
                 next_node_id, next_guide= cv.node_queue.popleft()
                 next_node=self.rf_node_index[next_node_id]
                 next_targets=cv.node_bundles[next_node_id]
                 cv.node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
-                next_visit=VisitPack(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+                next_visit=self.VisitPack(prev_node=cv.cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
             if len(cv.node_queue) == 0 and next_visit==None:
                 if pv!= None and -1 in cv.node_bundles: # -1 is used to track 'new' threads exposed by anchor node that are to be passed 'up'
-                    pv.new_targets.push(cv.node_bundles[-1])
+                    pv.new_targets.append(cv.node_bundles[-1])
             else:
                 tfs_stack.append(cv)
             if next_visit != None:
-                tfs_stack.push(next_visit)
+                tfs_stack.append(next_visit)
             if not cv.cur_node.anchorNode():
                 while len(cv.new_targets):
                     cntargets=cv.new_targets.popleft()
@@ -1467,6 +1512,9 @@ def main(init_args):
         sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
+    gmaker.checkResults()
+    gmaker.calcStatistics()
+    gmaker.finalizeGraphAttr()
     nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
 
 
