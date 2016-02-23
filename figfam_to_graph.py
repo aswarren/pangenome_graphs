@@ -503,6 +503,7 @@ class GraphMaker():
             self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_type="tab")
         self.context=kwargs["context"] #should be ["genome", "contig", None]
         self.ksize=kwargs["ksize"]
+        self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
@@ -941,29 +942,84 @@ class GraphMaker():
             return nxt_rf_id
         return None
 
+
+    def merge_pg_node(self, node_id1, node_id2):
+        print "merging "+str(node_id1)+" "+str(node_id2)
+        if node_id1 < node_id2:
+            keep=node_id1
+            remove=node_id2
+        else:
+            keep=node_id2
+            remove=node_id1
+        for g in self.pg_graph.node[remove]['features']:
+            if not g in self.pg_graph.node[keep]['features']:
+                self.pg_graph.node[keep]['features'][g]=self.pg_graph.node[remove]['features'][g]
+            else:
+                for c in self.pg_graph.node[remove]['features'][g]:
+                    if not c in self.pg_graph.node[keep]['features'][g]:
+                        self.pg_graph.node[keep]['features'][g][c] = self.pg_graph.node[remove]['features'][g][c]
+                    else:
+                        merge_set=set(self.pg_graph.node[keep]['features'][g][c])
+                        for f in self.pg_graph.node[remove]['features'][g][c]:
+                            if not f in merge_set:
+                                merge_set.add(f)
+                        self.pg_graph.node[keep]['features'][g][c]=list(merge_set)
+        for g in self.pg_graph.node[remove]['features']:
+            for c in self.pg_graph.node[remove]['features'][g]:
+                for f in self.pg_graph.node[remove]['features'][g][c]:
+                    self.feature_index[f].pg_assignment=keep
+        for e in self.pg_graph.edges(remove, data=True):
+            if self.pg_graph.has_edge(keep, e[1]):
+                cur_edge_data=self.pg_graph.get_edge_data(keep,e[1])
+                for k in e[-1]:#edge dictionary
+                    cur_edge_data[k].update(e[-1][k])
+            else:
+                self.pg_graph.add_edge(keep, e[1], attr_dict=e[-1])
+        self.pg_graph.remove_node(remove)
+        return keep
+
+
+
+
     def assign_pg_node(self, prev_feature, new_feature, guide=None):
         cur_pg_id=None
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
-        if guide!=None:
-            cur_pg_id=self.feature_index[guide].pg_assignment
-            if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
-                self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
-            elif not sequence_id in self.pg_graph.node[cur_pg_id]['features']:
-                self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+        #if there is already a node for this feature
+        if self.feature_index[new_feature].pg_assignment != None:
+            if (guide != None):
+                if self.feature_index[guide].pg_assignment != self.feature_index[new_feature].pg_assignment:
+                    cur_pg_id=self.merge_pg_node(self.feature_index[guide].pg_assignment, self.feature_index[new_feature].pg_assignment)
+                #else they are EQUAL
+                else:
+                    cur_pg_id = self.feature_index[new_feature].pg_assignment
+            #else there is no guide but this feature is already assigned
             else:
-                self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+                cur_pg_id = self.feature_index[new_feature].pg_assignment
 
+        #if this feature has yet to be assigned to a pg-node
         else:
-            cur_pg_id=self.pg_graph.number_of_nodes()
-            self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:[new_feature]}})
+            if guide!=None:
+                cur_pg_id=self.feature_index[guide].pg_assignment
+                if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
+                    self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
+                elif not sequence_id in self.pg_graph.node[cur_pg_id]['features']:
+                    self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+                else:
+                    self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+
+            else:
+                cur_pg_id=self.num_pg_nodes
+                self.num_pg_nodes+=1
+                self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:[new_feature]}})
+            self.feature_index[new_feature].pg_assignment=cur_pg_id
+        
+        #REMOVE THIS
         anomolous=set([2893])#, 1639, 1636, 3503, 2943, 3524, 3521, 1179, 1176])
         if cur_pg_id in anomolous:
             print "hmmm"
-        if self.feature_index[new_feature].pg_assignment != None:
-            print "ERROR!"
-            #assert LogicError
-        self.feature_index[new_feature].pg_assignment=cur_pg_id
+        #END REMOVE
+
         if prev_feature != None:
             prev_id = self.feature_index[prev_feature].pg_assignment
             edge_data=self.pg_graph.get_edge_data(prev_id, cur_pg_id, default=None)
@@ -1515,7 +1571,7 @@ def main(init_args):
     gmaker.checkResults()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out.gexf"))
+    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out_merge.gexf"))
 
 
 def old_main(init_args):
