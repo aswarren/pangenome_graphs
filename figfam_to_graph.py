@@ -886,7 +886,7 @@ class GraphMaker():
             #progression="forward"
             return self.feature_index[feature].rf_forward
 
-    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome=False):
+    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome, nxt_palindrome):
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             if not palindrome:
                 sys.stderr.write("logic problem. calculated leaving side does not match")
@@ -894,7 +894,7 @@ class GraphMaker():
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
         flip=edge_data["flip"]
-        if flip==None:#palindrome can't reliably use rf-edge info
+        if nxt_palindrome:#palindrome can't reliably use rf-edge info
             flip= orientation ^ 0 #xor. palindrome is always forward direction
         if flip==1:
             nxt_orientation = not orientation
@@ -923,7 +923,7 @@ class GraphMaker():
             currently_queued=len(node_bundles[bundle_id][0][0])+len(node_bundles[bundle_id][0][1])+len(node_bundles[bundle_id][1][0])+len(node_bundles[bundle_id][1][1]) > 0
             #here look up edge information to project next
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
-            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature,palindrome=cur_node.palindrome)
+            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature, cur_node.palindrome, self.rf_node_index[nxt_rf_id].palindrome)
             #structure for node_queue and node_bundles
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
@@ -1015,9 +1015,9 @@ class GraphMaker():
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         #REMOVE THIS
-        anomolous=set([2893])#, 1639, 1636, 3503, 2943, 3524, 3521, 1179, 1176])
-        if cur_pg_id in anomolous:
-            print "hmmm"
+        #anomolous=set([2893])#, 1639, 1636, 3503, 2943, 3524, 3521, 1179, 1176])
+        #if cur_pg_id in anomolous:
+        #    print "hmmm"
         #END REMOVE
 
         if prev_feature != None:
@@ -1571,7 +1571,7 @@ def main(init_args):
     gmaker.checkResults()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_out_merge.gexf"))
+    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_new_brucella.gexf"))
 
 
 def old_main(init_args):
