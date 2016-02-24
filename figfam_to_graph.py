@@ -1002,6 +1002,8 @@ class GraphMaker():
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
                 for f in self.pg_graph.node[remove]['features'][g][c]:
+                    if keep == 74 and remove == 3161:
+                        print "assigning "+str(f)+" to 74"
                     self.feature_index[f].pg_assignment=keep
         for e in self.pg_graph.edges(remove, data=True):
             if self.pg_graph.has_edge(keep, e[1]):
@@ -1038,6 +1040,8 @@ class GraphMaker():
         else:
             if guide!=None:
                 cur_pg_id=self.feature_index[guide].pg_assignment
+                if cur_pg_id == 3161:
+                    print "trying to use 3161 from guide "+str(guide)
                 if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
                 elif not sequence_id in self.pg_graph.node[cur_pg_id]['features']:
@@ -1189,9 +1193,11 @@ class GraphMaker():
     #get a guide from a target bundle
     def getTargetGuide(self,targets):
         kmer_side=0
-        direction=0
         guide=None
         while kmer_side < len(targets):
+            if guide != None:
+                break
+            direction=0
             while direction < len(targets[kmer_side]):
                 if len(targets[kmer_side][direction]) > 0:
                     guide= (iter(targets[kmer_side][direction]).next(),direction) #can be any feature just assigned.
