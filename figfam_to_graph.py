@@ -886,7 +886,7 @@ class GraphMaker():
             #progression="forward"
             return self.feature_index[feature].rf_forward
 
-    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome, nxt_palindrome):
+    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome, nxt_node):
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             if not palindrome:
                 sys.stderr.write("logic problem. calculated leaving side does not match")
@@ -894,9 +894,35 @@ class GraphMaker():
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
         flip=edge_data["flip"]
-        if nxt_palindrome:#palindrome can't reliably use rf-edge info
+        if nxt_node.palindrome:#palindrome can't reliably use rf-edge info
             flip= orientation ^ 0 #xor. palindrome is always forward direction
-        if flip==1:
+        if palindrome and nxt_node.duplicate:
+            #flip is uncertain
+            nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
+            nxt_feature=leaving_feature+nxt_feature_info["feature_adj"]
+            k=self.ksize
+            if nxt_feature > leaving_feature:
+                if nxt_feature in nxt_node.features[0]:
+                    nxt_orientation=0
+                    nxt_position=1
+                    nxt_target=nxt_feature
+                elif (nxt_feature-(k-1)) in nxt_node.features[1]:
+                    nxt_orientation=1
+                    nxt_position=0
+                    nxt_target=nxt_feature-(k-1)
+            else:
+                if (nxt_feature+(k-1)) in nxt_node.features[0]:
+                    nxt_orientation = 0
+                    nxt_position = 0
+                    nxt_target=nxt_feature+(k-1)
+                elif nxt_feature in nxt_node.features[1]:
+                    nxt_orientation =1
+                    nxt_position = 1
+                    nxt_target=nxt_feature
+                else:
+                    assert LogicError
+            return(nxt_position, nxt_orientation, nxt_target)
+        elif flip==1:
             nxt_orientation = not orientation
         #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
         nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
@@ -923,7 +949,7 @@ class GraphMaker():
             currently_queued=len(node_bundles[bundle_id][0][0])+len(node_bundles[bundle_id][0][1])+len(node_bundles[bundle_id][1][0])+len(node_bundles[bundle_id][1][1]) > 0
             #here look up edge information to project next
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
-            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature, cur_node.palindrome, self.rf_node_index[nxt_rf_id].palindrome)
+            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature, cur_node.palindrome, self.rf_node_index[nxt_rf_id])
             #structure for node_queue and node_bundles
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
@@ -945,6 +971,7 @@ class GraphMaker():
 
     def merge_pg_node(self, node_id1, node_id2):
         print "merging "+str(node_id1)+" "+str(node_id2)
+        conflict=False
         if node_id1 < node_id2:
             keep=node_id1
             remove=node_id2
@@ -976,7 +1003,7 @@ class GraphMaker():
             else:
                 self.pg_graph.add_edge(keep, e[1], attr_dict=e[-1])
         self.pg_graph.remove_node(remove)
-        return keep
+        return (keep, conflict)
 
 
 
@@ -984,12 +1011,14 @@ class GraphMaker():
     def assign_pg_node(self, prev_feature, new_feature, guide=None):
         cur_pg_id=None
         genome_id=self.feature_index[new_feature].genome_id
+        #determine if there is a conflict based on mixed bundling
+        conflict=False
         sequence_id=self.feature_index[new_feature].contig_id
         #if there is already a node for this feature
         if self.feature_index[new_feature].pg_assignment != None:
             if (guide != None):
                 if self.feature_index[guide].pg_assignment != self.feature_index[new_feature].pg_assignment:
-                    cur_pg_id=self.merge_pg_node(self.feature_index[guide].pg_assignment, self.feature_index[new_feature].pg_assignment)
+                    cur_pg_id, conflict =self.merge_pg_node(self.feature_index[guide].pg_assignment, self.feature_index[new_feature].pg_assignment)
                 #else they are EQUAL
                 else:
                     cur_pg_id = self.feature_index[new_feature].pg_assignment
@@ -1028,6 +1057,7 @@ class GraphMaker():
                 edge_data["sequences"].add(sequence_id)
             else:
                 self.pg_graph.add_edge(prev_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
+        return conflict
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
@@ -1054,6 +1084,7 @@ class GraphMaker():
                     for rhs_feature in targets[kmer_side][direction]:
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
+                                print "missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
                                 assert LogicError
                             else:
                                 print "returning to node? possible loop"
@@ -1065,6 +1096,20 @@ class GraphMaker():
                         new_feature=rhs_feature + rhs_adj_info['new_feature_adj']
                         prev_feature= rhs_feature + rhs_adj_info['prev_feature_adj']
                         leaving_feature=rhs_feature + rhs_adj_info['leaving_feature_adj']
+
+                        #assign to pg-node
+                        conflict=False
+                        if rhs_guide == None:
+                            rhs_guide=rhs_feature
+                            rhs_guide_cat=direction
+                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
+                        else:
+                            #conflict occurs when mixed bundling tries to violate synteny context
+                            new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
+                            new_guide=rhs_guide+new_guide_adj
+                            conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+
+                        #queue base on leaving feature
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
                             q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
@@ -1073,14 +1118,6 @@ class GraphMaker():
                         if q_rfid == prev_node.nodeID:
                             print "log low complexity? queue previous node"
                         #    assert LogicError
-                        if rhs_guide == None:
-                            rhs_guide=rhs_feature
-                            rhs_guide_cat=direction
-                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
-                        else:
-                            new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
-                            new_guide=rhs_guide+new_guide_adj
-                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
