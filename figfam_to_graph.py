@@ -172,7 +172,7 @@ class rfNode():
         self.queued=False
         self.self_edge=False
         #self.curRevStatus=rev_status
-
+    
     def bidirectional(self):
         return self.has_forward and self.has_reverse
 
@@ -945,7 +945,8 @@ class GraphMaker():
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         prev_queued=True #has the rfid EVER been queued on THIS traversal
         up_queue= up_node!=None and nxt_rf_id == up_node.nodeID
-        if nxt_rf_id!=None:
+        #If there are no unassigned features in the nxt node is there any point in visiting? conflict detection etc.?
+        if nxt_rf_id!=None and self.rf_node_index[nxt_rf_id].numFeatures() > 0:
             bundle_id=nxt_rf_id
             if up_queue:
                 bundle_id=-1
@@ -1112,6 +1113,9 @@ class GraphMaker():
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
                             #conflict occurs when mixed bundling tries to violate synteny context
+                            test=[type(rhs_guide_cat) is set, type(kmer_side) is set]
+                            if test[0] or test[1]:
+                                print rhs_guide_cat
                             new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
                             new_guide=rhs_guide+new_guide_adj
                             conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
@@ -1181,6 +1185,23 @@ class GraphMaker():
             self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
             self.new_targets=deque()
             self.visited=False
+    
+    #get a guide from a target bundle
+    def getTargetGuide(self,targets):
+        kmer_side=0
+        direction=0
+        guide=None
+        while kmer_side < len(targets):
+            while direction < len(targets[kmer_side]):
+                if len(targets[kmer_side][direction]) > 0:
+                    guide= (iter(targets[kmer_side][direction]).next(),direction) #can be any feature just assigned.
+                    break
+                direction+=1
+            kmer_side+=1
+        if guide == None:
+            assert LogicError
+        return guide
+
 
 
     #non-recursive version of tfs_expand
@@ -1210,7 +1231,7 @@ class GraphMaker():
             if not cv.cur_node.anchorNode():
                 while len(cv.new_targets):
                     cntargets=cv.new_targets.popleft()
-                    new_guide= iter(cv.targets).next() #can be any feature just assigned.
+                    new_guide= self.getTargetGuide(cv.targets)#can be any feature just assigned.
                     #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
                     #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
                     #so if there is a guide: 
