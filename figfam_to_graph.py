@@ -1044,7 +1044,7 @@ class GraphMaker():
                     print "trying to use 3161 from guide "+str(guide)
                 if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
-                elif not sequence_id in self.pg_graph.node[cur_pg_id]['features']:
+                elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
                 else:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
