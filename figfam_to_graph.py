@@ -158,6 +158,8 @@ class rfNode():
         self.duplicate=False #whether this node is duplicated in any context bin
         self.nodeID=nodeID
         self.palindrome=palindrome
+        self.has_forward=False
+        self.has_reverse=False
         #dfs non-recursive variables
         self.done=False
         self.visited=False
@@ -171,6 +173,9 @@ class rfNode():
         self.self_edge=False
         #self.curRevStatus=rev_status
 
+    def bidirectional(self):
+        return self.has_forward and self.has_reverse
+
     def anchorNode(self):
         return (not self.duplicate) and (not self.palindrome)
     def numFeatures(self):
@@ -179,8 +184,10 @@ class rfNode():
     def addFeatures(self, reverse, feature_list):
         if(reverse):
             self.features[-1].add(feature_list[-1])#for space efficency only store right most feature in kmer
+            self.has_reverse=True
         else:
             self.features[0].add(feature_list[-1])#for space efficency only store right most feature in kmer
+            self.has_forward=True
     #each cell in list stores info[LetterOfKmer]=geneInfo()
     def addInfo(self, position, cur_fam, info):
         if self.infoList[position] != None:
@@ -896,7 +903,7 @@ class GraphMaker():
         flip=edge_data["flip"]
         if nxt_node.palindrome:#palindrome can't reliably use rf-edge info
             flip= orientation ^ 0 #xor. palindrome is always forward direction
-        if palindrome and nxt_node.duplicate:
+        if palindrome and nxt_node.bidirectional():
             #flip is uncertain
             nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
             nxt_feature=leaving_feature+nxt_feature_info["feature_adj"]
