@@ -909,20 +909,20 @@ class GraphMaker():
             nxt_feature=leaving_feature+nxt_feature_info["feature_adj"]
             k=self.ksize
             if nxt_feature > leaving_feature:
-                if nxt_feature in nxt_node.features[0]:
+                if nxt_feature in nxt_node.features[0] or nxt_feature in nxt_node.assigned_features[0]:
                     nxt_orientation=0
                     nxt_position=1
                     nxt_target=nxt_feature
-                elif (nxt_feature-(k-1)) in nxt_node.features[1]:
+                elif (nxt_feature-(k-1)) in nxt_node.features[1] or nxt_feature-(k-1) in nxt_node.assigned_features[1]:
                     nxt_orientation=1
                     nxt_position=0
                     nxt_target=nxt_feature-(k-1)
             else:
-                if (nxt_feature+(k-1)) in nxt_node.features[0]:
+                if (nxt_feature+(k-1)) in nxt_node.features[0] or nxt_feature+(k-1) in nxt_node.assigned_features[0]:
                     nxt_orientation = 0
                     nxt_position = 0
                     nxt_target=nxt_feature+(k-1)
-                elif nxt_feature in nxt_node.features[1]:
+                elif nxt_feature in nxt_node.features[1] or nxt_feature in nxt_node.assigned_features[1]:
                     nxt_orientation =1
                     nxt_position = 1
                     nxt_target=nxt_feature
