@@ -174,7 +174,7 @@ class rfNode():
         #self.curRevStatus=rev_status
     
     def bidirectional(self):
-        return self.has_forward and self.has_reverse
+        return (len(self.features[0]) > 0 or len(self.assigned_features[0]) > 0) and (len(self.features[1]) > 0 or len(self.assigned_features[1]) > 0)
 
     def anchorNode(self):
         return (not self.duplicate) and (not self.palindrome)
@@ -1639,7 +1639,7 @@ def main(init_args):
         sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
-    gmaker.checkResults()
+    #gmaker.checkResults()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
     nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_new_brucella.gexf"))
