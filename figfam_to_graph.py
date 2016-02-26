@@ -508,7 +508,7 @@ class GraphMaker():
         #convert option passed to file_type
         if "feature_tab" in kwargs:
             self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_type="tab")
-        self.context=kwargs["context"] #should be ["genome", "contig", None]
+        self.context=kwargs["context"] #should be ["genome", "contig", "all"]
         self.ksize=kwargs["ksize"]
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
@@ -980,6 +980,7 @@ class GraphMaker():
     def merge_pg_node(self, node_id1, node_id2):
         print "merging "+str(node_id1)+" "+str(node_id2)
         conflict=False
+        insert_level=None
         if node_id1 < node_id2:
             keep=node_id1
             remove=node_id2
@@ -989,16 +990,21 @@ class GraphMaker():
         for g in self.pg_graph.node[remove]['features']:
             if not g in self.pg_graph.node[keep]['features']:
                 self.pg_graph.node[keep]['features'][g]=self.pg_graph.node[remove]['features'][g]
+                insert_level="genome"
             else:
                 for c in self.pg_graph.node[remove]['features'][g]:
                     if not c in self.pg_graph.node[keep]['features'][g]:
                         self.pg_graph.node[keep]['features'][g][c] = self.pg_graph.node[remove]['features'][g][c]
+                        insert_level="contig"
                     else:
+                        insert_level="feature"
                         merge_set=set(self.pg_graph.node[keep]['features'][g][c])
                         for f in self.pg_graph.node[remove]['features'][g][c]:
                             if not f in merge_set:
                                 merge_set.add(f)
                         self.pg_graph.node[keep]['features'][g][c]=list(merge_set)
+            if self.context != "all" and insert_level != self.context:
+                conflict=True
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
                 for f in self.pg_graph.node[remove]['features'][g][c]:
@@ -1039,15 +1045,21 @@ class GraphMaker():
         #if this feature has yet to be assigned to a pg-node
         else:
             if guide!=None:
+                insert_level=None
                 cur_pg_id=self.feature_index[guide].pg_assignment
                 if cur_pg_id == 3161:
                     print "trying to use 3161 from guide "+str(guide)
                 if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
+                    insert_level="genome"
                 elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+                    insert_level="contig"
                 else:
                     self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+                    insert_level="feature"
+                if self.context != "all" and self.context != insert_level:
+                    conflict=True
 
             else:
                 cur_pg_id=self.num_pg_nodes
@@ -1069,7 +1081,7 @@ class GraphMaker():
                 edge_data["sequences"].add(sequence_id)
             else:
                 self.pg_graph.add_edge(prev_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
-        return conflict
+        return cur_pg_id, conflict
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
@@ -1122,7 +1134,9 @@ class GraphMaker():
                                 print rhs_guide_cat
                             new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
                             new_guide=rhs_guide+new_guide_adj
-                            conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+                            assignment,conflict =self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+                            if conflict:
+                                print "conflict in pg-node "+str(assignment)
 
                         #queue base on leaving feature
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
@@ -1138,11 +1152,13 @@ class GraphMaker():
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
-            for direction in target_cat:
-                for rhs_feature in cur_node.features[direction]:
-                    cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
-                    i=0
-                    while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
+            i=0
+            while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
+                for direction in target_cat:
+                    for rhs_feature in cur_node.features[direction]:
+                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
+                        conflict=False
+                        assignment=None
                         new_feature_adj= i
                         prev_feature_adj=i-1
                         if not direction:
@@ -1165,7 +1181,7 @@ class GraphMaker():
                                 new_guide_adj=new_guide_adj*-1
                             new_guide=rhs_guide+new_guide_adj
                             if new_guide != new_feature:
-                                self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+                                assignment, conflict = self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
                             else:#the first time through new pg-nodes will be created
                                 self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                         else:
@@ -1173,8 +1189,11 @@ class GraphMaker():
                             self.assign_pg_node(prev_feature=prev_feature, new_feature=rhs_feature+new_feature_adj, guide=None)
                             rhs_guide=rhs_feature #will only be assigned to right side. first time through. used after that to
                             rhs_guide_cat=direction
-                        i+=1
-                cur_node.features[direction]=set([])#after assigning all features clear it out.
+                        if conflict:
+                            print "conflict in pg-node "+str(assignment)
+                i+=1
+            cur_node.features[0]=set([])#after assigning all features clear it out.
+            cur_node.features[1]=set([])#after assigning all features clear it out.
 
 
 
@@ -1635,14 +1654,14 @@ def stats(graph):
 
 def main(init_args):
     if(len(init_args)< 4):
-        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_folder context k-size\n")
+        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_file context k-size\n")
         sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
     #gmaker.checkResults()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, os.path.join(init_args[1],"test_new_brucella.gexf"))
+    nx.readwrite.write_gexf(gmaker.pg_graph, init_args[1])
 
 
 def old_main(init_args):
