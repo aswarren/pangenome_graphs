@@ -1043,7 +1043,7 @@ class GraphMaker():
             self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
 
     def insert_feature(self, cur_pg_id, new_feature):
-        emit_extra=False
+        #emit_extra=False
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
@@ -1053,32 +1053,31 @@ class GraphMaker():
             self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
             insert_level="contig"
         else:
-            if self.context!="feature":
-                for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
-                    #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
-                    if abs(cf-new_feature)< self.ksize:
-                        emit_extra=True
-                        insert_level=self.context #so there won't be a problem
-                        break
-            if not emit_extra:
+            #if self.context!="feature":
+                #for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+                #    #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
+                #    if abs(cf-new_feature)< self.ksize:
+                #        emit_extra=True
+                #        insert_level=self.context #so there won't be a problem
+                #        break
+            #if not emit_extra:
                 self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
                 insert_level="feature"
-        return (insert_level, emit_extra)
+        return (insert_level)
 
     def detect_split(self, cur_pg_id, new_feature):
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
-        if self.context!="feature" and
-        genome_id in self.pg_graph.node[cur_pg_id]['features'] and
+        if self.context!="feature" and \
+        genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
         sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
             for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
                 #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
                 if abs(cf-new_feature)< self.ksize:
                     return True
 
-    def assign_pg_node(self, prev_feature, new_feature, guide=None, alt_guide=None):
+    def assign_pg_node(self, prev_feature, new_feature, guide=None):
         cur_pg_id=None
-        extra_guide=alt_guide
         #determine if there is a conflict based on mixed bundling
         conflict=False
         genome_id=self.feature_index[new_feature].genome_id
@@ -1101,22 +1100,7 @@ class GraphMaker():
             if guide!=None:
                 insert_level=None
                 cur_pg_id=self.feature_index[guide].pg_assignment
-                if cur_pg_id == 3161:
-                    print "trying to use 3161 from guide "+str(guide)
-                insert_level, emit_extra=self.insert_feature(cur_pg_id, new_feature)
-                if emit_extra:
-                    assert LogicError
-                    if extra_guide==None:
-                        extra_guide=new_feature
-                        cur_pg_id=self.num_pg_nodes
-                        self.num_pg_nodes+=1
-                        self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:[new_feature]}})
-                    else:
-                        cur_pg_id=self.feature_index[extra_guide].pg_assignment 
-                        insert_level, emit_extra = self.insert_feature(cur_pg_id, new_feature)
-                        if emit_extra:
-                            assert LogicError("never thought of this")
-                    print "emitting "+str(new_feature)+" to pg-node "+str(cur_pg_id)
+                insert_level = self.insert_feature(cur_pg_id, new_feature)
                 if self.context_levels[insert_level] > self.context_levels[self.context]: 
                     conflict=True
 
@@ -1135,7 +1119,7 @@ class GraphMaker():
         if prev_feature != None:
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
             self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id)
-        return cur_pg_id, conflict, extra_guide
+        return cur_pg_id, conflict
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
@@ -1172,11 +1156,10 @@ class GraphMaker():
                                 assert LogicError
                             else:
                                 #construct pg-edge to previously created node
-                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].sequence_id)
-                                continue
+                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                         else:
                             cur_node.features[direction].remove(rhs_feature)
-                        to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature))
+                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature))
                         #this initial loop through the targets is really just to see if any have already been assigned
                         if rhs_guide == None and self.feature_index[new_feature].pg_assignment != None:
                             rhs_guide = rhs_feature
@@ -1196,7 +1179,7 @@ class GraphMaker():
                     #conflict occurs when mixed bundling tries to violate synteny context
                     new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
                     new_guide=rhs_guide+new_guide_adj
-                    assignment,conflict,alt_guide =self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide, alt_guide=None)
+                    assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
                     if conflict:
                         print "conflict in pg-node "+str(assignment)
 
@@ -1220,27 +1203,46 @@ class GraphMaker():
                 alt_guide=None
                 split = False
                 cur_guide=None
+                emit_id = None
+                emit_features= set([])
                 if rhs_guide != None:
                     #assign pg-node by guide
                     new_guide_adj=i
                     if not rhs_guide_cat:
                         new_guide_adj=new_guide_adj*-1
                     cur_guide=rhs_guide+new_guide_adj
-                    guide_dict[self.feature_index[cur_guide].pg_assignment]=cur_guide
-                for direction in target_cat:
-                    for rhs_feature in cur_node.features[direction]:
-                        new_feature_adj= i
-                        if not direction:
-                            new_feature_adj=new_feature_adj*-1
-                        new_feature=rhs_feature+new_feature_adj
-                        if self.feature_index[new_feature].pg_assignment != None:
-                            guide_dict[self.feature_index[new_feature].pg_assignment]=new_feature
-                        if cur_guide != None and detect_split(self.feature_index[cur_guide].pg_assignment, new_feature):
-                            guide_dict[None] = new_feature
+                    guide_dict[self.feature_index[cur_guide].pg_assignment]=[cur_guide]
+                    for direction in target_cat:
+                        for rhs_feature in cur_node.features[direction]:
+                            new_feature_adj= i
+                            if not direction:
+                                new_feature_adj=new_feature_adj*-1
+                            new_feature=rhs_feature+new_feature_adj
+                            if self.feature_index[new_feature].pg_assignment != None:
+                                nwf_node=self.feature_index[new_feature].pg_assignment
+                                if nwf_node in guide_dict:
+                                    guide_dict[nwf_node].append(new_feature)
+                                else:
+                                    guide_dict[nwf_node]=[new_feature]
+                                if cur_guide != None and self.detect_split(nwf_node, cur_guide):
+                                    #targets contained extra character causing the split
+                                    cur_guide=None
+                                    
+                            elif cur_guide != None and self.detect_split(self.feature_index[cur_guide].pg_assignment, new_feature):
+                                if "extra" in guide_dict:
+                                    guide_dict["extra"].append(new_feature)
+                                else:
+                                    guide_dict["extra"] = [new_feature]
+                                emit_id = "extra"
 
-                if len(guide_dict.keys()) > 1:
-                    #LogicError("think about this")
-                    cur_node.split=True
+                if len(guide_dict.keys()) > 2:
+                    LogicError("think about this")
+
+                emit_guide = None
+                if emit_id != None:
+                    emit_features=set(guide_dict[emit_id])
+
+                    #cur_node.split=True
                 #to_merge=set(guide_dict.keys())
                 #while len(to_merge) > 1:
                 #    assert LogicError("no merging!")
@@ -1274,7 +1276,12 @@ class GraphMaker():
                         if i == self.ksize-1:
                             #this feature is on the lhs of kmer
                             self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
-                        assignment, conflict, alt_guide = self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=cur_guide, alt_guide=alt_guide)
+                        if new_feature in emit_features:
+                            assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=emit_guide)
+                            if emit_guide==None:
+                                emit_guide=new_feature
+                        else:
+                            assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=cur_guide)
                         if cur_guide==None:
                             #assign guide to first feature assigned in this column
                             cur_guide = new_feature
