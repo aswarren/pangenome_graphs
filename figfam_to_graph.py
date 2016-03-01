@@ -158,6 +158,7 @@ class rfNode():
         self.duplicate=False #whether this node is duplicated in any context bin
         self.nodeID=nodeID
         self.palindrome=palindrome
+        self.split=False
         self.has_forward=False
         self.has_reverse=False
         #dfs non-recursive variables
@@ -665,7 +666,7 @@ class GraphMaker():
             if duplicate:
                 self.cur_rf_node.duplicate=True
         self.context_bin.add(kmer_key)
-        self.rf_graph.add_node(self.cur_rf_node.nodeID)
+        self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key)
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node!=None:
@@ -689,9 +690,9 @@ class GraphMaker():
             if not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
                 rflip = fflip = self.prev_reverse ^ reverse #xor. if kmers are flipped to relative to each other 
                 if palindrome:
-                    fflip = None
+                    fflip = "no"
                 if self.prev_node.palindrome:
-                    rflip=None
+                    rflip= "no"
                 self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":fflip,"leaving_position":leaving_position})
                 self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":rflip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
@@ -794,6 +795,8 @@ class GraphMaker():
                 kmer=None
             prev_feature=feature
 
+
+    def RF_to_PG(self):
         #determine list of starting nodes
         for node in self.rf_node_index:
             if node.anchorNode():
@@ -1198,49 +1201,47 @@ class GraphMaker():
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
             i=0
+
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 guide_dict={}
+                split_guide={}
                 alt_guide=None
                 split = False
                 cur_guide=None
-                emit_id = None
-                emit_features= set([])
+                default_guide=None
                 if rhs_guide != None:
                     #assign pg-node by guide
                     new_guide_adj=i
                     if not rhs_guide_cat:
                         new_guide_adj=new_guide_adj*-1
-                    cur_guide=rhs_guide+new_guide_adj
-                    guide_dict[self.feature_index[cur_guide].pg_assignment]=[cur_guide]
-                    for direction in target_cat:
-                        for rhs_feature in cur_node.features[direction]:
-                            new_feature_adj= i
-                            if not direction:
-                                new_feature_adj=new_feature_adj*-1
-                            new_feature=rhs_feature+new_feature_adj
-                            if self.feature_index[new_feature].pg_assignment != None:
-                                nwf_node=self.feature_index[new_feature].pg_assignment
-                                if nwf_node in guide_dict:
-                                    guide_dict[nwf_node].append(new_feature)
-                                else:
-                                    guide_dict[nwf_node]=[new_feature]
-                                if cur_guide != None and self.detect_split(nwf_node, cur_guide):
+                    incoming_guide=rhs_guide+new_guide_adj
+                    guide_dict[self.feature_index[incoming_guide].pg_assignment]=[incoming_guide]
+                for direction in target_cat:
+                    for rhs_feature in cur_node.features[direction]:
+                        new_feature_adj= i
+                        if not direction:
+                            new_feature_adj=new_feature_adj*-1
+                        new_feature=rhs_feature+new_feature_adj
+                        if self.feature_index[new_feature].pg_assignment != None:
+                            nwf_node=self.feature_index[new_feature].pg_assignment
+                            if nwf_node in guide_dict:
+                                guide_dict[nwf_node].append(new_feature)
+                            else:
+                                guide_dict[nwf_node]=[new_feature]
+                                #if cur_guide != None and self.detect_split(nwf_node, cur_guide):
                                     #targets contained extra character causing the split
-                                    cur_guide=None
+                                #    cur_guide=None
                                     
-                            elif cur_guide != None and self.detect_split(self.feature_index[cur_guide].pg_assignment, new_feature):
-                                if "extra" in guide_dict:
-                                    guide_dict["extra"].append(new_feature)
-                                else:
-                                    guide_dict["extra"] = [new_feature]
-                                emit_id = "extra"
+                        #elif cur_guide != None and self.detect_split(self.feature_index[cur_guide].pg_assignment, new_feature):
+                        #    if "extra" in guide_dict:
+                        #        guide_dict["extra"].append(new_feature)
+                        #    else:
+                        #        guide_dict["extra"] = [new_feature]
+                                #emit_id = "extra"
 
-                if len(guide_dict.keys()) > 2:
-                    LogicError("think about this")
-
-                emit_guide = None
-                if emit_id != None:
-                    emit_features=set(guide_dict[emit_id])
+                #emit_guide = None
+                #if emit_id != None:
+                #    emit_features=set(guide_dict[emit_id])
 
                     #cur_node.split=True
                 #to_merge=set(guide_dict.keys())
@@ -1255,10 +1256,8 @@ class GraphMaker():
                 #if len(to_merge) >0:
                 #    cur_guide=guide_dict[iter(to_merge).next()]
 
-
                 for direction in target_cat:
                     for rhs_feature in cur_node.features[direction]:
-                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
                         conflict=False
                         assignment=None
                         new_feature_adj= i
@@ -1268,6 +1267,38 @@ class GraphMaker():
                             prev_feature_adj=prev_feature_adj*-1
                         new_feature=rhs_feature+new_feature_adj
                         prev_feature=rhs_feature+prev_feature_adj
+                        if self.feature_index[new_feature].pg_assignment == None:
+                            guide_list=set(guide_dict.keys())
+                            split = False
+                            #NEED ONE MORE VARIABLE FOR DEFAULT NEW FEATURE ASSIGNMENT TRACKING
+                            for pg in guide_dict.keys():
+                                if self.detect_split(pg, new_feature):
+                                    if split:
+                                        assert LogicError("two splits!")
+                                    else:
+                                        split=True
+                                    guide_list.remove(pg)
+                                    if pg in split_guide:
+                                        cur_guide=split_guide[pg][0]
+                                        split_guide[pg].append(new_feature)
+                                    else:
+                                        cur_guide = None
+                                        split_guide[pg]=[new_feature]
+                            if (not split):
+                                if len(guide_list) == 1:
+                                    guide_key=iter(guide_list).next()
+                                    cur_guide=guide_dict[guide_key][0]
+                                elif len(guide_list) > 1 and cur_guide == None:
+                                    print "too many guides creating own node"
+                                if cur_guide == None:
+                                    if default_guide != None:
+                                        cur_guide=default_guide
+                                    else:
+                                        default_guide=new_feature
+
+                            
+                        #if not split or self.feature_index[new_feature].pg_assignment != None:
+                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
                         #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
                         if i == 0:
                             #this feature is on the rhs of kmer
@@ -1276,15 +1307,19 @@ class GraphMaker():
                         if i == self.ksize-1:
                             #this feature is on the lhs of kmer
                             self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
-                        if new_feature in emit_features:
-                            assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=emit_guide)
-                            if emit_guide==None:
-                                emit_guide=new_feature
-                        else:
-                            assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=cur_guide)
-                        if cur_guide==None:
+                        #if new_feature in emit_features:
+                        #    assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=emit_guide)
+                        #    if emit_guide==None:
+                        #        emit_guide=new_feature
+                        #else:
+                        assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=cur_guide)
+                        #if cur_guide==None:
                             #assign guide to first feature assigned in this column
-                            cur_guide = new_feature
+                        #    cur_guide = new_feature
+                        if not assignment in guide_dict:
+                            guide_dict[assignment]=[new_feature]
+                        else:
+                            guide_dict[assignment].append(new_feature)
                         if conflict:
                             print "conflict in pg-node "+str(assignment)
                 i+=1
@@ -1754,6 +1789,8 @@ def main(init_args):
         sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
+    #nx.readwrite.write_gexf(gmaker.rf_graph, init_args[1]+".rf_graph")
+    gmaker.RF_to_PG()
     gmaker.checkPGGraph()
     #gmaker.checkResults()
     gmaker.calcStatistics()
