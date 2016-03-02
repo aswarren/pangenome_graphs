@@ -1270,20 +1270,21 @@ class GraphMaker():
                         if self.feature_index[new_feature].pg_assignment == None:
                             guide_list=set(guide_dict.keys())
                             split = False
+                            split_list=[]
                             #NEED ONE MORE VARIABLE FOR DEFAULT NEW FEATURE ASSIGNMENT TRACKING
                             for pg in guide_dict.keys():
                                 if self.detect_split(pg, new_feature):
-                                    if split:
-                                        assert LogicError("two splits!")
-                                    else:
-                                        split=True
+                                    split_list.append(pg)
+                                    split_key=".".join([str(x) for x in sorted(split_list)])
+                                    if len(split_list)>0:
+                                        print "multiple splits!"
                                     guide_list.remove(pg)
-                                    if pg in split_guide:
-                                        cur_guide=split_guide[pg][0]
-                                        split_guide[pg].append(new_feature)
+                                    if split_key in split_guide:
+                                        cur_guide=split_guide[split_key][0]
+                                        split_guide[split_key].append(new_feature)
                                     else:
                                         cur_guide = None
-                                        split_guide[pg]=[new_feature]
+                                        split_guide[split_key]=[new_feature]
                             if (not split):
                                 if len(guide_list) == 1:
                                     guide_key=iter(guide_list).next()
