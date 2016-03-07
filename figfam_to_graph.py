@@ -485,7 +485,7 @@ class featureParser():
                 result.group_id=parts[ip['fam_id']]
                 result.contig_id=parts[ip['contig_id']]
                 result.genome_id=parts[ip['genome_id']]
-                result.start=parts[ip['start']]
+                result.start=int(parts[ip['start']])
                 #result.end=parts[ip['end']]
             except:
                 warning("parsing problem. couldn't parse line: "+line)
