@@ -485,7 +485,7 @@ class featureParser():
                 result.group_id=parts[ip['fam_id']]
                 result.contig_id=parts[ip['contig_id']]
                 result.genome_id=parts[ip['genome_id']]
-                result.start==parts[ip['start']]
+                result.start=parts[ip['start']]
                 #result.end=parts[ip['end']]
             except:
                 warning("parsing problem. couldn't parse line: "+line)
@@ -576,8 +576,11 @@ class GraphMaker():
 
     def checkRFGraph(self):
         for r in self.rf_node_index:
+            ambig=0
             if r.numFeatures() >0:
-                assert LogicError("RFNode unexpanded")
+                ambig+=1
+        print "rf-graph: "+str(ambig)+" nodes unexapanded"
+                #assert LogicError("RFNode unexpanded")
     def checkPGGraph(self):
         for cnode in self.pg_graph.nodes_iter(data=True):
             group_id=None
@@ -1793,7 +1796,7 @@ def main(init_args):
     #nx.readwrite.write_gexf(gmaker.rf_graph, init_args[1]+".rf_graph")
     gmaker.RF_to_PG()
     gmaker.checkPGGraph()
-    #gmaker.checkResults()
+    gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
     nx.readwrite.write_gexf(gmaker.pg_graph, init_args[1])
