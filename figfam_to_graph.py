@@ -471,22 +471,32 @@ class featureParser():
         self.feature_file=kwargs['feature_file']
         self.file_type=kwargs['file_type']
         self.parse=None
+        self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
     def parseFeatureTab(self):
-        ip={'org_id':2, 'genome_id':1, 'contig_id':3,'locus_id':2,'start':4, 'end':4, 'fam_id':0}
         in_handle=open(self.feature_file)
         for line in in_handle:
             result=featureInfo()
-            if line.startswith('#'):
-                continue
+            header=False
             try:
-                parts=line.strip().split("\t")
-                result.group_id=parts[ip['fam_id']]
-                result.contig_id=parts[ip['contig_id']]
-                result.genome_id=parts[ip['genome_id']]
-                result.start=int(parts[ip['start']])
-                #result.end=parts[ip['end']]
+                header = line.startswith('#')
+                if header:
+                    #define column position based on header
+                    parts=line.strip().replace("#","").split("\t")
+                    x=0
+                    while x < len(parts):
+                        if parts[x] in self.ip:
+                            self.ip[parts[x]]=x
+                        x+=1
+
+                else:
+                    parts=line.strip().split("\t")
+                    result.group_id=parts[self.ip['group']]
+                    result.contig_id=parts[self.ip['contig']]
+                    result.genome_id=parts[self.ip['genome']]
+                    result.start=int(parts[self.ip['start']])
+                    #result.end=parts[ip['end']]
             except:
                 warning("parsing problem. couldn't parse line: "+line)
                 continue
@@ -601,8 +611,11 @@ class GraphMaker():
         print "edges "+str(self.pg_graph.number_of_edges())
 
     def finalizeGraphAttr(self):
+        num_genomes=float(len(self.replicon_map.keys()))
         for e in self.pg_graph.edges_iter():
             attr=self.pg_graph.get_edge_data(*e)
+            if "genomes" in attr:
+                attr["weight"]=len(attr["genomes"])/num_genomes
             for a in attr:
                 if type(attr[a])==set:
                     attr[a] = ','.join(attr[a])
@@ -1113,7 +1126,7 @@ class GraphMaker():
             else:
                 cur_pg_id=self.num_pg_nodes
                 self.num_pg_nodes+=1
-                self.pg_graph.add_node(cur_pg_id, features={genome_id:{sequence_id:[new_feature]}})
+                self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}})
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         #REMOVE THIS
@@ -1793,7 +1806,7 @@ def main(init_args):
         sys.exit()
     gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
     gmaker.processFeatures()
-    #nx.readwrite.write_gexf(gmaker.rf_graph, init_args[1]+".rf_graph")
+    nx.readwrite.write_gexf(gmaker.rf_graph, init_args[1]+".rf_graph.gexf")
     gmaker.RF_to_PG()
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
