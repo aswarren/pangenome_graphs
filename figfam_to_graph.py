@@ -4,6 +4,7 @@ import os, sys
 import itertools
 import json
 import copy
+import argparse
 import networkx as nx
 from operator import methodcaller
 #from networkx import Graph
@@ -522,11 +523,13 @@ class GraphMaker():
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
+        self.break_conflict=kwargs["break_conflict"]
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
         self.replicon_map={}
+        self.conflicts={}
         self.groups_seen={}
         self.group_index=[]
         self.context_bin=set([])
@@ -992,16 +995,16 @@ class GraphMaker():
             #structure for node_queue and node_bundles
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
-                nxt_guide=nxt_guide_cat=None
+                nxt_guide=nxt_guide_cat=nxt_guide_side=None
                 if prev_queued: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
-                    nxt_guide, nxt_guide_cat = self.non_anchor_guides[pg_node_id][nxt_rf_id]
+                    nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
                 else:#first time queueing rfnode. store non_anchor_guides for later
                     if not pg_node_id in self.non_anchor_guides:
-                        self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction)}
+                        self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction,nxt_position)}
                     else:
-                        self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction)
+                        self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
                 #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
-                node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat]))
+                node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
             #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
             node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
             return nxt_rf_id
@@ -1120,7 +1123,7 @@ class GraphMaker():
                 insert_level=None
                 cur_pg_id=self.feature_index[guide].pg_assignment
                 insert_level = self.insert_feature(cur_pg_id, new_feature)
-                if self.context_levels[insert_level] > self.context_levels[self.context]: 
+                if self.context_levels[insert_level] > self.context_levels[self.context]:
                     conflict=True
 
             else:
@@ -1138,7 +1141,25 @@ class GraphMaker():
         if prev_feature != None:
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
             self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id)
+            if conflict:
+                tier2=self.conflicts.setdefault(cur_pg_id, {})
+                conflicted=tier2.setdefault(prev_pg_id, set([]))
+                conflicted.add(new_feature)
         return cur_pg_id, conflict
+
+    def find_conflicts(self, to_assign):
+        repack=[]
+        num_conflict=0
+        for cur_tuple in to_assign:
+            #unpack
+            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict= cur_tuple
+            new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
+            new_guide=rhs_guide+new_guide_adj
+            conflict=self.detect_conflict(new_feature, new_guide)
+            if conflict:
+                num_conflict+=1
+            repack.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict))
+        return num_conflict, repack
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
@@ -1155,6 +1176,7 @@ class GraphMaker():
         if guide!=None:#a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited 
             rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
             rhs_guide_cat=guide[1] #used if there are new things in this anchor node
+            rhs_guide_side=guide[2]#only really needed if this is a palindrome
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
         if (num_targets>0):
@@ -1162,6 +1184,8 @@ class GraphMaker():
             # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             to_assign=[]
+
+            #PHASE 1: Figure out details and establish if any features have already been assigned, so that they can be used as guides for pg-assignment
             for kmer_side in target_cat:
                 for direction in target_cat:
                     for rhs_feature in targets[kmer_side][direction]:
@@ -1178,29 +1202,44 @@ class GraphMaker():
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                         else:
                             cur_node.features[direction].remove(rhs_feature)
-                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature))
+                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False))
                         #this initial loop through the targets is really just to see if any have already been assigned
                         if rhs_guide == None and self.feature_index[new_feature].pg_assignment != None:
                             rhs_guide = rhs_feature
                             rhs_guide_cat=direction
+                            rhs_guide_side=kmer_side #need this for palindromes
+
+            #PHASE 2: Determine if there are ANY conflicts. The percentages will determine the nature of the conflict and whether to emit a new node
+            num_conflict=0
+            if False and rhs_guide != None:
+               num_conflict, to_assign = self.find_conflicts(to_assign)
+
+
+            #PHASE 3:Make assignments based on the previous two phases
             for cur_tuple in to_assign:
                 #unpack
-                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature = cur_tuple
+                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict= cur_tuple
                 cur_node.assigned_features[direction].add(rhs_feature)
 
                 #assign to pg-node
-                conflict=False
+                #conflict=False
                 if rhs_guide == None:
                     rhs_guide=rhs_feature
                     rhs_guide_cat=direction
+                    rhs_guide_side=kmer_side
                     self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                 else:
                     #conflict occurs when mixed bundling tries to violate synteny context
-                    new_guide_adj=self.rhs_adj_table[rhs_guide_cat][kmer_side]['new_feature_adj']
+                    if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
+                        #these should always be the same except for palindromes
+                        assert LogicError
+                    new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
                     new_guide=rhs_guide+new_guide_adj
                     assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
-                    if conflict:
-                        print "conflict in pg-node "+str(assignment)
+                    if up_targets and conflict:
+                        print "conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
+                    elif conflict:
+                        print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
 
                 #queue base on leaving feature
                 if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
@@ -1221,7 +1260,6 @@ class GraphMaker():
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 guide_dict={}
                 split_guide={}
-                alt_guide=None
                 split = False
                 cur_guide=None
                 default_guide=None
@@ -1287,7 +1325,6 @@ class GraphMaker():
                             guide_list=set(guide_dict.keys())
                             split = False
                             split_list=[]
-                            #NEED ONE MORE VARIABLE FOR DEFAULT NEW FEATURE ASSIGNMENT TRACKING
                             for pg in guide_dict.keys():
                                 if self.detect_split(pg, new_feature):
                                     split_list.append(pg)
@@ -1338,7 +1375,7 @@ class GraphMaker():
                         else:
                             guide_dict[assignment].append(new_feature)
                         if conflict:
-                            print "conflict in pg-node "+str(assignment)
+                            print "NEW BLOCK conflict in pg-node "+str(assignment)
                 i+=1
             cur_node.features[0]=set([])#after assigning all features clear it out.
             cur_node.features[1]=set([])#after assigning all features clear it out.
@@ -1358,6 +1395,8 @@ class GraphMaker():
             self.visited=False
     
     #get a guide from a target bundle
+    #this is used when new targets are returned from DFS/TFS.
+    #Because of this the new target will be on the opposite side than the previous targets
     def getTargetGuide(self,targets):
         kmer_side=0
         guide=None
@@ -1367,7 +1406,7 @@ class GraphMaker():
             direction=0
             while direction < len(targets[kmer_side]):
                 if len(targets[kmer_side][direction]) > 0:
-                    guide= (iter(targets[kmer_side][direction]).next(),direction) #can be any feature just assigned.
+                    guide= (iter(targets[kmer_side][direction]).next(),direction, not kmer_side) #can be any feature just assigned.
                     break
                 direction+=1
             kmer_side+=1
@@ -1800,19 +1839,27 @@ def stats(graph):
     print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
 
 
-def main(init_args):
-    if(len(init_args)< 4):
-        sys.stderr.write("Usage: figfam_to_graph.py feature_table output_file context k-size\n")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("feature_table", type=str, help="table specifying the group, genome, contig, feature, and start in sorted order")
+    parser.add_argument("output_basename", type=str, help="the path and base name give to the output files")
+    parser.add_argument("context", type=str, choices=["genome","contig","feature"], help="the synteny context")
+    parser.add_argument("ksize", type=int, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
+    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+
+    if len(sys.argv) < 5:
+        parser.print_help()
         sys.exit()
-    gmaker=GraphMaker(feature_tab=init_args[0], context=init_args[2], ksize=int(init_args[3]))
+    args = parser.parse_args()
+    gmaker=GraphMaker(feature_tab=args.feature_table, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
     gmaker.processFeatures()
-    nx.readwrite.write_gexf(gmaker.rf_graph, init_args[1]+".rf_graph.gexf")
+    nx.readwrite.write_gexf(gmaker.rf_graph, args.output_basename+".rf_graph.gexf")
     gmaker.RF_to_PG()
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, init_args[1])
+    nx.readwrite.write_gexf(gmaker.pg_graph, args.output_basename+".gexf")
 
 
 def old_main(init_args):
@@ -1848,4 +1895,4 @@ def old_main(init_args):
     #result_handle.close()
     
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()
