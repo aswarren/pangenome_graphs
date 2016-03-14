@@ -472,8 +472,8 @@ class featureParser():
         self.feature_file=kwargs['feature_file']
         self.file_type=kwargs['file_type']
         self.parse=None
-        #self.ip={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
-        self.ip={'taxid':2, 'genome':0, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
+        self.ip={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
+        #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
     def parseFeatureTab(self):
@@ -488,9 +488,11 @@ class featureParser():
                     parts=line.strip().replace("#","").split("\t")
                     x=0
                     while x < len(parts):
-                        if parts[x] in self.ip:
-                            self.ip[parts[x]]=x
+                        cur_part=parts[x].lower()
+                        if cur_part in self.ip:
+                            self.ip[cur_part]=x
                         x+=1
+                    continue
 
                 else:
                     parts=line.strip().split("\t")
