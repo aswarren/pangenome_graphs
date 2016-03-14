@@ -472,7 +472,8 @@ class featureParser():
         self.feature_file=kwargs['feature_file']
         self.file_type=kwargs['file_type']
         self.parse=None
-        self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
+        #self.ip={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
+        self.ip={'taxid':2, 'genome':0, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
     def parseFeatureTab(self):
@@ -998,15 +999,18 @@ class GraphMaker():
             if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                 pg_node_id=self.feature_index[leaving_feature].pg_assignment
                 nxt_guide=nxt_guide_cat=nxt_guide_side=None
-                if prev_queued: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
+                if prev_queued and pg_node_id in self.non_anchor_guides and nxt_rf_id in self.non_anchor_guides[pg_node_id]: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
                     nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
                 else:#first time queueing rfnode. store non_anchor_guides for later
+                #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                     if not pg_node_id in self.non_anchor_guides:
                         self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction,nxt_position)}
                     else:
                         self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
-                #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
-                node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
+                    node_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                else:
+                    node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
             #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
             node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
             return nxt_rf_id
@@ -1106,9 +1110,10 @@ class GraphMaker():
             insert_level="feature"
         if self.context_levels[insert_level] > self.context_levels[self.context]:
             conflict=True
+            cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
+            print "conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)
             #determine if it is conflict class 1
             if self.context == "genome" and insert_level=="contig":
-                cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
                 nf_end=False
                 cf_end=False
                 i=0
@@ -1203,11 +1208,14 @@ class GraphMaker():
                 if class1_conflict:
                     num_class1+=1
             repack.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict))
+        if num_class1 >0:
+            print "there are "+str(num_class1)+" class 1 conflicts"
         class1= num_conflict == num_class1
         return num_conflict, class1, repack
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
+        sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         q_construct={}#keyed by rfid
         num_targets=0
         num_features=len(cur_node.features[0])+len(cur_node.features[1])
@@ -1256,15 +1264,17 @@ class GraphMaker():
 
             #PHASE 2: Determine if there are ANY conflicts.
             num_conflict=0
+            break_here=False # if break conflicts is true then want to use unassigned kmer as guide so that incoming features will be assigned to a new node
             if rhs_guide != None:
                num_conflict, c1_conflict, to_assign = self.find_conflicts(to_assign, rhs_guide, rhs_guide_cat, rhs_guide_side)
                if num_conflict > 0:
                    if c1_conflict:
                        print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
-                   elif not cur_node.duplicate:
-                       print "CONFLICT: in rf-node NOT a duplicate "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
                    else:
-                       print "CONFLICT: in duplicate rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
+                       if self.break_conflict:
+                           break_here=True
+                           rhs_guide=rhs_guide_cat=rhs_guide_side=None
+                       print "C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
 
 
             #PHASE 3:Make assignments based on the previous two phases
@@ -1273,12 +1283,19 @@ class GraphMaker():
                 kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict= cur_tuple
                 cur_node.assigned_features[direction].add(rhs_feature)
 
+                assigned =  self.feature_index[new_feature].pg_assignment != None
+                do_queue=True
+                if break_here and assigned:
+                    prev_feature = None
+                    do_queue=False
+
                 #assign to pg-node
                 #conflict=False
                 if rhs_guide == None:
-                    rhs_guide=rhs_feature
-                    rhs_guide_cat=direction
-                    rhs_guide_side=kmer_side
+                    if (not assigned) or (not break_here): #only care if it assigned or not if break_here aka conflict
+                        rhs_guide=rhs_feature
+                        rhs_guide_cat=direction
+                        rhs_guide_side=kmer_side
                     self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                 else:
                     #conflict occurs when mixed bundling tries to violate synteny context
@@ -1294,14 +1311,15 @@ class GraphMaker():
                         print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
 
                 #queue base on leaving feature
-                if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
-                    #when queueing based on return 'new' features make sure don't do a DFS "up"
-                    q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
-                else:
-                    q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
-                if q_rfid == prev_node.nodeID:
-                    print "log low complexity? queue previous node"
-                #    assert LogicError
+                if do_queue:
+                    if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
+                        #when queueing based on return 'new' features make sure don't do a DFS "up"
+                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
+                    else:
+                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
+                    if q_rfid == prev_node.nodeID:
+                        print "log low complexity? queue previous node"
+                    #    assert LogicError
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
@@ -1366,6 +1384,7 @@ class GraphMaker():
                     for rhs_feature in cur_node.features[direction]:
                         conflict=False
                         assignment=None
+                        split_emit=False
                         new_feature_adj= i
                         prev_feature_adj=i-1
                         if not direction:
@@ -1379,9 +1398,10 @@ class GraphMaker():
                             split_list=[]
                             for pg in guide_dict.keys():
                                 if self.detect_split(pg, new_feature):
+                                    split=True
                                     split_list.append(pg)
                                     split_key=".".join([str(x) for x in sorted(split_list)])
-                                    if len(split_list)>0:
+                                    if len(split_list)>1:
                                         print "multiple splits!"
                                     guide_list.remove(pg)
                                     if split_key in split_guide:
@@ -1390,17 +1410,15 @@ class GraphMaker():
                                     else:
                                         cur_guide = None
                                         split_guide[split_key]=[new_feature]
-                            if (not split):
-                                if len(guide_list) == 1:
-                                    guide_key=iter(guide_list).next()
-                                    cur_guide=guide_dict[guide_key][0]
-                                elif len(guide_list) > 1 and cur_guide == None:
-                                    print "too many guides creating own node"
-                                if cur_guide == None:
-                                    if default_guide != None:
-                                        cur_guide=default_guide
-                                    else:
-                                        default_guide=new_feature
+                            if len(guide_list) == 1:
+                                guide_key=iter(guide_list).next()
+                                cur_guide=guide_dict[guide_key][0]
+                            elif len(guide_list) > 1 and cur_guide == None:
+                                print "too many guides creating own node"
+                            if cur_guide == None and default_guide == None:
+                                default_guide=new_feature
+                            if cur_guide == None and default_guide != None and default_guide != new_feature:
+                                cur_guide=default_guide
 
                             
                         #if not split or self.feature_index[new_feature].pg_assignment != None:
@@ -1440,7 +1458,6 @@ class GraphMaker():
             self.cur_node=cur_node
             self.targets=targets
             self.guide=guide
-            self.node_bundles={}
             self.node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
             self.node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
             self.new_targets=deque()
@@ -1485,6 +1502,8 @@ class GraphMaker():
                 next_targets=cv.node_bundles[next_node_id]
                 cv.node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
                 next_visit=self.VisitPack(prev_node=cv.cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
+                if next_node == cur_node.nodeID: #self loop special case. use same bundles
+                    next_visit.node_bundles=cv.node_bundles
             if len(cv.node_queue) == 0 and next_visit==None:
                 if pv!= None and -1 in cv.node_bundles: # -1 is used to track 'new' threads exposed by anchor node that are to be passed 'up'
                     pv.new_targets.append(cv.node_bundles[-1])
