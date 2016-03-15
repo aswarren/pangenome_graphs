@@ -1102,8 +1102,9 @@ class GraphMaker():
         insert_level=None
         conflict=False
         end_fragments=False
+        split=False
         if cur_pg_id == self.feature_index[new_feature].pg_assignment:
-            return conflict, end_fragments
+            return split, conflict, end_fragments
         if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
             insert_level="genome"
         elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
@@ -1119,6 +1120,7 @@ class GraphMaker():
                 nf_end=False
                 cf_end=False
                 i=0
+                #check if both conflicting features are within k-distance from the end of a contig
                 while i < self.ksize:
                     if self.feature_index[new_feature+i].rf_forward==None or self.feature_index[new_feature+i].rf_reverse==None:
                         nf_end=True
@@ -1132,7 +1134,15 @@ class GraphMaker():
                         end_fragments=True
                         break
                     i+=1
-        return conflict, end_fragments
+            if self.context!="feature" and \
+            genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
+            sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
+                for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+                    #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
+                    if abs(cf-new_feature)< self.ksize:
+                        split=True
+            
+        return split, conflict, end_fragments
 
     def detect_split(self, cur_pg_id, new_feature):
         genome_id=self.feature_index[new_feature].genome_id
@@ -1197,23 +1207,26 @@ class GraphMaker():
     def find_conflicts(self, to_assign, rhs_guide, rhs_guide_cat, rhs_guide_side):
         repack=[]
         num_conflict=0
+        num_split=0
         num_class1=0
         for cur_tuple in to_assign:
             #unpack
-            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict= cur_tuple
+            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
             new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
             new_guide=rhs_guide+new_guide_adj
             if new_guide != new_feature:
-                conflict, class1_conflict = self.detect_conflict(new_feature, new_guide)
+                split, conflict, class1_conflict = self.detect_conflict(new_feature, new_guide)
                 if conflict:
                     num_conflict+=1
+                if split:
+                    num_split+=1
                 if class1_conflict:
                     num_class1+=1
-            repack.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict))
+            repack.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split))
         if num_class1 >0:
             print "there are "+str(num_class1)+" class 1 conflicts"
         class1= num_conflict == num_class1
-        return num_conflict, class1, repack
+        return num_split, num_conflict, class1, repack
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
@@ -1257,7 +1270,7 @@ class GraphMaker():
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                         else:
                             cur_node.features[direction].remove(rhs_feature)
-                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False))
+                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False))
                         #this initial loop through the targets is really just to see if any have already been assigned
                         if rhs_guide == None and self.feature_index[new_feature].pg_assignment != None:
                             rhs_guide = rhs_feature
@@ -1268,7 +1281,9 @@ class GraphMaker():
             num_conflict=0
             break_here=False # if break conflicts is true then want to use unassigned kmer as guide so that incoming features will be assigned to a new node
             if rhs_guide != None:
-               num_conflict, c1_conflict, to_assign = self.find_conflicts(to_assign, rhs_guide, rhs_guide_cat, rhs_guide_side)
+               num_split, num_conflict, c1_conflict, to_assign = self.find_conflicts(to_assign, rhs_guide, rhs_guide_cat, rhs_guide_side)
+               if num_split > 0:
+                   print "SPLIT CONFLICT"
                if num_conflict > 0:
                    if c1_conflict:
                        print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
@@ -1282,7 +1297,7 @@ class GraphMaker():
             #PHASE 3:Make assignments based on the previous two phases
             for cur_tuple in to_assign:
                 #unpack
-                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict= cur_tuple
+                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
                 cur_node.assigned_features[direction].add(rhs_feature)
 
                 assigned =  self.feature_index[new_feature].pg_assignment != None
