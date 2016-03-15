@@ -66,12 +66,32 @@ class featureInfo():
         self.rf_forward=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
         self.pg_assignment=None
+        self.instance_key=None
 
     def addRFPointer(self, direction, pointer):
         if direction=="increase":
             self.rf_forward=pointer
         else:
             self.rf_reverse=pointer
+
+    def compareInstance(self, other_feature):
+        count1=self.instance_key.count(".")
+        count2=other_feature.instance_key.count(".")
+        short_str = long_str = None
+        if count1 == count2 == self.ksize:
+            return self.instance_key == other_feature.instance_key
+        elif count1 >= count2:
+            short_str = other_feature.instance_key
+            long_str = self.instance_key
+        else:
+            short_str = self.instance_key
+            long_str = other_feature.instance_key
+
+        short_option2= ".".join(short_str.split(".")[::-1])  # reverse
+
+        return long_str.startswith(short_str) or long_str.startswith(short_option2) or long_str.endswith(short_str) or long_str.endswith(short_option2)
+
+
 
     def getContextValue(self, context):
         if context=="genome":
@@ -691,6 +711,19 @@ class GraphMaker():
                 dup_number=1
         self.context_bin.add(kmer_key)
         self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key, duplicate=dup_number)
+
+        #here we add a key that marks which kmers the feature occurs in for later disambiguation
+        for f in feature_indices:
+            if self.feature_index[f].instance_key == None:
+                self.feature_index[f].instance_key= str(self.cur_rf_node.nodeID)
+            else:
+                self.feature_index[f].instance_key += "."+str(self.cur_rf_node.nodeID)
+            if self.feature_index[f].instance_key.count(".") == self.ksize:
+                lv = self.feature_index[f].instance_key.split(".")
+                instance_reverse, instance_palindrome = flipKmer(lv)
+                if instance_reverse:
+                    lv.reverse()
+                self.feature_index[f].instance_key = ".".join(lv)
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node!=None:
