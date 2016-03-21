@@ -1261,10 +1261,29 @@ class GraphMaker():
         class1= num_conflict == num_class1
         return num_split, num_conflict, class1, repack
 
+    def maxInstanceOverlap(self, instance_key, comparison_list):
+        instance_parts=set(instance_key.split('.'))
+        max_intersect = 0
+        max_key = []
+        for c in comparison_list:
+            cur_parts=set(c.split('.'))
+            cur_intersect = len(instance_parts.intersection(cur_parts)
+            if cur_intersect > max_intersect:
+                max_interset = cur_intersect
+                max_key = [c]
+            elif cur_intersect > 0 and cur_intersect == max_intersect:
+                max_key.append(c)
+        if len(max_key) == 0:
+            return None
+        elif len(max_key) == 1:
+            return max_key[0]
+        else:
+            print "THERE WAS A MAX KEY TIE"
+            return None
+
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
         sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
-        q_construct={}#keyed by rfid
         num_targets=0
         num_features=len(cur_node.features[0])+len(cur_node.features[1])
         if num_features == 0:
@@ -1273,11 +1292,17 @@ class GraphMaker():
             num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
         rhs_guide=rhs_guide_cat=None
         target_cat=[0,1]
+        target_guides={} #store available guides under their instance_key
+        pg_set=set([]) # all the different pg_nodes these features could be assigned to
 
-        if guide!=None:#a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited 
+        if guide!=None:#a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited
             rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
             rhs_guide_cat=guide[1] #used if there are new things in this anchor node
-            rhs_guide_side=guide[2]#only really needed if this is a palindrome
+            rhs_guide_side=guide[2]#only really needed if this is a palindrome THIS NEEDS TO BE RENAMED. Its actually the side of the kmer that the guide is good for.
+            instance_key = self.feature_index[rhs_guide].instance_key
+            pg_set.add(self.feature_index[rhs_guide].pg_assignment)
+            target_guides[instance_key]=[tuple(guide)]
+
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
         if (num_targets>0):
@@ -1305,91 +1330,159 @@ class GraphMaker():
                             cur_node.features[direction].remove(rhs_feature)
                             to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False))
                         #this initial loop through the targets is really just to see if any have already been assigned
-                        if rhs_guide == None and self.feature_index[new_feature].pg_assignment != None:
+                        if self.feature_index[new_feature].pg_assignment != None:
                             rhs_guide = rhs_feature
                             rhs_guide_cat=direction
                             rhs_guide_side=kmer_side #need this for palindromes
-
-            #PHASE 2: Determine if there are ANY conflicts.
-            num_conflict=0
-            break_here=False # if break conflicts is true then want to use unassigned kmer as guide so that incoming features will be assigned to a new node
-            if rhs_guide != None:
-               num_split, num_conflict, c1_conflict, to_assign = self.find_conflicts(to_assign, rhs_guide, rhs_guide_cat, rhs_guide_side)
-               if num_split > 0:
-                   print "SPLIT CONFLICT"
-               if num_conflict > 0:
-                   if c1_conflict:
-                       print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
-                   else:
-                       if self.break_conflict:
-                           break_here=True
-                           rhs_guide=rhs_guide_cat=rhs_guide_side=None
-                       print "C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
-
-
-            #PHASE 3:Make assignments based on the previous two phases
-            for cur_tuple in to_assign:
+                            instance_key = self.feature_index[rhs_guide].instance_key
+                            pg_set.add(self.feature_index[rhs_guide].pg_assignment)
+                            target_guides[instance_key]=[(rhs_guide,rhs_guide_cat,rhs_guide_side)]
+            #PHASE 2: Determine the best guide to use
+            guide_to_assign={}
+            for feature_tuple in to_assign:
                 #unpack
-                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
-                cur_node.assigned_features[direction].add(rhs_feature)
-
-                assigned =  self.feature_index[new_feature].pg_assignment != None
-                do_queue=True
-                if break_here and assigned:
-                    prev_feature = None
-                    do_queue=False
-
-                #assign to pg-node
-                #conflict=False
-                if rhs_guide == None:
-                    if (not assigned) or (not break_here): #only care if it assigned or not if break_here aka conflict
-                        rhs_guide=rhs_feature
-                        rhs_guide_cat=direction
-                        rhs_guide_side=kmer_side
-                    self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
-                else:
-                    #conflict occurs when mixed bundling tries to violate synteny context
-                    if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
-                        #these should always be the same except for palindromes
-                        assert LogicError
-                    new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
-                    new_guide=rhs_guide+new_guide_adj
-                    assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
-                    if up_targets and conflict:
-                        print "conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
-                    elif conflict:
-                        print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
-
-                #queue base on leaving feature
-                if do_queue:
-                    if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
-                        #when queueing based on return 'new' features make sure don't do a DFS "up"
-                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
+                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= feature_tuple
+                #determine the best guide to use
+                if len(pg_set) > 1:
+                    instance_key = self.feature_index[new_feature].instace_key
+                    if instance_key in target_guides:
+                        guide_tuple = target_guides[instance_key][0]
                     else:
-                        q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
-                    if q_rfid == prev_node.nodeID:
-                        print "log low complexity? queue previous node"
-                    #    assert LogicError
+                        max_key = self.maxInstanceOverlap(instance_key, target_guides.keys())
+                        if max_key != None:
+                            guide_tuple = target_guides[max_key][0]
+                        else:
+                            guide_tuple = (None, None, None)
+                elif len(target_guides.keys()) > 1: #all instance keys refer to the same pg-node
+                    guide_tuple = target_guides.values()[0][0]
+                else:
+                    guide_tuple = (None, None, None)
+                guide_to_assign.setdefault(guide_tuple,[]).append(feature_tuple)
+
+
+
+            #PHASE 4:Make assignments based on the previous two phases
+            for guide_tuple, assign_list in guide_to_assign.iteritems():
+                #PHASE 3: Determine if there are ANY conflicts.
+                rhs_guide, rhs_guide_cat, rhs_guide_side=guide_tuple
+                num_conflict=num_split=0
+                c1_conflict =False
+                break_here=False # if break conflicts is true then want to use unassigned kmer as guide so that incoming features will be assigned to a new node
+                if rhs_guide != None:
+                    #conflict occurs when mixed bundling tries to violate synteny context
+                    num_split, num_conflict, c1_conflict, assign_list = self.find_conflicts(assign_list, rhs_guide, rhs_guide_cat, rhs_guide_side)
+                if num_split > 0:
+                    print "SPLIT CONFLICT"
+                if num_conflict > 0:
+                    if c1_conflict:
+                        print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
+                    else:
+                        if self.break_conflict:
+                            break_here=True
+                            rhs_guide=rhs_guide_cat=rhs_guide_side=None
+                        print "C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
+                default_guide = default_guide_cat = default_guide_side = None
+                for cur_tuple in assign_list:
+                    #unpack
+                    kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
+                    cur_node.assigned_features[direction].add(rhs_feature)
+
+                    assigned =  self.feature_index[new_feature].pg_assignment != None
+                    do_queue=True
+                    if break_here and assigned:
+                        prev_feature = None
+                        do_queue=False
+
+                    #assign to pg-node
+                    #conflict=False
+                    if rhs_guide == None:
+                        #if (not assigned) or (not break_here): #only care if it assigned or not if break_here aka conflict
+                        if default_guide == None:
+                            default_guide=rhs_feature
+                            default_guide_cat=direction
+                            default_guide_side=kmer_side
+                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
+                        else:
+                            rhs_guide=default_guide
+                            rhs_guide_cat=default_guide_cat
+                            rhs_guide_side=default_guide_side
+                            new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
+                            new_guide=rhs_guide+new_guide_adj
+                            assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+
+                    else:
+                        if split:
+                            if split_guide == None:
+                                split_guide=rhs_feature
+                                split_guide_cat=direction
+                                split_guide_side=kmer_side
+                                self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
+                            else:
+                                rhs_guide=split_guide
+                                rhs_guide_cat=split_guide_cat
+                                rhs_guide_side=split_guide_side
+                                new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
+                                new_guide=rhs_guide+new_guide_adj
+                                assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+                        else:
+                            if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
+                                #these should always be the same except for palindromes
+                                assert LogicError
+                            new_guide_adj=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]['new_feature_adj']
+                            new_guide=rhs_guide+new_guide_adj
+                            assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
+                            if up_targets and conflict:
+                                print "conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
+                            elif conflict:
+                                print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
+
+                    #queue base on leaving feature
+                    if do_queue:
+                        if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
+                            #when queueing based on return 'new' features make sure don't do a DFS "up"
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
+                        else:
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
+                        if q_rfid == prev_node.nodeID:
+                            print "log low complexity? queue previous node"
+                        #    assert LogicError
+
+
+
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
+            pg_set=set([]) # all the different pg_nodes these features could be assigned to
             i=0
-
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 guide_dict={}
                 split_guide={}
                 split = False
                 cur_guide=None
                 default_guide=None
-                if rhs_guide != None:
+                #get the guides based on targets
+                for instance_key, f_list in target_guides.iteritems():
+                    rhs_guide, guide_cat, guide_side=f_list[0]
+                    if guide_cat == 0:
+                        incoming_guide = rhs_guide-i
+                    else:
+                        incoming_guide = rhs_guide+i
+                    guide_dict.setdefault(instance_key,[]).append(incoming_guide)
+                    pg_set.add(self.feature_index[incoming_guide].pg_assignment
+
+
+
+                #if rhs_guide != None:
                     #assign pg-node by guide
-                    new_guide_adj=i
-                    if not rhs_guide_cat:
-                        new_guide_adj=new_guide_adj*-1
-                    incoming_guide=rhs_guide+new_guide_adj
-                    guide_dict[self.feature_index[incoming_guide].pg_assignment]=[incoming_guide]
+                    #for now the guide_dict will store rhs_only so that things from targets can be used too
+                #    new_guide_adj=i
+                #    if not rhs_guide_cat:
+                #        new_guide_adj=new_guide_adj*-1
+                #    incoming_guide=rhs_guide+new_guide_adj
+                #    instance_key= self.feature_index[incoming_guide].instance_key
+                #    guide_dict[self.feature_index[incoming_guide].pg_assignment]=[incoming_guide]
                 for direction in target_cat:
                     for rhs_feature in cur_node.features[direction]:
                         new_feature_adj= i
@@ -1397,11 +1490,9 @@ class GraphMaker():
                             new_feature_adj=new_feature_adj*-1
                         new_feature=rhs_feature+new_feature_adj
                         if self.feature_index[new_feature].pg_assignment != None:
-                            nwf_node=self.feature_index[new_feature].pg_assignment
-                            if nwf_node in guide_dict:
-                                guide_dict[nwf_node].append(new_feature)
-                            else:
-                                guide_dict[nwf_node]=[new_feature]
+                            pg_set.add(self.feature_index[new_feature].pg_assignment)
+                            instance_key= self.feature_index[nwf_node].instance_key
+                            guide_dict.setdefault(instance_key,[]).append(new_feature)
                                 #if cur_guide != None and self.detect_split(nwf_node, cur_guide):
                                     #targets contained extra character causing the split
                                 #    cur_guide=None
@@ -1443,32 +1534,31 @@ class GraphMaker():
                         new_feature=rhs_feature+new_feature_adj
                         prev_feature=rhs_feature+prev_feature_adj
                         if self.feature_index[new_feature].pg_assignment == None:
-                            guide_list=set(guide_dict.keys())
-                            split = False
-                            split_list=[]
-                            for pg in guide_dict.keys():
-                                if self.detect_split(pg, new_feature):
-                                    split=True
-                                    split_list.append(pg)
-                                    split_key=".".join([str(x) for x in sorted(split_list)])
-                                    if len(split_list)>1:
-                                        print "multiple splits!"
-                                    guide_list.remove(pg)
-                                    if split_key in split_guide:
-                                        cur_guide=split_guide[split_key][0]
-                                        split_guide[split_key].append(new_feature)
+                            if len(pg_set) > 1:
+                                instance_key = self.feature_index[new_feature].instace_key
+                                if instance_key in guide_dict:
+                                    cur_guide = guide_dict[instance_key][0]
+                                else:
+                                    max_key = self.maxInstanceOverlap(instance_key, guide_dict.keys())
+                                    if max_key != None:
+                                        cur_guide = guide_dict[max_key][0]
                                     else:
                                         cur_guide = None
-                                        split_guide[split_key]=[new_feature]
-                            if len(guide_list) == 1:
-                                guide_key=iter(guide_list).next()
-                                cur_guide=guide_dict[guide_key][0]
-                            elif len(guide_list) > 1 and cur_guide == None:
-                                print "too many guides creating own node"
-                            if cur_guide == None and default_guide == None:
-                                default_guide=new_feature
-                            if cur_guide == None and default_guide != None and default_guide != new_feature:
-                                cur_guide=default_guide
+                            else:
+                                cur_guide = guide_dict.values()[0][0]
+
+                            if cur_guide != None:
+                                pg= self.feature_index[cur_guide].pg_assignment
+                                if pg == None:
+                                    assert LogicError("A guides pg_assignment should be defined")
+
+                                if self.detect_split(pg, new_feature):
+                                    cur_guide = None
+                                    instance_key=self.feature_index[new_feature].instance_key
+                                    if instance_key in guide_dict:
+                                        assert LogicError("Split can't happen with when the feature passes through all the same nodes.")
+                                    guide_dict[self.feature_index[new_feature].instance_key]=[new_feature]
+                                    
 
                             
                         #if not split or self.feature_index[new_feature].pg_assignment != None:
@@ -1487,6 +1577,7 @@ class GraphMaker():
                         #        emit_guide=new_feature
                         #else:
                         assignment, conflict= self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=cur_guide)
+                        pg_set.add(assignment)
                         #if cur_guide==None:
                             #assign guide to first feature assigned in this column
                         #    cur_guide = new_feature
