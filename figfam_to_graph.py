@@ -1267,7 +1267,7 @@ class GraphMaker():
         max_key = []
         for c in comparison_list:
             cur_parts=set(c.split('.'))
-            cur_intersect = len(instance_parts.intersection(cur_parts)
+            cur_intersect = len(instance_parts.intersection(cur_parts))
             if cur_intersect > max_intersect:
                 max_interset = cur_intersect
                 max_key = [c]
