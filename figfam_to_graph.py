@@ -1299,9 +1299,10 @@ class GraphMaker():
             rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
             rhs_guide_cat=guide[1] #used if there are new things in this anchor node
             rhs_guide_side=guide[2]#only really needed if this is a palindrome THIS NEEDS TO BE RENAMED. Its actually the side of the kmer that the guide is good for.
-            instance_key = self.feature_index[rhs_guide].instance_key
-            pg_set.add(self.feature_index[rhs_guide].pg_assignment)
-            target_guides[instance_key]=[tuple(guide)]
+            if rhs_guide != None:
+                instance_key = self.feature_index[rhs_guide].instance_key
+                pg_set.add(self.feature_index[rhs_guide].pg_assignment)
+                target_guides[instance_key]=[tuple(guide)]
 
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
@@ -1344,7 +1345,7 @@ class GraphMaker():
                 kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= feature_tuple
                 #determine the best guide to use
                 if len(pg_set) > 1:
-                    instance_key = self.feature_index[new_feature].instace_key
+                    instance_key = self.feature_index[new_feature].instance_key
                     if instance_key in target_guides:
                         guide_tuple = target_guides[instance_key][0]
                     else:
@@ -1382,6 +1383,7 @@ class GraphMaker():
                             rhs_guide=rhs_guide_cat=rhs_guide_side=None
                         print "C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
                 default_guide = default_guide_cat = default_guide_side = None
+                split_guide = split_guide_cat = split_guide_side = None
                 for cur_tuple in assign_list:
                     #unpack
                     kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
@@ -1454,9 +1456,9 @@ class GraphMaker():
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
-            pg_set=set([]) # all the different pg_nodes these features could be assigned to
             i=0
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
+                pg_set=set([]) # all the different pg_nodes these features could be assigned to
                 guide_dict={}
                 split_guide={}
                 split = False
@@ -1470,7 +1472,7 @@ class GraphMaker():
                     else:
                         incoming_guide = rhs_guide+i
                     guide_dict.setdefault(instance_key,[]).append(incoming_guide)
-                    pg_set.add(self.feature_index[incoming_guide].pg_assignment
+                    pg_set.add(self.feature_index[incoming_guide].pg_assignment)
 
 
 
@@ -1491,7 +1493,7 @@ class GraphMaker():
                         new_feature=rhs_feature+new_feature_adj
                         if self.feature_index[new_feature].pg_assignment != None:
                             pg_set.add(self.feature_index[new_feature].pg_assignment)
-                            instance_key= self.feature_index[nwf_node].instance_key
+                            instance_key= self.feature_index[new_feature].instance_key
                             guide_dict.setdefault(instance_key,[]).append(new_feature)
                                 #if cur_guide != None and self.detect_split(nwf_node, cur_guide):
                                     #targets contained extra character causing the split
@@ -1535,7 +1537,7 @@ class GraphMaker():
                         prev_feature=rhs_feature+prev_feature_adj
                         if self.feature_index[new_feature].pg_assignment == None:
                             if len(pg_set) > 1:
-                                instance_key = self.feature_index[new_feature].instace_key
+                                instance_key = self.feature_index[new_feature].instance_key
                                 if instance_key in guide_dict:
                                     cur_guide = guide_dict[instance_key][0]
                                 else:
@@ -1544,7 +1546,7 @@ class GraphMaker():
                                         cur_guide = guide_dict[max_key][0]
                                     else:
                                         cur_guide = None
-                            else:
+                            elif len(pg_set) == 1:
                                 cur_guide = guide_dict.values()[0][0]
 
                             if cur_guide != None:
@@ -1581,10 +1583,8 @@ class GraphMaker():
                         #if cur_guide==None:
                             #assign guide to first feature assigned in this column
                         #    cur_guide = new_feature
-                        if not assignment in guide_dict:
-                            guide_dict[assignment]=[new_feature]
-                        else:
-                            guide_dict[assignment].append(new_feature)
+                        instance_key = self.feature_index[new_feature].instance_key
+                        guide_dict.setdefault(instance_key,[]).append(new_feature)
                         if conflict:
                             print "NEW BLOCK conflict in pg-node "+str(assignment)
                 i+=1
