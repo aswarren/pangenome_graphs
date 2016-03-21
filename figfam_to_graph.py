@@ -1354,7 +1354,7 @@ class GraphMaker():
                             guide_tuple = target_guides[max_key][0]
                         else:
                             guide_tuple = (None, None, None)
-                elif len(target_guides.keys()) > 1: #all instance keys refer to the same pg-node
+                elif len(target_guides.keys()) >= 1: #all instance keys refer to the same pg-node
                     guide_tuple = target_guides.values()[0][0]
                 else:
                     guide_tuple = (None, None, None)
@@ -1388,7 +1388,7 @@ class GraphMaker():
                     #unpack
                     kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
                     cur_node.assigned_features[direction].add(rhs_feature)
-
+                    
                     assigned =  self.feature_index[new_feature].pg_assignment != None
                     do_queue=True
                     if break_here and assigned:
@@ -1465,14 +1465,20 @@ class GraphMaker():
                 cur_guide=None
                 default_guide=None
                 #get the guides based on targets
-                for instance_key, f_list in target_guides.iteritems():
-                    rhs_guide, guide_cat, guide_side=f_list[0]
-                    if guide_cat == 0:
-                        incoming_guide = rhs_guide-i
-                    else:
-                        incoming_guide = rhs_guide+i
-                    guide_dict.setdefault(instance_key,[]).append(incoming_guide)
-                    pg_set.add(self.feature_index[incoming_guide].pg_assignment)
+                if num_targets > 0:
+                    for kmer_side in target_cat:
+                        for direction in target_cat:
+                            for rhs_feature in targets[kmer_side][direction]:
+                                if direction == 0:
+                                    incoming_guide = rhs_feature-i
+                                else:
+                                    incoming_guide = rhs_feature+i
+                                if self.feature_index[incoming_guide].pg_assignment == None:
+                                    assert LogicError("guide must have an assignment")
+                                #the instance key has to be adjusted for the correct position in the kmer
+                                instance_key = self.feature_index[incoming_guide].instance_key
+                                guide_dict.setdefault(instance_key,[]).append(incoming_guide)
+                                pg_set.add(self.feature_index[incoming_guide].pg_assignment)
 
 
 
