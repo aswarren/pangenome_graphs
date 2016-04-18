@@ -1204,7 +1204,7 @@ class GraphMaker():
                     del rn["features"][genome][contig]
                 if len(rn["features"][genome]) == 0:
                     del rn["features"][genome]
-                tn["features"].setdefault(genome,{}).setdefault(contig,set([])).add(t)
+                tn["features"].setdefault(genome,{}).setdefault(contig,[]).append(t)
                 self.feature_index[t].pg_assignment = target_pg_id
 
 
@@ -1337,8 +1337,17 @@ class GraphMaker():
             #PHASE 1: Figure out details and establish if any features have already been assigned, so that they can be used as guides for pg-assignment
             for kmer_side in target_cat:
                 for direction in target_cat:
+                    rhs_adj_info=self.rhs_adj_table[direction][kmer_side]
+                    #in the case of an anchor node also add non-target features as potential guides
+                    if cur_node.anchorNode() and (len(targets[kmer_side][0]) + len(targets[kmer_side][1])) > 0:
+                        for rhs_feature in cur_node.features[direction]:
+                            potential_guide = rhs_feature + rhs_adj_info['new_feature_adj']
+                            if self.feature_index[potential_guide].pg_assignment != None:
+                                pg_set.add(self.feature_index[potential_guide].pg_assignment)
+                                instance_key= self.feature_index[potential_guide].instance_key
+                                target_guides.setdefault(instance_key,[]).append(potential_guide)
+                    #also get the targets that have been assigned
                     for rhs_feature in targets[kmer_side][direction]:
-                        rhs_adj_info=self.rhs_adj_table[direction][kmer_side]
                         new_feature=rhs_feature + rhs_adj_info['new_feature_adj']
                         prev_feature= rhs_feature + rhs_adj_info['prev_feature_adj']
                         leaving_feature=rhs_feature + rhs_adj_info['leaving_feature_adj']
@@ -1348,6 +1357,7 @@ class GraphMaker():
                                 assert LogicError
                             else:
                                 #construct pg-edge to previously created node
+                                #SHOULD THIS REALLY BE HERE?
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                         else:
                             cur_node.features[direction].remove(rhs_feature)
@@ -1360,7 +1370,8 @@ class GraphMaker():
                             instance_key = self.feature_index[new_feature].instance_key
                             pg_set.add(self.feature_index[new_feature].pg_assignment)
                             target_guides.setdefault(instance_key,[]).append(new_feature)
-            #PHASE 2: Determine the best guide to use
+            #PHASE 2:
+            #Determine the best guide to use
             #Reorganize by target pg_node so that conflicts and splits can be detected per
             guide_to_assign={}
             for feature_tuple in to_assign:
@@ -1445,16 +1456,16 @@ class GraphMaker():
                                 assignment, conflict = self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
                             else:
                                 assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=split_guide)
-                            instance_key = self.feature_index[new_feature].instance_key
-                            if instance_key in target_guides:
-                                self.move_features(assignment, target_guides[instance_key])
                         else:
                             assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=target_guide)
                             if up_targets and conflict:
                                 print "conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
                             elif conflict:
                                 print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
-
+                    #make sure that where ever the feature is assigned, that all the other features in this visit, with the same instance key are there too.
+                    instance_key = self.feature_index[new_feature].instance_key
+                    if instance_key in target_guides:
+                        self.move_features(assignment, target_guides[instance_key])
                     #queue base on leaving feature
                     if do_queue:
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
@@ -1481,6 +1492,7 @@ class GraphMaker():
                 split = False
                 cur_guide=None
                 default_guide=None
+                #PHASE 1
                 #get the guides based on targets
                 if num_targets > 0:
                     for kmer_side in target_cat:
