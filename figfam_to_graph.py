@@ -557,6 +557,7 @@ class GraphMaker():
         self.group_index=[]
         self.context_bin=set([])
         self.feature_index=[]
+        self.anchor_instance_keys={} #structured as {instance_key, [pg_assignment, [features with this instance key]]}
         self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
         #self.ignore_fams=ignore_fams
         self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
@@ -688,7 +689,26 @@ class GraphMaker():
                 self.pg_ptrs[c]=main_idx2
             self.pg_initial[target_node.node_id]=None #destroy target
         
-            
+
+    #called after all features have been processed so that can flip them
+    #and so that those that contain an anchor node can be added the anchor_instance_keys lookup
+    def finalizeInstanceKeys(self):
+        for f in self.feature_index:
+            lv = self.feature_index[f].instance_key.split(".")
+            instance_reverse, instance_palindrome = flipKmer(lv)
+            if instance_reverse:
+                lv.reverse()
+            self.feature_index[f].instance_key = ".".join(lv)
+            # if the instance key has a single anchor node in it then it is an anchor instance key
+            if self.feature_index[f].instance_key in self.anchor_instance_keys:
+                self.anchor_instance_keys[self.feature_index[f].instance_key][1].append(f)
+            else:
+                #check to see if any of the instances are anchor nodes
+                for rf in lv:
+                    if self.rf_node_index[rf].anchorNode():
+                        self.anchor_instance_keys[self.feature_index[f].instance_key]=[None,[f]]
+                        break
+
 
     ##This function checks whether the kmer is in the graph
     #and links kmer graph data structure appropriately
@@ -720,12 +740,6 @@ class GraphMaker():
                 self.feature_index[f].instance_key= str(self.cur_rf_node.nodeID)
             else:
                 self.feature_index[f].instance_key += "."+str(self.cur_rf_node.nodeID)
-            if self.feature_index[f].instance_key.count(".") == self.ksize:
-                lv = self.feature_index[f].instance_key.split(".")
-                instance_reverse, instance_palindrome = flipKmer(lv)
-                if instance_reverse:
-                    lv.reverse()
-                self.feature_index[f].instance_key = ".".join(lv)
 
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node!=None:
@@ -860,6 +874,7 @@ class GraphMaker():
         for node in self.rf_node_index:
             if node.anchorNode():
                 self.rf_starting_list.append(node)
+        self.finalizeInstanceKeys()
         #start with nodes that have the most features
         sorted(self.rf_starting_list, key=methodcaller('numFeatures'))
         for rf_node in self.rf_starting_list:
