@@ -67,12 +67,17 @@ class featureInfo():
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
         self.pg_assignment=None
         self.instance_key=None
+        self.rf_ends=[]#Stores orieintation information as which rf-nodes this feature enters/exits
 
     def addRFPointer(self, direction, pointer):
         if direction=="increase":
             self.rf_forward=pointer
         else:
             self.rf_reverse=pointer
+
+    def addEndInfo(self, rf_id, rhs, direction):
+        self.rf_ends.append((rf_id, rhs, direction)) # storing the id of the feature on the rhs for convience. effectively tells you what side *this* feature is on
+
 
     def compareInstance(self, other_feature):
         count1=self.instance_key.count(".")
@@ -741,6 +746,10 @@ class GraphMaker():
             else:
                 self.feature_index[f].instance_key += "."+str(self.cur_rf_node.nodeID)
 
+        #add information regarding which end of this rf-node the features are on
+        self.feature_index[feature_indices[0]].addEndInfo(self.cur_rf_node.nodeID, feature_indices[self.ksize-1], reverse)
+        self.feature_index[feature_indices[self.ksize-1].addEndInfo(self.cur_rf_node.nodeID, feature_indices[self.ksize-1], reverse)
+
         #rf-edges. properties dictated by the relationship of the kmers (flipped or not)
         if self.prev_node!=None:
             if self.prev_reverse:
@@ -982,7 +991,8 @@ class GraphMaker():
             #progression="forward"
             return self.feature_index[feature].rf_forward
 
-    def projectFeature(self, edge_data, kmer_side, orientation, leaving_feature, palindrome, nxt_node):
+    def projectFeature(self, cur_node, edge_data, kmer_side, orientation, leaving_feature, palindrome, nxt_node):
+        to_queue=[] # used to process features with same instance key
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             if not palindrome:
                 sys.stderr.write("logic problem. calculated leaving side does not match")
@@ -992,10 +1002,12 @@ class GraphMaker():
         flip=edge_data["flip"]
         if nxt_node.palindrome:#palindrome can't reliably use rf-edge info
             flip= orientation ^ 0 #xor. palindrome is always forward direction
+        
+        nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
+        nxt_feature=leaving_feature+nxt_feature_info["feature_adj"]
+        
         if palindrome and nxt_node.bidirectional():
             #flip is uncertain
-            nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
-            nxt_feature=leaving_feature+nxt_feature_info["feature_adj"]
             k=self.ksize
             if nxt_feature > leaving_feature:
                 if nxt_feature in nxt_node.features[0] or nxt_feature in nxt_node.assigned_features[0]:
@@ -1017,14 +1029,33 @@ class GraphMaker():
                     nxt_target=nxt_feature
                 else:
                     assert LogicError
-            return(nxt_position, nxt_orientation, nxt_target)
-        elif flip==1:
-            nxt_orientation = not orientation
-        #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
-        nxt_feature_info=self.projection_table[flip][orientation][kmer_side]
-        #"nxt_position" "feature_adj"
-        nxt_target=leaving_feature+nxt_feature_info["rhs_adj"]
-        return(nxt_feature_info['nxt_position'], nxt_orientation, nxt_target)
+            to_queue.append((nxt_position, nxt_orientation, nxt_target))
+        else:
+            if flip==1:
+                nxt_orientation = not orientation
+            #projection_table: flip true/false, orientation forward/reverse true/false, leaving_position right/left true/false
+            #"nxt_position" "feature_adj"
+            nxt_target=leaving_feature+nxt_feature_info["rhs_adj"]
+            to_queue.append((nxt_feature_info['nxt_position'], nxt_orientation, nxt_target))
+
+        #expand projection/target selection based on instance key 
+        instances_pkg = self.anchor_instance_keys.get(self.feature_index[nxt_feature].instance_key, [None,[]])
+        if cur_node.nodeID != instances_pkg[0]:
+            instances_pkg[0]=cur_node.nodeID
+            for other_instance in instances_pkg[1]:
+                instance_info=None
+                #its gotta be one end or the other
+                if self.feature_index[other_instance].rf_ends[0][0] == nxt_node.nodeID:
+                    instance_info = self.feature_index[other_instance].rf_ends[0]
+                else:
+                    instance_info = self.feature_index[other_instance].rf_ends[1]
+                rf_id, rhs, direction = instance_info
+                position = 1 #set to rhs
+                if other_instance!=rhs: # if its on the lhs
+                    position = 0
+                to_queue.append((position, direction, rhs))
+        return to_queue
+
 
     #kmer_side=0 is left side, kmer_side=1 is right
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
@@ -1046,25 +1077,27 @@ class GraphMaker():
             currently_queued=len(node_bundles[bundle_id][0][0])+len(node_bundles[bundle_id][0][1])+len(node_bundles[bundle_id][1][0])+len(node_bundles[bundle_id][1][1]) > 0
             #here look up edge information to project next
             edge_data=self.rf_graph[cur_node.nodeID][nxt_rf_id]
-            nxt_position,nxt_direction,nxt_target=self.projectFeature(edge_data,kmer_side,orientation,leaving_feature, cur_node.palindrome, self.rf_node_index[nxt_rf_id])
-            #structure for node_queue and node_bundles
-            if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
-                pg_node_id=self.feature_index[leaving_feature].pg_assignment
-                nxt_guide=nxt_guide_cat=nxt_guide_side=None
-                if prev_queued and pg_node_id in self.non_anchor_guides and nxt_rf_id in self.non_anchor_guides[pg_node_id]: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
-                    nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
-                else:#first time queueing rfnode. store non_anchor_guides for later
-                #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
-                    if not pg_node_id in self.non_anchor_guides:
-                        self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction,nxt_position)}
+            to_queue = self.projectFeature(cur_node, edge_data,kmer_side,orientation,leaving_feature, cur_node.palindrome, self.rf_node_index[nxt_rf_id])
+            for nxt_position, nxt_direction, nxt_target in to_queue:
+                #structure for node_queue and node_bundles
+                if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
+                    currently_queued=True
+                    pg_node_id=self.feature_index[leaving_feature].pg_assignment
+                    nxt_guide=nxt_guide_cat=nxt_guide_side=None
+                    if prev_queued and pg_node_id in self.non_anchor_guides and nxt_rf_id in self.non_anchor_guides[pg_node_id]: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
+                        nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
+                    else:#first time queueing rfnode. store non_anchor_guides for later
+                    #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
+                        if not pg_node_id in self.non_anchor_guides:
+                            self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction,nxt_position)}
+                        else:
+                            self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
+                    if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
+                        node_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
                     else:
-                        self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
-                if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
-                    node_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
-                else:
-                    node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
-            #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
-            node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
+                        node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
+                node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
             return nxt_rf_id
         return None
 
@@ -1348,24 +1381,20 @@ class GraphMaker():
             # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             to_assign=[]
+            currently_seen=set([])
 
             #PHASE 1: Figure out details and establish if any features have already been assigned, so that they can be used as guides for pg-assignment
             for kmer_side in target_cat:
                 for direction in target_cat:
                     rhs_adj_info=self.rhs_adj_table[direction][kmer_side]
-                    #in the case of an anchor node also add non-target features as potential guides
-                    if cur_node.anchorNode() and (len(targets[kmer_side][0]) + len(targets[kmer_side][1])) > 0:
-                        for rhs_feature in cur_node.features[direction]:
-                            potential_guide = rhs_feature + rhs_adj_info['new_feature_adj']
-                            if self.feature_index[potential_guide].pg_assignment != None:
-                                pg_set.add(self.feature_index[potential_guide].pg_assignment)
-                                instance_key= self.feature_index[potential_guide].instance_key
-                                target_guides.setdefault(instance_key,[]).append(potential_guide)
-                    #also get the targets that have been assigned
+                    #get the targets that have been assigned
                     for rhs_feature in targets[kmer_side][direction]:
                         new_feature=rhs_feature + rhs_adj_info['new_feature_adj']
                         prev_feature= rhs_feature + rhs_adj_info['prev_feature_adj']
                         leaving_feature=rhs_feature + rhs_adj_info['leaving_feature_adj']
+                        cur_instance_key = self.feature_index[new_feature].instance_key
+                        #get the features with matching instance keys that can be co-assigned
+                        instance_info = self.anchor_instance_keys.get(cur_instance_key, [None,[]])
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
                                 print "missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
@@ -1385,6 +1414,14 @@ class GraphMaker():
                             instance_key = self.feature_index[new_feature].instance_key
                             pg_set.add(self.feature_index[new_feature].pg_assignment)
                             target_guides.setdefault(instance_key,[]).append(new_feature)
+                    #in the case of an anchor node also add non-target features as potential guides
+                    if cur_node.anchorNode():
+                        for rhs_feature in cur_node.features[direction]:
+                            potential_guide = rhs_feature + rhs_adj_info['new_feature_adj']
+                            if self.feature_index[potential_guide].pg_assignment != None:
+                                pg_set.add(self.feature_index[potential_guide].pg_assignment)
+                                instance_key= self.feature_index[potential_guide].instance_key
+                                target_guides.setdefault(instance_key,[]).append(potential_guide)
             #PHASE 2:
             #Determine the best guide to use
             #Reorganize by target pg_node so that conflicts and splits can be detected per
@@ -1479,8 +1516,8 @@ class GraphMaker():
                                 print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
                     #make sure that where ever the feature is assigned, that all the other features in this visit, with the same instance key are there too.
                     instance_key = self.feature_index[new_feature].instance_key
-                    if instance_key in target_guides:
-                        self.move_features(assignment, target_guides[instance_key])
+                    #if instance_key in target_guides:
+                    #    self.move_features(assignment, target_guides[instance_key])
                     #queue base on leaving feature
                     if do_queue:
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
@@ -1634,8 +1671,8 @@ class GraphMaker():
                             #assign guide to first feature assigned in this column
                         #    cur_guide = new_feature
                         instance_key = self.feature_index[new_feature].instance_key
-                        if instance_key in guide_dict:
-                            self.move_features(assignment, guide_dict[instance_key])
+                        #if instance_key in guide_dict:
+                        #    self.move_features(assignment, guide_dict[instance_key])
                         guide_dict.setdefault(instance_key,[]).append(new_feature)
                         if conflict:
                             print "NEW BLOCK conflict in pg-node "+str(assignment)
