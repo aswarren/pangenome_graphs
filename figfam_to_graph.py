@@ -700,20 +700,21 @@ class GraphMaker():
     def finalizeInstanceKeys(self):
         f=0
         while f < len(self.feature_index):
-            lv = [int(i) for i in self.feature_index[f].instance_key.split(".")]
-            instance_reverse, instance_palindrome = self.flipKmer(lv)
-            if instance_reverse:
-                lv.reverse()
-            self.feature_index[f].instance_key = ".".join(str(i) for i in lv)
-            # if the instance key has a single anchor node in it then it is an anchor instance key
-            if self.feature_index[f].instance_key in self.anchor_instance_keys:
-                self.anchor_instance_keys[self.feature_index[f].instance_key][1].append(f)
-            else:
-                #check to see if any of the instances are anchor nodes
-                for rf in lv:
-                    if self.rf_node_index[rf].anchorNode():
-                        self.anchor_instance_keys[self.feature_index[f].instance_key]=[None,[f]]
-                        break
+            if self.feature_index[f].instance_key !=None: #if its None then the contig wasn't big enough to create a node
+                lv = [int(i) for i in self.feature_index[f].instance_key.split(".")]
+                instance_reverse, instance_palindrome = self.flipKmer(lv)
+                if instance_reverse:
+                    lv.reverse()
+                self.feature_index[f].instance_key = ".".join(str(i) for i in lv)
+                # if the instance key has a single anchor node in it then it is an anchor instance key
+                if self.feature_index[f].instance_key in self.anchor_instance_keys:
+                    self.anchor_instance_keys[self.feature_index[f].instance_key][1].append(f)
+                else:
+                    #check to see if any of the instances are anchor nodes
+                    for rf in lv:
+                        if self.rf_node_index[rf].anchorNode():
+                            self.anchor_instance_keys[self.feature_index[f].instance_key]=[None,[f]]
+                            break
             f+=1
 
 
