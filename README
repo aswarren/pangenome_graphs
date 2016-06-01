@@ -1,10 +1,1 @@
-12/26/13
-
-I am trying to figure out what is wrong with the parsing of the SOLR query for edge weights.
-
-Also trying to figure out why the new parsing gives a different graph edges/nodes than the old parsing with the same data.
-
-Right now I suspect the ordering of the kmer graph. To try to get similar results I have taken to ordering the kmer graph so the processing ordering will be the same.
-I am testing the solr_parsing branch with a new OrderedDict vs. a branch of master (with old parsing) also using OrderedDict. The results are going into a folder called test_ordering.
-
-The previous results will remain as new_data_old_parsing etc.
+Usage: figfam_to_graph.py figfam_table summary_table output_folder k-size minOrg
