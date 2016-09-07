@@ -1557,6 +1557,9 @@ class GraphMaker():
                                     incoming_guide = rhs_feature-i
                                 else:
                                     incoming_guide = rhs_feature+i
+                                #BUG here in that prebundling happens via instance key. This part assumes that all incoming targets would have
+                                #the previous part of the kmer pre-processed but it isn't beause...prebundling doesn't include assignments.
+                                #at this point all incoming targets have been processed. no part of the target thread kmer should be unassigned.
                                 if self.feature_index[incoming_guide].pg_assignment == None:
                                     assert LogicError("guide must have an assignment")
                                 #the instance key has to be adjusted for the correct position in the kmer
