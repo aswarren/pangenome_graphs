@@ -571,6 +571,7 @@ class GraphMaker():
         self.prev_node=None
         self.prev_indices=[]
         self.rf_starting_list=[]
+        self.visit_number=0
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         #gives position of the newest feature in the next kmer, the adjustment to the leaving feature to get the rhs of next kmer
         self.projection_table=[[[
@@ -853,6 +854,8 @@ class GraphMaker():
         prev_feature=None
         #loop through figfams to create kmers
         for feature in self.feature_parser.parse():
+            if self.eat_repeats and prev_feature and prev_feature.group_id == feature.group_id:
+                continue
             feature.feature_id= len(self.feature_index)
             self.feature_index.append(feature)
             if feature.genome_id not in self.replicon_map:
@@ -879,6 +882,7 @@ class GraphMaker():
             else:#kmer size is less than ksize
                 kmer=None
             prev_feature=feature
+        if self.debug: nx.set_node_attributes(self.rf_graph, "visit", "")
 
 
     def RF_to_PG(self):
@@ -1354,6 +1358,10 @@ class GraphMaker():
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
+		if self.debug:
+            self.visit_number+=1
+            existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
+            self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
         sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
         num_features=len(cur_node.features[0])+len(cur_node.features[1])
@@ -1385,6 +1393,8 @@ class GraphMaker():
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
             to_assign=[]
             currently_seen=set([])
+
+            available_nodes=set([])
 
             #PHASE 1: Figure out details and establish if any features have already been assigned, so that they can be used as guides for pg-assignment
             for kmer_side in target_cat:
@@ -1418,7 +1428,8 @@ class GraphMaker():
                             pg_set.add(self.feature_index[new_feature].pg_assignment)
                             target_guides.setdefault(instance_key,[]).append(new_feature)
                     #in the case of an anchor node also add non-target features as potential guides
-                    if cur_node.anchorNode():
+                    #but to be used here they must be on the same side/direction as incoming targets
+                    if cur_node.anchorNode() and len(targets[kmer_side][direction]):
                         for rhs_feature in cur_node.features[direction]:
                             potential_guide = rhs_feature + rhs_adj_info['new_feature_adj']
                             if self.feature_index[potential_guide].pg_assignment != None:
@@ -1471,7 +1482,7 @@ class GraphMaker():
                     num_split, num_conflict, c1_conflict, assign_list = self.find_conflicts(assign_list, target_guide)
                 if num_split > 0:
                     print "SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets)
-                if num_conflict > 0:
+                elif num_conflict > 0:
                     if c1_conflict:
                         print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
                     else:
@@ -2160,8 +2171,8 @@ def main():
     args = parser.parse_args()
     gmaker=GraphMaker(feature_tab=args.feature_table, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
     gmaker.processFeatures()
-    nx.readwrite.write_gexf(gmaker.rf_graph, args.output_basename+".rf_graph.gexf")
     gmaker.RF_to_PG()
+    nx.readwrite.write_gexf(gmaker.rf_graph, args.output_basename+".rf_graph.gexf")
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
