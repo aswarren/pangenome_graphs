@@ -1263,7 +1263,8 @@ class GraphMaker():
                 self.feature_index[t].pg_assignment = target_pg_id
 
 
-            
+    def get_pg_id(self):
+        return self.num_pg_nodes;
 
     def assign_pg_node(self, prev_feature, new_feature, guide=None):
         cur_pg_id=None
@@ -1357,46 +1358,72 @@ class GraphMaker():
             return None
 
 
-    def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
+
+    class featureInfo():
+        def __init__(self, kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split):
+            self.kmer_side=kmer_side
+            self.direction=direction
+            self.rhs_feature=rhs_feature
+            self.prev_feature=prev_feature
+            self.new_feature=new_feature
+            self.leaving_feature=leaving_feature
+            self.conflict=conflict
+            self.split=split
+
+
+    #keep track of which nodes are available for assignment in this 'column' of the kmer
+    def track_guide(self, col, assignments, pg_node_id, guide_ikey): 
+            assignments[col].setdefault(pg_node_id, {'guide_ikeys':set([]),'features':{}})
+            assignments[col][pg_node_id]['guide_ikeys'].add(guide_ikey)
+
+    def track_feature(self, col, to_assign, new_feature, feature_info, instance_key):
+        if not new_feature in to_assign[-1]['all_features']:
+            to_assign[col]['by_instance'].setdefault(instance_key, set([])).add(feature_info)
+            to_assign[col]['all_features'].add(new_feature)
+
+    def expand_features(self, prev_node, cur_node, targets, guides, node_queue, node_bundles,up_targets=False):
+        assignments = [None] * self.k_size # used to track which features are to be assigned to which pg-nodes. k dictionaries {pg_node_id: {"instance_keys":set([]), "features":{instance_key:set([feature_id])}}}
+        to_assign = [None] * self.k_size # which features to assign, organized by instance_key. k dictionaries {"by_instance": {instance_key:set([feature_id])}, "all_features":set([feature_id])}
+
 		if self.debug:
             self.visit_number+=1
             existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
             self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
         sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
-        num_features=len(cur_node.features[0])+len(cur_node.features[1])
-        if num_features == 0:
-            return
         if (targets!=None):
             num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
         rhs_guide=rhs_guide_cat=None
         target_cat=[0,1]
         target_guides={} #store available guides under their instance_key
         pg_set=set([]) # all the different pg_nodes these features could be assigned to
+        
+        
+        #PHASE 1: Establish if any features have already been assigned, so that they can be used as guides for pg-assignment
 
-        if guide!=None:#a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited
+        for guide in guides: #a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited
             rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
             rhs_guide_cat=guide[1] #used if there are new things in this anchor node
             rhs_guide_side=guide[2]#only really needed if this is a palindrome THIS NEEDS TO BE RENAMED. Its actually the side of the kmer that the guide is good for.
             if rhs_guide != None:
                 rhs_adj_info=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]
-                new_guide=rhs_guide + rhs_adj_info['new_feature_adj']
+                new_guide=rhs_guide + rhs_adj_info['new_feature_adj'] #guides are aligned to the right side and walked left from there
                 instance_key = self.feature_index[new_guide].instance_key
-                pg_set.add(self.feature_index[new_guide].pg_assignment)
-                target_guides[instance_key]=[new_guide]
+                track_guide(-1, assignments, self.feature_index[new_guide].pg_assignment, instance_key)
+                #REPLACED pg_set.add(self.feature_index[new_guide].pg_assignment)
+                #REPLACED target_guides[instance_key]=[new_guide]
 
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
         if (num_targets>0):
             # if there are targets then this isn't the first node visited
-            # this means only one new column aka 'character' in the kmer needs to be expanded (since all kmers only store a representative on the right side)
+            # this means only one new column aka 'character' in the kmer needs to be expanded 
+            # no matter which feature is being 'targeted' only the RHS of this kmer exists in the features structure.
             #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
-            to_assign=[]
-            currently_seen=set([])
+            #REPLACED currently_seen=set([])
 
-            available_nodes=set([])
+            #REPLACED available_nodes=set([])
 
-            #PHASE 1: Figure out details and establish if any features have already been assigned, so that they can be used as guides for pg-assignment
             for kmer_side in target_cat:
                 for direction in target_cat:
                     rhs_adj_info=self.rhs_adj_table[direction][kmer_side]
@@ -1417,25 +1444,35 @@ class GraphMaker():
                                 #SHOULD THIS REALLY BE HERE?
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                         else:
-                            cur_node.features[direction].remove(rhs_feature)
-                            to_assign.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False))
-                        #this initial loop through the targets is really just to see if any have already been assigned
-                        if self.feature_index[new_feature].pg_assignment != None:
-                            rhs_guide = rhs_feature
-                            rhs_guide_cat=direction
-                            rhs_guide_side=kmer_side #need this for palindromes
-                            instance_key = self.feature_index[new_feature].instance_key
-                            pg_set.add(self.feature_index[new_feature].pg_assignment)
-                            target_guides.setdefault(instance_key,[]).append(new_feature)
+                            #this initial loop through the targets is really just to see if any have already been assigned
+                            if self.feature_index[new_feature].pg_assignment != None:
+                                rhs_guide = rhs_feature
+                                rhs_guide_cat=direction
+                                rhs_guide_side=kmer_side #need this for palindromes
+                                #REPLACED pg_set.add(self.feature_index[new_feature].pg_assignment)
+                                #REPLACED target_guides.setdefault(instance_key,[]).append(new_feature)
+                                self.track_guide(-1, assignments, self.feature_index[new_feature].pg_assignment, cur_instance_key)
+                            else:
+                                cur_node.features[direction].remove(rhs_feature)
+                                cur_info=featureInfo(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
+                                self.track_feature(-1, to_assign, new_feature, cur_info, cur_instance_key)
                     #in the case of an anchor node also add non-target features as potential guides
                     #but to be used here they must be on the same side/direction as incoming targets
                     if cur_node.anchorNode() and len(targets[kmer_side][direction]):
                         for rhs_feature in cur_node.features[direction]:
                             potential_guide = rhs_feature + rhs_adj_info['new_feature_adj']
                             if self.feature_index[potential_guide].pg_assignment != None:
-                                pg_set.add(self.feature_index[potential_guide].pg_assignment)
+                                #REPLACED pg_set.add(self.feature_index[potential_guide].pg_assignment)
                                 instance_key= self.feature_index[potential_guide].instance_key
-                                target_guides.setdefault(instance_key,[]).append(potential_guide)
+                                #REPLACED target_guides.setdefault(instance_key,[]).append(potential_guide)
+                                
+                                #????  CAN you reasonably USE -1 here OR DOES it need to be kmer_side ????
+                                self.track_guide(-1, assignments, self.feature_index[potential_guide].pg_assignment, instance_key)
+                                
+            #if there is nothing to assign leave
+            num_features= sum(len(i["all_features"]) for i in to_assign)
+            if num_features == 0:
+                return
             #PHASE 2:
             #Determine the best guide to use
             #Reorganize by target pg_node so that conflicts and splits can be detected per
