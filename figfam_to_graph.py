@@ -1381,6 +1381,10 @@ class GraphMaker():
             to_assign[col]['by_instance'].setdefault(instance_key, set([])).add(feature_info)
             to_assign[col]['all_features'].add(new_feature)
 
+    #right now kmer_side is 0 to indicate left and 1 to indicate right
+    def side_to_kcoord(self, kmer_side):
+        return kmer_side*self.ksize
+
     def expand_features(self, prev_node, cur_node, targets, guides, node_queue, node_bundles,up_targets=False):
         assignments = [None] * self.k_size # used to track which features are to be assigned to which pg-nodes. k dictionaries {pg_node_id: {"instance_keys":set([]), "features":{instance_key:set([feature_id])}}}
         to_assign = [None] * self.k_size # which features to assign, organized by instance_key. k dictionaries {"by_instance": {instance_key:set([feature_id])}, "all_features":set([feature_id])}
@@ -1409,7 +1413,7 @@ class GraphMaker():
                 rhs_adj_info=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]
                 new_guide=rhs_guide + rhs_adj_info['new_feature_adj'] #guides are aligned to the right side and walked left from there
                 instance_key = self.feature_index[new_guide].instance_key
-                track_guide(-1, assignments, self.feature_index[new_guide].pg_assignment, instance_key)
+                track_guide(self.side_to_kcoord(rhs_guide_side), assignments, self.feature_index[new_guide].pg_assignment, instance_key)
                 #REPLACED pg_set.add(self.feature_index[new_guide].pg_assignment)
                 #REPLACED target_guides[instance_key]=[new_guide]
 
@@ -1446,16 +1450,16 @@ class GraphMaker():
                         else:
                             #this initial loop through the targets is really just to see if any have already been assigned
                             if self.feature_index[new_feature].pg_assignment != None:
-                                rhs_guide = rhs_feature
-                                rhs_guide_cat=direction
-                                rhs_guide_side=kmer_side #need this for palindromes
+                                #REPLACED rhs_guide = rhs_feature
+                                #REPLACED rhs_guide_cat=direction
+                                #REPLACED rhs_guide_side=kmer_side #need this for palindromes
                                 #REPLACED pg_set.add(self.feature_index[new_feature].pg_assignment)
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(new_feature)
-                                self.track_guide(-1, assignments, self.feature_index[new_feature].pg_assignment, cur_instance_key)
+                                self.track_guide(self.side_to_kcord(kmer_side), assignments, self.feature_index[new_feature].pg_assignment, cur_instance_key)
                             else:
                                 cur_node.features[direction].remove(rhs_feature)
                                 cur_info=featureInfo(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
-                                self.track_feature(-1, to_assign, new_feature, cur_info, cur_instance_key)
+                                self.track_feature(self.side_to_kcord(kmer_side), to_assign, new_feature, cur_info, cur_instance_key)
                     #in the case of an anchor node also add non-target features as potential guides
                     #but to be used here they must be on the same side/direction as incoming targets
                     if cur_node.anchorNode() and len(targets[kmer_side][direction]):
@@ -1466,8 +1470,7 @@ class GraphMaker():
                                 instance_key= self.feature_index[potential_guide].instance_key
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(potential_guide)
                                 
-                                #????  CAN you reasonably USE -1 here OR DOES it need to be kmer_side ????
-                                self.track_guide(-1, assignments, self.feature_index[potential_guide].pg_assignment, instance_key)
+                                self.track_guide(self.side_to_kcord(kmer_side), assignments, self.feature_index[potential_guide].pg_assignment, instance_key)
                                 
             #if there is nothing to assign leave
             num_features= sum(len(i["all_features"]) for i in to_assign)
