@@ -562,6 +562,9 @@ class GraphMaker():
         self.group_index=[]
         self.context_bin=set([])
         self.feature_index=[]
+        self.debug = False
+        self.prebundle = False
+        self.eat_repeats =False
         self.anchor_instance_keys={} #structured as {instance_key, [pg_assignment, [features with this instance key]]}
         self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
         #self.ignore_fams=ignore_fams
@@ -1047,7 +1050,8 @@ class GraphMaker():
 
         #expand projection/target selection based on instance key 
         instances_pkg = self.anchor_instance_keys.get(self.feature_index[nxt_feature].instance_key, [None,[]])
-        if cur_node.nodeID != instances_pkg[0]:
+        #Turning off prebundling logic for now because it causes problems
+        if self.prebundle and cur_node.nodeID != instances_pkg[0]:
             instances_pkg[0]=cur_node.nodeID
             for other_instance in instances_pkg[1]:
                 instance_info=None
@@ -1358,7 +1362,7 @@ class GraphMaker():
 
 
     def expand_features(self, prev_node, cur_node, targets, guide, node_queue, node_bundles,up_targets=False):
-		if self.debug:
+        if self.debug:
             self.visit_number+=1
             existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
             self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
@@ -1569,8 +1573,8 @@ class GraphMaker():
                                 else:
                                     incoming_guide = rhs_feature+i
                                 #BUG here in that prebundling happens via instance key. This part assumes that all incoming targets would have
-                                #the previous part of the kmer pre-processed but it isn't beause...prebundling doesn't include assignments.
-                                #at this point all incoming targets have been processed. no part of the target thread kmer should be unassigned.
+                                #BUG the previous part of the kmer pre-processed but it isn't beause...prebundling doesn't include assignments.
+                                #At this point all incoming targets have been processed. no part of the target thread kmer should be unassigned.
                                 if self.feature_index[incoming_guide].pg_assignment == None:
                                     assert LogicError("guide must have an assignment")
                                 #the instance key has to be adjusted for the correct position in the kmer
