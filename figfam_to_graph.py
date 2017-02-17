@@ -1371,6 +1371,42 @@ class GraphMaker():
             self.split=split
 
 
+    def determine_assignment(self):
+
+        #PHASE 2:
+        #Determine the best guide to use
+        #Reorganize by target pg_node so that conflicts and splits can be detected per
+        guide_to_assign={}
+        for feature_tuple in to_assign:
+            #unpack
+            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= feature_tuple
+            #determine the best guide to use
+            if len(pg_set) > 1:
+                instance_key = self.feature_index[new_feature].instance_key
+                if instance_key in target_guides:
+                    target_guide = target_guides[instance_key][0]
+                else:
+                    max_key = self.maxInstanceOverlap(instance_key, target_guides.keys())
+                    if max_key != None:
+                        target_guide = target_guides[max_key][0]
+                    else:
+                        target_guide = None
+            elif len(target_guides.keys()) >= 1: #all instance keys refer to the same pg-node
+                target_guide = target_guides.values()[0][0]
+            else:
+                target_guide = None
+            if target_guide != None:
+                pg = self.feature_index[target_guide].pg_assignment
+                guide_to_assign.setdefault(pg,(target_guide, []))[1].append(feature_tuple)
+            else:
+                guide_to_assign.setdefault(None,(target_guide, []))[1].append(feature_tuple)
+
+
+                #if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
+                    #these should always be the same except for palindromes
+                #    assert LogicError
+
+
     #keep track of which nodes are available for assignment in this 'column' of the kmer
     def track_guide(self, col, assignments, pg_node_id, guide_ikey): 
             assignments[col].setdefault(pg_node_id, {'guide_ikeys':set([]),'features':{}})
@@ -1385,7 +1421,7 @@ class GraphMaker():
     def side_to_kcoord(self, kmer_side):
         return kmer_side*self.ksize
 
-    def expand_features(self, prev_node, cur_node, targets, guides, node_queue, node_bundles,up_targets=False):
+    def expand_features(self, prev_node, cur_node, targets, revisit_guides, node_queue, node_bundles,up_targets=False):
         assignments = [None] * self.k_size # used to track which features are to be assigned to which pg-nodes. k dictionaries {pg_node_id: {"instance_keys":set([]), "features":{instance_key:set([feature_id])}}}
         to_assign = [None] * self.k_size # which features to assign, organized by instance_key. k dictionaries {"by_instance": {instance_key:set([feature_id])}, "all_features":set([feature_id])}
 
@@ -1404,12 +1440,21 @@ class GraphMaker():
         
         
         #PHASE 1: Establish if any features have already been assigned, so that they can be used as guides for pg-assignment
-
-        for guide in guides: #a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited
-            rhs_guide=guide[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
-            rhs_guide_cat=guide[1] #used if there are new things in this anchor node
-            rhs_guide_side=guide[2]#only really needed if this is a palindrome THIS NEEDS TO BE RENAMED. Its actually the side of the kmer that the guide is good for.
+        #TODO from the revist guide populate the to_assign structure
+        #NOTE that the revist guide itself needs to be restructured to include the multiple choices that may have been present or created on the last visit
+        #Assuming its possible for that to happen in a palindrome or duplicate node 
+        for guide_array in revisit_guides: #a guide is incoming when pass up new info to a non-anchor nonde via DFS ascending. and need to pass the information DOWN to a node that has already been visited
+            rhs_guide=guide_array[0] #NOTE this could be combined with incoming guide parameter (maybe) since it will need a similar structure
+            rhs_guide_cat=guide_array[1] #used if there are new things in this anchor node
+            rhs_guide_side=guide_array[2]#only really needed if this is a palindrome THIS NEEDS TO BE RENAMED. Its actually the side of the kmer that the guide is good for.
+            #this is a bit complicated. if the kmer is a palindrome you can't be sure what side of the kmer the feature will be on except from the previous kmer(s) and the features passed in 
+            #from it (which is why a palindrome isn't an anchor node). In each kmer's data structure only the RHS feature is recorded. A revist guide is only used when this node has 
+            #already been visited.
+            #What happens next is the incoming guide is converted to the RHS of this kmer based on the information about what the edge type implies about the direction/side
             if rhs_guide != None:
+                #TODO find the correct location to flag if there are multiple guides necessary in a duplicate or palindrome node
+                #TODO NOTE might need to bring the storage of guides in here from the parent function since would have to be more picky
+                #TODO NOTE can use the visit numbers as references to array of guides. though that supposes the current system isn't good enough
                 rhs_adj_info=self.rhs_adj_table[rhs_guide_cat][rhs_guide_side]
                 new_guide=rhs_guide + rhs_adj_info['new_feature_adj'] #guides are aligned to the right side and walked left from there
                 instance_key = self.feature_index[new_guide].instance_key
@@ -1469,7 +1514,6 @@ class GraphMaker():
                                 #REPLACED pg_set.add(self.feature_index[potential_guide].pg_assignment)
                                 instance_key= self.feature_index[potential_guide].instance_key
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(potential_guide)
-                                
                                 self.track_guide(self.side_to_kcord(kmer_side), assignments, self.feature_index[potential_guide].pg_assignment, instance_key)
                                 
             #if there is nothing to assign leave
@@ -1478,37 +1522,6 @@ class GraphMaker():
                 return
             #PHASE 2:
             #Determine the best guide to use
-            #Reorganize by target pg_node so that conflicts and splits can be detected per
-            guide_to_assign={}
-            for feature_tuple in to_assign:
-                #unpack
-                kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= feature_tuple
-                #determine the best guide to use
-                if len(pg_set) > 1:
-                    instance_key = self.feature_index[new_feature].instance_key
-                    if instance_key in target_guides:
-                        target_guide = target_guides[instance_key][0]
-                    else:
-                        max_key = self.maxInstanceOverlap(instance_key, target_guides.keys())
-                        if max_key != None:
-                            target_guide = target_guides[max_key][0]
-                        else:
-                            target_guide = None
-                elif len(target_guides.keys()) >= 1: #all instance keys refer to the same pg-node
-                    target_guide = target_guides.values()[0][0]
-                else:
-                    target_guide = None
-                if target_guide != None:
-                    pg = self.feature_index[target_guide].pg_assignment
-                    guide_to_assign.setdefault(pg,(target_guide, []))[1].append(feature_tuple)
-                else:
-                    guide_to_assign.setdefault(None,(target_guide, []))[1].append(feature_tuple)
-
-
-                    #if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
-                        #these should always be the same except for palindromes
-                    #    assert LogicError
-
 
             #PHASE 4:Make assignments based on the previous two phases
             for pg_node, assign_tuple in guide_to_assign.iteritems():
