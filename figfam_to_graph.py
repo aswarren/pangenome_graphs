@@ -76,7 +76,7 @@ class featureInfo():
             self.rf_reverse=pointer
 
     def addEndInfo(self, rf_id, rhs, direction):
-        self.rf_ends.append((rf_id, rhs, direction)) # storing the id of the feature on the rhs for convience. effectively tells you what side *this* feature is on
+        self.rf_ends.append((rf_id, rhs, direction)) # storing the id of the feature on the rhs for convenience. effectively tells you what side *this* feature is on
 
 
     def compareInstance(self, other_feature):
@@ -572,6 +572,7 @@ class GraphMaker():
         self.kmerLookup={}#stores array for contig info and set for pointing to the next kmer 
         self.cur_rf_node=None
         self.prev_node=None
+        self.pg_node_alt={}#for a given visit to an rf-node, for a given kmer position if there are multiple pg-nodes x=set([p1, p2, p3]) store it as pg_node_alt[pg1]=x, pg_node_alt[pg2]=x, etc.
         self.prev_indices=[]
         self.rf_starting_list=[]
         self.visit_number=0
@@ -709,15 +710,16 @@ class GraphMaker():
                 instance_reverse, instance_palindrome = self.flipKmer(lv)
                 if instance_reverse:
                     lv.reverse()
-                self.feature_index[f].instance_key = ".".join(str(i) for i in lv)
+                self.feature_index[f].instance_key_orig = ".".join(str(i) for i in lv)
+                self.feature_index[f].instance_key = self.feature_index[f].instance_key_orig+"."+str(self.feature_index[f].repeat_num)
                 # if the instance key has a single anchor node in it then it is an anchor instance key
-                if self.feature_index[f].instance_key in self.anchor_instance_keys:
-                    self.anchor_instance_keys[self.feature_index[f].instance_key][1].append(f)
+                if self.feature_index[f].instance_key_orig in self.anchor_instance_keys:
+                    self.anchor_instance_keys[self.feature_index[f].instance_key_orig][1].append(f)
                 else:
                     #check to see if any of the instances are anchor nodes
                     for rf in lv:
                         if self.rf_node_index[rf].anchorNode():
-                            self.anchor_instance_keys[self.feature_index[f].instance_key]=[None,[f]]
+                            self.anchor_instance_keys[self.feature_index[f].instance_key_orig]=[None,[f]]
                             break
             f+=1
 
@@ -777,7 +779,7 @@ class GraphMaker():
             self.feature_index[self.prev_indices[leaving_position]].addRFPointer(direction="increase", pointer=self.cur_rf_node.nodeID) #record which direction a feature is leaving the k-window and what rf-node it is traversing to
             self.feature_index[feature_indices[reverse_lp]].addRFPointer(direction="decrease", pointer=self.prev_node.nodeID) # to enable thread based navigation.
             if not self.rf_graph.has_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID):
-                rflip = fflip = self.prev_reverse ^ reverse #xor. if kmers are flipped to relative to each other 
+                rflip = fflip = self.prev_reverse ^ reverse #xor. if kmers are flipped relative to each other 
                 if palindrome:
                     fflip = "no"
                 if self.prev_node.palindrome:
@@ -856,9 +858,21 @@ class GraphMaker():
         kmer_q=deque()
         prev_feature=None
         #loop through figfams to create kmers
+        repeat_num=1
+        update_repeats=[]
         for feature in self.feature_parser.parse():
-            if self.eat_repeats and prev_feature and prev_feature.group_id == feature.group_id:
-                continue
+            if prev_feature and prev_feature.group_id == feature.group_id and prev_feature.contig_id == feature.contig_id:
+                repeat_num+=1
+                update_repeats.append(prev_feature)
+                if self.eat_repeats:
+                    continue
+            else:
+                if repeat_num >1:
+                    update_repeats.append(prev_feature)
+                    for to_up in update_repeats:
+                        to_up.repeat =repeat_num
+                repeat_num=1
+                update_repeats=[]
             feature.feature_id= len(self.feature_index)
             self.feature_index.append(feature)
             if feature.genome_id not in self.replicon_map:
@@ -1079,6 +1093,8 @@ class GraphMaker():
         #If there are no unassigned features in the nxt node is there any point in visiting? conflict detection etc.?
         if nxt_rf_id!=None and self.rf_node_index[nxt_rf_id].numFeatures() > 0:
             bundle_id=nxt_rf_id
+            cur_rf_id = cur_node.nodeID
+
             if up_queue:
                 bundle_id=-1
             if(not bundle_id in node_bundles):
@@ -1093,25 +1109,53 @@ class GraphMaker():
                 #structure for node_queue and node_bundles
                 if not currently_queued and not up_queue: # if its being passed up (-1) then no need to queue
                     currently_queued=True
-                    pg_node_id=self.feature_index[leaving_feature].pg_assignment
-                    nxt_guide=nxt_guide_cat=nxt_guide_side=None
-                    if prev_queued and pg_node_id in self.non_anchor_guides and nxt_rf_id in self.non_anchor_guides[pg_node_id]: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
-                        nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
+                    leaving_pg_id=self.feature_index[leaving_feature].pg_assignment
+                    #nxt_guide=nxt_guide_cat=nxt_guide_side=None
+                    if prev_queued and leaving_pg_id in self.non_anchor_guides and nxt_rf_id in self.non_anchor_guides[leaving_pg_id]: #if rfnode previously been queued and not currently then its a re-descent and you need a guide to appropriately assign features to pg-nodes
+                        #nxt_guide, nxt_guide_cat, nxt_guide_side = self.non_anchor_guides[pg_node_id][nxt_rf_id]
+                        guide_obj = self.non_anchor_guides[leaving_pg_id][nxt_rf_id]
                     else:#first time queueing rfnode. store non_anchor_guides for later
-                    #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                         if not pg_node_id in self.non_anchor_guides:
                             self.non_anchor_guides[pg_node_id]={nxt_rf_id:(nxt_target,nxt_direction,nxt_position)}
                         else:
                             self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
+                    #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                     if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
-                        node_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                        node_queue.appendleft((nxt_rf_id,guide_obj))
                     else:
-                        node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                        node_queue.append((nxt_rf_id,guide_obj))
                 #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
                 node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
             return nxt_rf_id
         return None
 
+    #This should only be called on non-anchor nodes 
+    def storeRevisitGuides(self, cur_rf_id, pre_assignments):
+        #the leaving pg_node_id is used to distinguish the visit to an rf_node since an rf-node to rf-node transition can happen
+        #multiple times. Instead of making this a pre-visit operation make it a visit operation. Where every
+        #leaving pg-node points at the the same multi-pg-node array. That way no matter which is used
+        #to look it up on re-descent it will give all pg-options.
+        for i in [0,self.ksize-1]:
+            for pg in pre_assignments[i]:
+                for ik, features in pre_assignments[i][pg]["features"].iteritems():
+                    for f in features:
+                        cur_guide = f
+                        cur_guide_cat = int(f < 0)
+                        cur_guide_side = int(i == self.ksize-1)
+                        #the same information that is used to queue a feature (that it is on the leaving side and what the next rf_node/feature will be 
+                        #should be able to be used in REVERSE to project/find the feature that is used to come here. AND THUS the pg_node that 
+                        #points here 
+                        leaving_pg_id = SEE ABOVE
+                        multi_guide = {pg_id: {'nxt_guide'=None,'nxt_guide_cat'=None,'nxt_guide_side'=None}}
+                        self.non_anchor_guides.setdefault(leaving_pg_id,{}).setdefault(cur_rf_id,{}).setdefault(pg_id, dict(nxt_guide=cur_guide, nxt_guide_cat=cur_guide_cat, nxt_guide_side=cur_guide_side)) 
+
+
+    def num_features_pg_node(self, node_id):
+        num_features=0
+        for g in self.pg_graph.node[node_id]['features']:
+            for c in self.pg_graph.node[node_id]['features'][g]:
+                num_features+=len(self.pg_graph.node[node_id]['features'][g][c])
+        return num_features
 
     def merge_pg_node(self, node_id1, node_id2):
         print "merging "+str(node_id1)+" "+str(node_id2)
@@ -1189,8 +1233,7 @@ class GraphMaker():
                 insert_level="feature"
         return (insert_level)
 
-    def detect_conflict(self, new_feature, guide):
-        cur_pg_id=self.feature_index[guide].pg_assignment
+    def detect_conflict(self, new_feature, cur_pg_id):
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         insert_level=None
@@ -1205,6 +1248,7 @@ class GraphMaker():
             insert_level="contig"
         else:
             insert_level="feature"
+            split =True
         if self.context_levels[insert_level] > self.context_levels[self.context]:
             conflict=True
             cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
@@ -1228,13 +1272,13 @@ class GraphMaker():
                         end_fragments=True
                         break
                     i+=1
-            if self.context!="feature" and \
-            genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
-            sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
-                for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+            #if self.context!="feature" and \
+            #genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
+            #sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
+            #    for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
                     #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
-                    if abs(cf-new_feature)< self.ksize:
-                        split=True
+            #        if abs(cf-new_feature)< self.ksize:
+            #            split=True
             
         return split, conflict, end_fragments
 
@@ -1270,7 +1314,7 @@ class GraphMaker():
     def get_pg_id(self):
         return self.num_pg_nodes;
 
-    def assign_pg_node(self, prev_feature, new_feature, guide=None):
+    def assign_pg_node(self, prev_feature, new_feature, pg_node):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
         conflict=False
@@ -1278,25 +1322,25 @@ class GraphMaker():
         sequence_id=self.feature_index[new_feature].contig_id
         #if there is already a node for this feature
         if self.feature_index[new_feature].pg_assignment != None:
-            if (guide != None):
-                if self.feature_index[guide].pg_assignment != self.feature_index[new_feature].pg_assignment:
+            if (pg_node != None):
+                if pg_node != self.feature_index[new_feature].pg_assignment:
                     cur_pg_id = self.feature_index[new_feature].pg_assignment
                     #cur_pg_id, conflict =self.merge_pg_node(self.feature_index[guide].pg_assignment, self.feature_index[new_feature].pg_assignment)
                 #else they are EQUAL
                 else:
-                    cur_pg_id = self.feature_index[new_feature].pg_assignment
+                    cur_pg_id = pg_node
             #else there is no guide but this feature is already assigned
             else:
                 cur_pg_id = self.feature_index[new_feature].pg_assignment
 
         #if this feature has yet to be assigned to a pg-node
         else:
-            if guide!=None:
-                insert_level=None
-                cur_pg_id=self.feature_index[guide].pg_assignment
-                insert_level = self.insert_feature(cur_pg_id, new_feature)
-                if self.context_levels[insert_level] > self.context_levels[self.context]:
-                    conflict=True
+            if pg_node!=None:
+                #REPLACED insert_level=None
+                cur_pg_id=pg_node
+                #REPLACED insert_level = self.insert_feature(cur_pg_id, new_feature)
+                #REPLACED if self.context_levels[insert_level] > self.context_levels[self.context]:
+                #REPLACED    conflict=True
 
             else:
                 cur_pg_id=self.num_pg_nodes
@@ -1319,27 +1363,6 @@ class GraphMaker():
                 conflicted.add(new_feature)
         return cur_pg_id, conflict
 
-    def find_conflicts(self, to_assign, new_guide):
-        repack=[]
-        num_conflict=0
-        num_split=0
-        num_class1=0
-        for cur_tuple in to_assign:
-            #unpack
-            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
-            if new_guide != new_feature:
-                split, conflict, class1_conflict = self.detect_conflict(new_feature, new_guide)
-                if conflict:
-                    num_conflict+=1
-                if split:
-                    num_split+=1
-                if class1_conflict:
-                    num_class1+=1
-            repack.append((kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split))
-        if num_class1 >0:
-            print "there are "+str(num_class1)+" class 1 conflicts"
-        class1= num_conflict == num_class1
-        return num_split, num_conflict, class1, repack
 
     def maxInstanceOverlap(self, instance_key, comparison_list):
         instance_parts=set(instance_key.split('.'))
@@ -1354,16 +1377,13 @@ class GraphMaker():
             elif cur_intersect > 0 and cur_intersect == max_intersect:
                 max_key.append(c)
         if len(max_key) == 0:
-            return None
-        elif len(max_key) == 1:
-            return max_key[0]
+            return [None]
         else:
-            print "THERE WAS A MAX KEY TIE"
-            return None
+            return max_key
 
 
 
-    class featureInfo():
+    class featureContext():
         def __init__(self, kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split):
             self.kmer_side=kmer_side
             self.direction=direction
@@ -1374,9 +1394,98 @@ class GraphMaker():
             self.conflict=conflict
             self.split=split
 
-    #considering available guides/pg-nodes and conflicts to determine round of assignments
-    def determine_assignments(self):
 
+    def findKConflicts(self, pre_assignments, conflict_assignments):
+        i=self.ksize-1
+        while i > 0:
+            for pg in pre_assignments[i]:
+                for ik, features in pre_assignments[i][pg]["features"].iteritems():
+                    for f in features:
+                        #think about how the conflict should be represented overall
+                        #look at the data structure required for determineAssignments
+                        #start with that.
+                        shift, conflict, end_fragments = self.detect_conflict(f, pg)
+                        if shift:
+                            conflict_assignments[i]["shift"].setdefault(pg, {'features':{}})
+                            conflict_assignments[i]["shift"][pg]["features"].setdefault(ik,set([])).update(features)
+                        elif end_fragments:
+                            conflict_assignments[i]["c2_conflict"].setdefault(pg, {'features':{}})
+                            conflict_assignments[i]["c2_conflict"][pg]["features"].setdefault(ik,set([])).update(features)
+                        else:
+                            conflict_assignments[i]["c1_conflict"].setdefault(pg, {'features':{}})
+                            conflict_assignments[i]["c1_conflict"][pg]["features"].setdefault(ik,set([])).update(features)
+            i-=1            
+
+
+    #considering available guides/pg-nodes and conflicts to determine round of assignments
+    #put new node assignments under None
+    def determineAssignments(self, feature_pile, pre_assignments, conflicts=None):
+        if conflicts == None:
+            i=self.ksize-1
+            while i > 0:
+                for ik, features in feature_pile[i]["by_instance"].iteritems():
+                    max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
+                    if max_keys[0] == None: #no guides exist
+                        #create new node and put it in
+                        tmp_id = len(pre_assignments[i]["new_nodes"].keys())
+                        pre_assignments[i]["new_nodes"].setdefault(tmp_id, {'guides':{},'features':{}})
+                        pre_assignments[i]["new_nodes"][tmp_id]["features"].setdefault(ik,set([])).update(features)
+                    elif len(max_keys) == 1:
+                        pg_node = pre_assignments[i]["inst_key_map"][max_keys[0]]
+                        pre_assignments[i]["assignments"][pg_node]["features"].setdefault(ik,set([])).update(features)
+                    elif len(max_keys) > 1:
+                        #pick the one with the most features. this should be rare.
+                        sys.stderr.write("Tie for pg-node selection based on instance keys "+" ".join(max_keys)+"\n")
+                        max_features =0
+                        max_node = None
+                        mk = None
+                        for k in max_keys:
+                            pg_node = pre_assignments[i]["inst_key_map"][k]
+                            num_features=self.num_features_pg_node(pg_node)
+                            if num_features > max_features:
+                                max_features=num_features
+                                max_node = pg_node
+                        pre_assignments[i]["assignments"][max_node]["features"].setdefault(ik,set([])).update(features)
+                i-=1
+        else:
+            i=self.ksize-1
+            while i > 0:
+                #if there is a shift conflict create a new node. only need the pg_node and the offending pre_assignment instance key
+                if "shift" in conflicts[i] and len(conflicts[i]["shift"]) > 0:
+                    for pg in conflicts[i]["shift"]["features"]
+                        for ik in conflicts[i]["shift"]["features"][pg]:
+                            tmp_id = len(pre_assignments[i]["new_nodes"].keys())
+                            pre_assignments[i]["new_nodes"].setdefault(tmp_id, {'guides':{},'features':{}})
+                            pre_assignments[i]["new_nodes"][tmp_id]["features"][ik]=conflicts[i]["shift"][pg]["features"][ik]
+                            #take out features of pre_assignments
+                            pre_assignments[i]["assignments"][pg]["features"].pop(ik)
+
+    
+    #store alternate pg-nodes at a given k-position
+    def storeAlternates(self, pg_ids):
+        assert type(pg_ids == set)
+        for i in pg_ids:
+            self.pg_node_alt.setdefault(i, set([])).update(pg_ids)
+
+    #make assignments that are in pre_assignments
+    def makeAssignments(self, pre_assignments):
+        i=self.ksize-1
+        while i > 0:
+            new_nodes= set(pre_assignments[i]["assignments"].keys()+pre_assignments[i]["new_nodes"].keys())
+            if len(new_nodes) > 1: storeAlternates(new_nodes)
+            for pg in pre_assignments[i]["assignments"]:
+                for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
+                    for f in features:
+                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg)
+            for pg in pre_assignments[i]["new_nodes"]:
+                for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].iteritems():
+                    for f in features:
+                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=None)
+            i-=1
+                        
+                        
+
+    def oldMethod(self):
         #PHASE 2:
         #Determine the best guide to use
         #Reorganize by target pg_node so that conflicts and splits can be detected per
@@ -1480,6 +1589,7 @@ class GraphMaker():
         return x-1
 
     #walk down the kmer and fill out to_assign
+    #process features remaining in cur_node.features
     def kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node):
             i=0
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
@@ -1495,13 +1605,13 @@ class GraphMaker():
                         new_feature=rhs_feature+new_feature_adj
                         prev_feature=rhs_feature+prev_feature_adj
                         if self.feature_index[new_feature].pg_assignment != None:
-                            self.track_guide(pre_assignments, new_feature, self.ksize-(i+1))
+                            self.track_guide(pre_assignments, new_feature, self.ksize-(i+1), negative=direction)
                             #track feature to "add" in case of anchor instance key expansion AND/OR pg-edge addition
-                            feature_info=featureInfo(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False):
+                            feature_info=featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False):
                             self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key):
                         else:
                             #GET FEATURE_INFO HERE??????
-                            feature_info=featureInfo(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False):
+                            feature_info=featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False):
                             self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key):
                                     
                         cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
@@ -1515,31 +1625,62 @@ class GraphMaker():
                             self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                 i+=1
 
-    #walk down the kmer and fill out guides based on those present on LHS or RHS
-    def fill_guides(self, pre_assignments, rhs_guide, direction):
-        pg_node_id = self.feature_index[new_guide].pg_assignment
-        instance_key = instance_key = self.feature_index[new_guide].instance_key
-        direct = None
-        if adjustment < 0:
-            direct = self.increment
-        else:
-            direct = self.decrement
-        count =0
-        while abs(count) < self.ksize:
-            #TODO double check on rhs_adj_table 2nd half
+    def getFeatureRecord(self, feature):
+        return self.feature_index[abs(feature)]
+
+    #for all features in all k positions. check if the instance key for the feature is an anchor instance key.
+    #if so expand it through the whole kmer. this shouldn't be used for palindromes since threads here can lack exact orientation relative to the bundle.
+    #the only time this can/needs to be used is when it is a duplicate node since anchor nodes will pick up all threads
+    #ACTUALLY palindromes should be fine because the anchor instance key expansion will place it in the position it needs to be in.
+    #if its a starting node then its an anchor node (no need to do middle, or lhs)
+    #if its a palindrome can't do this
+    #if its a duplicate node then the previous k-1 features will have been checked.
+    #NOTE anchor instance keys are really just a move-ahead proceedure since eventually when that anchor rf-node is encountered
+    #it will pick up all combine all threads and walk back the ones that haven't been added.
+    #instance keys themselves will still be used to segregate assignments when multiple pg-nodes are available
+    #also the concept of anchor keys is still valid since that guarantee is held up when the anchor rf-node is encountered.
+    def anchorInstanceExpansion(self, feature_pile, cur_node):
+        if cur_node.palindrome or (not cur_node.duplicate):
+            return False #nothing expanded
+        #expand projection/target selection based on instance key 
+        instances_pkg = self.anchor_instance_keys.get(self.feature_index[nxt_feature].instance_key, [None,[]])
         
 
+
+
+    #walk down the kmer and fill out guides based on those present on LHS or RHS
+    #features are signed in pre_assignments
+    def fill_guides(self, pre_assignments):
+        lhs =set([])
+        rhs =set([])
+        lhs_sets = [pre_assignments[0]["assignments"][pg_node]["guides"][instance_key] for instance_key in pre_assignments[0]["assignments"][pg_node]["guides"] for pg_node in pre_assignments[0]["assignments"]]
+        rhs_sets = [pre_assignments[self.ksize-1]["assignments"][pg_node]["guides"][instance_key] for instance_key in pre_assignments[self.ksize-1]["assignments"][pg_node]["guides"] for pg_node in pre_assignments[self.ksize-1]["assignments"]]
+        for x in lhs_sets: lhs.update(x)
+        for x in rhs_sets: rhs.update(x)
+        count = 1
+        while count < self.ksize:
+            for sf in lhs:
+                cur_sf = sf + count
+                self.track_guide(pre_assignments, abs(cur_sf), count, negative=(cur_sf < 0)) 
+            for sf in rhs:
+                cur_sf = sf - count
+                self.track_guide(pre_assignments, abs(cur_sf), (self.ksize-1)-count, negative=(cur_sf < 0))
+            count+=1
+
+
     #keep track of which nodes are available for assignment in this 'column' of the kmer
-    def track_guide(self, pre_assignments, new_guide, col):
-        pg_node_id=self.feature_index[new_guide].pg_assignment
-        guide_ikey=self.feature_index[new_guide].instance_key
-        pre_assignments[col].setdefault(pg_node_id, {'guides':{},'features':{}})
-        pre_assignments[col][pg_node_id]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
+    def track_guide(self, pre_assignments, unsigned_guide, col, negative):
+        new_guide = self.sign_feature(unsigned_guide, negative)
+        pg_node_id=getFeatureRecord(new_guide).pg_assignment
+        guide_ikey=getFeatureRecrod(new_guide).instance_key
+        pre_assignments[col]["assignments"].setdefault(pg_node_id, {'guides':{},'features':{}})
+        pre_assignments[col]["assignments"][pg_node_id]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
+        pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, pg_node_id)
 
     def track_feature(self, col, feature_pile, new_feature, feature_info, instance_key):
-        if not new_feature in to_assign[col]['all_features']:
-            to_assign[col]['by_instance'].setdefault(instance_key, set([])).add(feature_info)
-            to_assign[col]['all_features'].add(new_feature)
+        if not new_feature in feature_pile[col]['all_features']:
+            feature_pile[col]['by_instance'].setdefault(instance_key, set([])).add(feature_info)
+            feature_pile[col]['all_features'].add(new_feature)
 
     #right now kmer_side is 0 to indicate left and 1 to indicate right
     def side_to_kcoord(self, kmer_side):
@@ -1554,7 +1695,8 @@ class GraphMaker():
 
 
     def expand_features(self, prev_node, cur_node, targets, revisit_guides, node_queue, node_bundles,up_targets=False):
-        pre_assignments = [dict() for x in range(self.ksize)] # used to track which features are to be assigned to which pg-nodes. k dictionaries {pg_node_id: {"guide_ikeys":{instance_key:set([feature_id])}, "features":{instance_key:set([feature_id])}}}
+        pre_assignments = [dict(new_nodes=dict(), inst_key_map=dict(), assignments=dict()) for x in range(self.ksize)] # used to track which features are to be assigned to which pg-nodes. k dictionaries {pg_node_id: {"guides":{instance_key:set([feature_id])}, "features":{instance_key:set([feature_id])}}}
+        conflict_assignments = [dict(shift=dict(), c1_conflict=dict(), c2_conflict=dict()) for x in range(self.ksize)] # used to track which features being assigned have conflicts
         feature_pile = [None] * self.k_size # which features to assign, organized by instance_key. k dictionaries {"by_instance": {instance_key:set([feature_id])}, "all_features":set([feature_id])}
 
 		if self.debug:
@@ -1589,9 +1731,9 @@ class GraphMaker():
                 #TODO NOTE can use the visit numbers as references to array of guides. though that supposes the current system isn't good enough
                 rhs_adj_info=self.rhs_adj_table[rhs_guide_cat][new_guide_side]
                 #the new guide is signed so can do simple increment/decrement depending on LHS or RHS. always take abs() to get actual ID
-                new_guide= self.sign_feature(rhs_guide + rhs_adj_info['new_feature_adj'], new_guide_cat)  #guides are aligned to the right side and walked left from there
+                new_guide= rhs_guide + rhs_adj_info['new_feature_adj'] #guides are aligned to the right side and walked left from there
                 #REPLACED instance_key = self.feature_index[new_guide].instance_key
-                self.track_guide(pre_assignments, new_guide, self.side_to_kcoord(new_guide_side))
+                self.track_guide(pre_assignments, new_guide, self.side_to_kcoord(new_guide_side), negative=new_guide_cat)
                 # SEE IF YOU CAN GET AWAY WITHOUT DOING THIS TILL YOU NEED IT self.fill_guides(pre_assignments, rhs_guide, rhs_adj_info['new_feature_adj'])
                 #REPLACED pg_set.add(self.feature_index[new_guide].pg_assignment)
                 #REPLACED target_guides[instance_key]=[new_guide]
@@ -1634,10 +1776,10 @@ class GraphMaker():
                                 #REPLACED rhs_guide_side=kmer_side #need this for palindromes
                                 #REPLACED pg_set.add(self.feature_index[new_feature].pg_assignment)
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(new_feature)
-                                self.track_guide(pre_assignments, new_feature, self.side_to_kcord(kmer_side))
+                                self.track_guide(pre_assignments, new_feature, self.side_to_kcord(kmer_side), negative=direction)
                             else:
                                 cur_node.features[direction].remove(rhs_feature)
-                                cur_info=featureInfo(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
+                                cur_info=featureContext(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
                                 self.track_feature(self.side_to_kcord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
@@ -1667,22 +1809,27 @@ class GraphMaker():
         #TODO figure out consistentcy palindrome procedure. Flip LHS to RHS. Has to take place w/ targets.
         #TODO look at anchor instance keys. AND other instance keys. Do cardinality of instance keys
 
+        #the only place where all k-features are added is at an anchor node if there are features that are not currently part of a bundle
+        #if a "feature thread" is already in the bundle then the previous k-1 features have been processed
+        #in that case the previous k-1 features should have already been checked for anchor instance expansion
         if cur_node.anchorNode():
             #if this is an anchor node and a starting node then everything needs to expanded/assigned to a pg-node
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
             self.kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node)
-            cur_node.features[0]=set([])#after assigning all features clear it out.
-            cur_node.features[1]=set([])#after assigning all features clear it out.
-        self.anchorInstanceExpansion(feature_pile)
-        if self.requireFullModel(feature_pile):
             self.fill_guides(self, pre_assignments, rhs_guide, direction)
-        self.determineAssignments()
-        conflicts=self.findConflicts()
-        self.determineAssignments(conflicts)
+            #NEEDS TO BE CHECKED cur_node.features[0]=set([])#after assigning all features clear it out.
+            #NEEDS TO BE CHECKED cur_node.features[1]=set([])#after assigning all features clear it out.
+
+        #anchor_expanded=False
+        #anchor_expanded = self.anchorInstanceExpansion(feature_pile)
+
+        self.determineAssignments(feature_pile, pre_assignments, conflicts=None)
+        self.findKConflicts(pre_assignments, conflict_assignments)
+        self.determineAssignments(feature_pile, pre_assignments, conflict_assignments)
         self.makeAssignments(pre_assignments)
-        self.storeGuides(pre_assignments)
+        #self.storeGuides(pre_assignments)
         #end expand_features
 
 
