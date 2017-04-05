@@ -910,7 +910,7 @@ class GraphMaker():
                 self.rf_starting_list.append(node)
         self.finalizeInstanceKeys()
         #start with nodes that have the most features
-        sorted(self.rf_starting_list, key=methodcaller('numFeatures'))
+        self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
         for rf_node in self.rf_starting_list:
             self.tfs_expand_nr(None, rf_node, None, None)
 
@@ -1424,34 +1424,41 @@ class GraphMaker():
     def determineAssignments(self, feature_pile, pre_assignments, conflicts=None):
         if conflicts == None:
             i=self.ksize-1
-            while i > 0:
+            while i >= 0:
                 for ik, features in feature_pile[i]["by_instance"].iteritems():
                     max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
                     if max_keys[0] == None: #no guides exist
                         #create new node and put it in
-                        tmp_id = len(pre_assignments[i]["new_nodes"].keys())
-                        pre_assignments[i]["new_nodes"].setdefault(tmp_id, {'guides':{},'features':{}})
-                        pre_assignments[i]["new_nodes"][tmp_id]["features"].setdefault(ik,set([])).update(features)
+                        tmp_id = "nn"+str(len(pre_assignments[i]["new_nodes"].keys()))
+                        assign_block="new_nodes"
+                        new_status=True
                     elif len(max_keys) == 1:
-                        pg_node = pre_assignments[i]["inst_key_map"][max_keys[0]]
-                        pre_assignments[i]["assignments"][pg_node]["features"].setdefault(ik,set([])).update(features)
+                        tmp_id = pre_assignments[i]["inst_key_map"][max_keys[0]]
+                        new_status = (type(tmp_id) == str and tmp_id.startswith('nn'))
+                        assign_block = "new_nodes" if new_status else "assignments"
                     elif len(max_keys) > 1:
                         #pick the one with the most features. this should be rare.
                         sys.stderr.write("Tie for pg-node selection based on instance keys "+" ".join(max_keys)+"\n")
                         max_features =0
-                        max_node = None
+                        tmp_id = None
                         mk = None
                         for k in max_keys:
                             pg_node = pre_assignments[i]["inst_key_map"][k]
                             num_features=self.num_features_pg_node(pg_node)
                             if num_features > max_features:
                                 max_features=num_features
-                                max_node = pg_node
-                        pre_assignments[i]["assignments"][max_node]["features"].setdefault(ik,set([])).update(features)
+                                tmp_id = pg_node
+                        new_status = (type(tmp_id) == str and tmp_id.startswith('nn'))
+                        assign_block = "new_nodes" if new_status else "assignments"
+                    if not ik in pre_assignments[i]["inst_key_map"]:
+                        #track guide creates new_node position in pre_assignments
+                        guide_feature=next(iter(features))
+                        self.track_guide(pre_assignments, guide_feature.new_feature, i, negative=guide_feature.direction, target_pg=tmp_id, new_node=new_status)
+                    pre_assignments[i][assign_block][tmp_id]["features"].setdefault(ik,set([])).update(features)
                 i-=1
         else:
             i=self.ksize-1
-            while i > 0:
+            while i >= 0:
                 #if there is a shift conflict create a new node. only need the pg_node and the offending pre_assignment instance key
                 if "shift" in conflicts[i] and len(conflicts[i]["shift"]) > 0:
                     for pg in conflicts[i]["shift"]["features"]:
@@ -1672,13 +1679,22 @@ class GraphMaker():
 
 
     #keep track of which nodes are available for assignment in this 'column' of the kmer
-    def track_guide(self, pre_assignments, unsigned_guide, col, negative):
+    def track_guide(self, pre_assignments, unsigned_guide, col, negative, target_pg=None, new_node=False):
         new_guide = self.sign_feature(unsigned_guide, negative)
-        pg_node_id=getFeatureRecord(new_guide).pg_assignment
-        guide_ikey=getFeatureRecrod(new_guide).instance_key
-        pre_assignments[col]["assignments"].setdefault(pg_node_id, {'guides':{},'features':{}})
-        pre_assignments[col]["assignments"][pg_node_id]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
-        pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, pg_node_id)
+        guide_ikey=self.getFeatureRecord(new_guide).instance_key
+        if target_pg == None:
+            target_pg =getFeatureRecord(new_guide).pg_assignment
+            if target_pg == None:
+                assert LogicError
+        if not new_node:
+            pre_assignments[col]["assignments"].setdefault(target_pg, {'guides':{},'features':{}})
+            pre_assignments[col]["assignments"][target_pg]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
+            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, target_pg)
+        else:
+            pre_assignments[col]["new_nodes"].setdefault(target_pg, {'guides':{},'features':{}})
+            pre_assignments[col]["new_nodes"][target_pg]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
+            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, target_pg)
+            
 
     def track_feature(self, col, feature_pile, new_feature, feature_info, instance_key):
         if not new_feature in feature_pile[col]['all_features']:
