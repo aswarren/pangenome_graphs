@@ -1602,6 +1602,8 @@ class GraphMaker():
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 for direction in self.target_cat:
                     for rhs_feature in cur_node.features[direction]:
+                        #cur_node.features[direction].remove(rhs_feature)
+                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
                         new_feature_adj= i
                         prev_feature_adj=i-1
                         #TODO Consider adjusting this based on signed features.
@@ -1622,7 +1624,6 @@ class GraphMaker():
                             feature_info=self.featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False)
                             self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key)
                                     
-                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs. IS THIS NECESSARY?
                         #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
                         if i == 0:
                             #this feature is on the rhs of kmer
@@ -1803,9 +1804,10 @@ class GraphMaker():
                                 #REPLACED rhs_guide_side=kmer_side #need this for palindromes
                                 #REPLACED pg_set.add(self.feature_index[new_feature].pg_assignment)
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(new_feature)
-                                self.track_guide(pre_assignments, new_feature, self.side_to_kcord(kmer_side), negative=direction)
+                                self.track_guide(pre_assignments, new_feature, self.side_to_kcoord(kmer_side), negative=direction)
                             else:
                                 cur_node.features[direction].remove(rhs_feature)
+                                cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
                                 cur_info=self.featureContext(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
                                 self.track_feature(self.side_to_kcoord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
