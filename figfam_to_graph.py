@@ -1615,6 +1615,14 @@ class GraphMaker():
                         new_feature=rhs_feature+new_feature_adj
                         instance_key = self.feature_index[new_feature].instance_key
                         prev_feature=rhs_feature+prev_feature_adj
+                        #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
+                        if i == 0:
+                            #this feature is on the rhs of kmer
+                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
+                            prev_feature=None
+                        if i == self.ksize-1:
+                            #this feature is on the lhs of kmer
+                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                         if self.feature_index[new_feature].pg_assignment != None:
                             self.track_guide(pre_assignments, new_feature, self.ksize-(i+1), negative=direction)
                             #track feature to "add" in case of anchor instance key expansion AND/OR pg-edge addition
@@ -1625,14 +1633,6 @@ class GraphMaker():
                             feature_info=self.featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False)
                             self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key)
                                     
-                        #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
-                        if i == 0:
-                            #this feature is on the rhs of kmer
-                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
-                            prev_feature=None
-                        if i == self.ksize-1:
-                            #this feature is on the lhs of kmer
-                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                 i+=1
 
     def getFeatureRecord(self, feature):
