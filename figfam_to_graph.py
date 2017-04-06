@@ -1359,11 +1359,11 @@ class GraphMaker():
         if prev_feature != None:
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
             self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id)
-            if conflict:
-                tier2=self.conflicts.setdefault(cur_pg_id, {})
-                conflicted=tier2.setdefault(prev_pg_id, set([]))
-                conflicted.add(new_feature)
-        return cur_pg_id, conflict
+            #if conflict:
+            #    tier2=self.conflicts.setdefault(cur_pg_id, {})
+            #    conflicted=tier2.setdefault(prev_pg_id, set([]))
+            #    conflicted.add(new_feature)
+        return cur_pg_id
 
 
     def maxInstanceOverlap(self, instance_key, comparison_list):
@@ -1481,7 +1481,7 @@ class GraphMaker():
     #make assignments that are in pre_assignments
     def makeAssignments(self, pre_assignments):
         i=self.ksize-1
-        while i > 0:
+        while i >= 0:
             new_nodes= set(pre_assignments[i]["assignments"].keys()+pre_assignments[i]["new_nodes"].keys())
             if len(new_nodes) > 1: self.storeAlternates(new_nodes)
             for pg in pre_assignments[i]["assignments"]:
@@ -1489,9 +1489,10 @@ class GraphMaker():
                     for f in features:
                         self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg)
             for pg in pre_assignments[i]["new_nodes"]:
+                new_pg = None
                 for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].iteritems():
                     for f in features:
-                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=None)
+                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg)
             i-=1
                         
                         
@@ -1730,7 +1731,8 @@ class GraphMaker():
             self.visit_number+=1
             existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
             self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
-        sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
+        sys.stderr.write("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
+        #sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
         if (targets!=None):
             num_targets=len(targets[0][0])+len(targets[0][1])+len(targets[1][0])+len(targets[1][1])
@@ -1932,7 +1934,7 @@ class GraphMaker():
                     #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
                     #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
                     #so if there is a guide: 
-                    self.expand_features(cv.prev_node, cv.cur_node, targets=cntargets, guide=new_guide, node_queue=cv.node_queue, node_bundles=cv.node_bundles, up_targets=True)
+                    self.expand_features(cv.prev_node, cv.cur_node, targets=cntargets, guide_array=new_guide, node_queue=cv.node_queue, node_bundles=cv.node_bundles, up_targets=True)
             pv=cv
 
     #recursive function with a visit queue.
