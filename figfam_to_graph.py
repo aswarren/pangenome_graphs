@@ -1400,13 +1400,14 @@ class GraphMaker():
     def findKConflicts(self, pre_assignments, conflict_assignments):
         i=self.ksize-1
         while i > 0:
-            for pg in pre_assignments[i]:
-                for ik, features in pre_assignments[i][pg]["features"].iteritems():
+            #conflicts can only happen for pre-existing nodes.
+            for pg in pre_assignments[i]["assignments"]:
+                for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
                     for f in features:
                         #think about how the conflict should be represented overall
                         #look at the data structure required for determineAssignments
                         #start with that.
-                        shift, conflict, end_fragments = self.detect_conflict(f, pg)
+                        shift, conflict, end_fragments = self.detect_conflict(f.new_feature, pg)
                         if shift:
                             conflict_assignments[i]["shift"].setdefault(pg, {'features':{}})
                             conflict_assignments[i]["shift"][pg]["features"].setdefault(ik,set([])).update(features)
@@ -1468,6 +1469,7 @@ class GraphMaker():
                             pre_assignments[i]["new_nodes"][tmp_id]["features"][ik]=conflicts[i]["shift"][pg]["features"][ik]
                             #take out features of pre_assignments
                             pre_assignments[i]["assignments"][pg]["features"].pop(ik)
+                i-=1
 
     
     #store alternate pg-nodes at a given k-position
@@ -1481,7 +1483,7 @@ class GraphMaker():
         i=self.ksize-1
         while i > 0:
             new_nodes= set(pre_assignments[i]["assignments"].keys()+pre_assignments[i]["new_nodes"].keys())
-            if len(new_nodes) > 1: storeAlternates(new_nodes)
+            if len(new_nodes) > 1: self.storeAlternates(new_nodes)
             for pg in pre_assignments[i]["assignments"]:
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
                     for f in features:
@@ -1671,10 +1673,12 @@ class GraphMaker():
         while count < self.ksize:
             for sf in lhs:
                 cur_sf = sf + count
-                self.track_guide(pre_assignments, abs(cur_sf), count, negative=(cur_sf < 0)) 
+                if self.getFeatureRecord(cur_sf).pg_assignment != None:
+                    self.track_guide(pre_assignments, abs(cur_sf), count, negative=(cur_sf < 0)) 
             for sf in rhs:
                 cur_sf = sf - count
-                self.track_guide(pre_assignments, abs(cur_sf), (self.ksize-1)-count, negative=(cur_sf < 0))
+                if self.getFeatureRecord(cur_sf).pg_assignment != None:
+                    self.track_guide(pre_assignments, abs(cur_sf), (self.ksize-1)-count, negative=(cur_sf < 0))
             count+=1
 
 
@@ -1683,7 +1687,7 @@ class GraphMaker():
         new_guide = self.sign_feature(unsigned_guide, negative)
         guide_ikey=self.getFeatureRecord(new_guide).instance_key
         if target_pg == None:
-            target_pg =getFeatureRecord(new_guide).pg_assignment
+            target_pg =self.getFeatureRecord(new_guide).pg_assignment
             if target_pg == None:
                 assert LogicError
         if not new_node:
@@ -1703,7 +1707,10 @@ class GraphMaker():
 
     #right now kmer_side is 0 to indicate left and 1 to indicate right
     def side_to_kcoord(self, kmer_side):
-        return kmer_side*self.ksize
+        answer = kmer_side*self.ksize
+        if answer > 0:
+            answer-=1
+        return answer
 
     #make a feature negative if it is present in a decreasing L to R series in this kmer
     def sign_feature(self, feature, negative):
@@ -1769,8 +1776,8 @@ class GraphMaker():
 
             #REPLACED available_nodes=set([])
             #PROCESS TARGETS
-            for kmer_side in target_cat:
-                for direction in target_cat:
+            for kmer_side in self.target_cat:
+                for direction in self.target_cat:
                     rhs_adj_info=self.rhs_adj_table[direction][kmer_side]
                     #get the targets that have been assigned
                     for rhs_feature in targets[kmer_side][direction]:
@@ -1800,7 +1807,7 @@ class GraphMaker():
                             else:
                                 cur_node.features[direction].remove(rhs_feature)
                                 cur_info=self.featureContext(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
-                                self.track_feature(self.side_to_kcord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
+                                self.track_feature(self.side_to_kcoord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
                             q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
