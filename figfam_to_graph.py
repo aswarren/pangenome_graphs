@@ -577,6 +577,7 @@ class GraphMaker():
         self.prev_indices=[]
         self.rf_starting_list=[]
         self.visit_number=0
+        self.alt_counter =0
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         #gives position of the newest feature in the next kmer, the adjustment to the leaving feature to get the rhs of next kmer
         self.projection_table=[[[
@@ -649,6 +650,7 @@ class GraphMaker():
         print "pg-graph:"
         print "nodes "+str(self.pg_graph.number_of_nodes())
         print "edges "+str(self.pg_graph.number_of_edges())
+        print "alt-nodes "+str(self.alt_counter)
 
     def finalizeGraphAttr(self):
         num_genomes=float(len(self.replicon_map.keys()))
@@ -1462,8 +1464,9 @@ class GraphMaker():
             while i >= 0:
                 #if there is a shift conflict create a new node. only need the pg_node and the offending pre_assignment instance key
                 if "shift" in conflicts[i] and len(conflicts[i]["shift"]) > 0:
-                    for pg in conflicts[i]["shift"]["features"]:
-                        for ik in conflicts[i]["shift"]["features"][pg]:
+                    for pg in conflicts[i]["shift"]:
+                        for ik in conflicts[i]["shift"][pg]["features"]:
+                            self.alt_counter+=1
                             tmp_id = len(pre_assignments[i]["new_nodes"].keys())
                             pre_assignments[i]["new_nodes"].setdefault(tmp_id, {'guides':{},'features':{}})
                             pre_assignments[i]["new_nodes"][tmp_id]["features"][ik]=conflicts[i]["shift"][pg]["features"][ik]
@@ -1759,7 +1762,7 @@ class GraphMaker():
                 #TODO find the correct location to flag if there are multiple guides necessary in a duplicate or palindrome node
                 #TODO bring the storage of guides in here from the parent function since need to have multiple
                 #TODO NOTE can use the visit numbers as references to array of guides. though that supposes the current system isn't good enough
-                rhs_adj_info=self.rhs_adj_table[rhs_guide_cat][new_guide_side]
+                rhs_adj_info=self.rhs_adj_table[new_guide_cat][new_guide_side]
                 #the new guide is signed so can do simple increment/decrement depending on LHS or RHS. always take abs() to get actual ID
                 new_guide= rhs_guide + rhs_adj_info['new_feature_adj'] #guides are aligned to the right side and walked left from there
                 #REPLACED instance_key = self.feature_index[new_guide].instance_key
