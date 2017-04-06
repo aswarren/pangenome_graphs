@@ -1342,7 +1342,7 @@ class GraphMaker():
             if pg_node!=None:
                 #REPLACED insert_level=None
                 cur_pg_id=pg_node
-                #REPLACED insert_level = self.insert_feature(cur_pg_id, new_feature)
+                insert_level = self.insert_feature(cur_pg_id, new_feature)
                 #REPLACED if self.context_levels[insert_level] > self.context_levels[self.context]:
                 #REPLACED    conflict=True
 
@@ -1401,7 +1401,7 @@ class GraphMaker():
 
     def findKConflicts(self, pre_assignments, conflict_assignments):
         i=self.ksize-1
-        while i > 0:
+        while i >= 0:
             #conflicts can only happen for pre-existing nodes.
             for pg in pre_assignments[i]["assignments"]:
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
@@ -1601,41 +1601,45 @@ class GraphMaker():
 
     #walk down the kmer and fill out to_assign
     #process features remaining in cur_node.features
-    def kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles):
+    #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
+    #targets are all RHS representative
+    def kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles, targets):
             i=0
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 for direction in self.target_cat:
-                    for rhs_feature in cur_node.features[direction]:
-                        #cur_node.features[direction].remove(rhs_feature)
-                        cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
-                        new_feature_adj= i
-                        prev_feature_adj=i-1
-                        #TODO Consider adjusting this based on signed features.
-                        #TODO Consider what would be necessary to adapt this to consistency use for palindrome
-                        if not direction:
-                            new_feature_adj=new_feature_adj*-1
-                            prev_feature_adj=prev_feature_adj*-1
-                        new_feature=rhs_feature+new_feature_adj
-                        instance_key = self.feature_index[new_feature].instance_key
-                        prev_feature=rhs_feature+prev_feature_adj
-                        #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmer
-                        if i == 0:
-                            #this feature is on the rhs of kmer
-                            self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
-                            prev_feature=None
-                        if i == self.ksize-1:
-                            #this feature is on the lhs of kmer
-                            self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
-                        if self.feature_index[new_feature].pg_assignment != None:
-                            self.track_guide(pre_assignments, new_feature, self.ksize-(i+1), negative=direction)
-                            #track feature to "add" in case of anchor instance key expansion AND/OR pg-edge addition
-                            feature_info=self.featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False)
-                            self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key)
-                        else:
-                            #GET FEATURE_INFO HERE??????
-                            feature_info=self.featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False)
-                            self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key)
-                                    
+                    if targets != None:
+                        feature_sets = [("old", self.ksize-1 ,targets[0][direction]), ("old", 0,targets[1][direction]), ("new",None,cur_node.features[direction])]
+                    else: feature_sets = [("new",None,cur_node.features[direction])]
+                    for status, skip_count, to_fill in feature_sets:
+                        for rhs_feature in to_fill:
+                            new_feature_adj= i
+                            prev_feature_adj=i-1
+                            #TODO Consider adjusting this based on signed features.
+                            #TODO Consider what would be necessary to adapt this to consistency use for palindrome
+                            if not direction:
+                                new_feature_adj=new_feature_adj*-1
+                                prev_feature_adj=prev_feature_adj*-1
+                            new_feature=rhs_feature+new_feature_adj
+                            instance_key = self.feature_index[new_feature].instance_key
+                            prev_feature= rhs_feature+prev_feature_adj if i > 0 else None 
+                            if status == "new":
+                                #cur_node.features[direction].remove(rhs_feature)
+                                cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
+                                #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmeri
+                                if i == 0:
+                                    #this feature is on the rhs of kmer
+                                    self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
+                                if i == self.ksize-1:
+                                    #this feature is on the lhs of kmer
+                                    self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
+                            #only want to fill features/track guides that are from new (non-targets) and from the parts 
+                            if status == "new" or i != skip_count:
+                                if self.feature_index[new_feature].pg_assignment != None:
+                                    self.track_guide(pre_assignments, new_feature, self.ksize-(i+1), negative=direction)
+                                if status != "old":
+                                    #track feature to "add" in case of anchor instance key expansion AND/OR pg-edge addition
+                                    feature_info=self.featureContext(self.ksize-(i+1), direction, rhs_feature, prev_feature, new_feature, leaving_feature=None, conflict=False, split=False)
+                                    self.track_feature(self.ksize-(i+1), feature_pile, new_feature, feature_info, instance_key)
                 i+=1
 
     def getFeatureRecord(self, feature):
@@ -1851,7 +1855,7 @@ class GraphMaker():
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
-            self.kfill_feature_pile(feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles)
+            self.kfill_feature_pile(feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles, targets)
             self.fill_guides(pre_assignments)
             cur_node.features[0]=set([])#after assigning all features clear it out.
             cur_node.features[1]=set([])#after assigning all features clear it out.
