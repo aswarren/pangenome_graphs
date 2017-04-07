@@ -914,7 +914,8 @@ class GraphMaker():
         #start with nodes that have the most features
         self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
         for rf_node in self.rf_starting_list:
-            self.tfs_expand_nr(None, rf_node, None, None)
+            if rf_node.numFeatures() > 0:
+                self.tfs_expand_nr(None, rf_node, None, None)
 
 
         
@@ -1738,7 +1739,7 @@ class GraphMaker():
             self.visit_number+=1
             existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
             self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
-        sys.stderr.write("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
+            sys.stderr.write("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         #sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
         if (targets!=None):
@@ -1797,14 +1798,18 @@ class GraphMaker():
                         cur_instance_key = self.feature_index[new_feature].instance_key
                         #get the features with matching instance keys that can be co-assigned
                         instance_info = self.anchor_instance_keys.get(cur_instance_key, [None,[]])
+                        edge_only=False
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
                                 print "missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
                                 assert LogicError
-                            #NO PG-EDGE construction until node assignment finalized
-                            #else:
+                            elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
-                            #    self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
+                                edge_only=True
+                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
+                            else:
+                                print "pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
+                                assert LogicError
                         else:
                             #this initial loop through the targets is really just to see if any have already been assigned
                             if self.feature_index[new_feature].pg_assignment != None:
@@ -1814,15 +1819,15 @@ class GraphMaker():
                                 #REPLACED pg_set.add(self.feature_index[new_feature].pg_assignment)
                                 #REPLACED target_guides.setdefault(instance_key,[]).append(new_feature)
                                 self.track_guide(pre_assignments, new_feature, self.side_to_kcoord(kmer_side), negative=direction)
-                            else:
-                                cur_node.features[direction].remove(rhs_feature)
-                                cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
-                                cur_info=self.featureContext(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
-                                self.track_feature(self.side_to_kcoord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
+                            #else:
+                            cur_node.features[direction].remove(rhs_feature)
+                            cur_node.assigned_features[direction].add(rhs_feature) #only track rhs.
+                            cur_info=self.featureContext(kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, False, False)
+                            self.track_feature(self.side_to_kcoord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
                             q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
-                        else:
+                        elif not edge_only:
                             q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
                     #in the case of an anchor node also add non-target features as potential guides
                     #but to be used here they must be on the same side/direction as incoming targets
