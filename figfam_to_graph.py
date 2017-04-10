@@ -558,6 +558,7 @@ class GraphMaker():
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
         self.replicon_map={}
+        self.no_edge=set([])
         self.conflicts={}
         self.groups_seen={}
         self.group_index=[]
@@ -711,8 +712,9 @@ class GraphMaker():
             if self.feature_index[f].instance_key !=None: #if its None then the contig wasn't big enough to create a node
                 lv = [int(i) for i in self.feature_index[f].instance_key.split(".")]
                 instance_reverse, instance_palindrome = self.flipKmer(lv)
-                if instance_reverse:
-                    lv.reverse()
+                #the function actually flips the kmer
+                #if instance_reverse:
+                #    lv.reverse()
                 self.feature_index[f].instance_key_orig = ".".join(str(i) for i in lv)
                 self.feature_index[f].instance_key = self.feature_index[f].instance_key_orig+"."+str(self.feature_index[f].repeat_num)+"r"
                 # if the instance key has a single anchor node in it then it is an anchor instance key
@@ -1215,6 +1217,24 @@ class GraphMaker():
         else:
             self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
 
+    #what you need to do here is relate both sides of a conflict to a pg-edge
+    def break_edges(self):
+        for pg in self.no_edge:
+            max_edge = None
+            max_num = 0
+            edge_list = []
+            for x, y, d in self.pg_graph.edges(pg, data=True):
+                edge_list.append((x,y))
+                num_seq=len(d["sequences"])
+                if  num_seq > max_num:
+                    max_num = num_seq
+                    max_edge = (x, y)
+            if max_edge != None and len(edge_list)>1:
+                for x, y in edge_list:
+                    if x != max_edge[0] or y != max_edge[1]:
+                        self.pg_graph.remove_edge(x,y)
+
+
     def insert_feature(self, cur_pg_id, new_feature):
         #emit_extra=False
         genome_id=self.feature_index[new_feature].genome_id
@@ -1359,7 +1379,7 @@ class GraphMaker():
         #    print "hmmm"
         #END REMOVE
 
-        if prev_feature != None:
+        if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
             self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id)
             #if conflict:
@@ -1405,6 +1425,8 @@ class GraphMaker():
         while i >= 0:
             #conflicts can only happen for pre-existing nodes.
             for pg in pre_assignments[i]["assignments"]:
+                num_regular =0
+                num_c1 =0
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
                     for f in features:
                         #think about how the conflict should be represented overall
@@ -1414,12 +1436,19 @@ class GraphMaker():
                         if shift:
                             conflict_assignments[i]["shift"].setdefault(pg, {'features':{}})
                             conflict_assignments[i]["shift"][pg]["features"].setdefault(ik,set([])).update(features)
+                            #self.no_edge.add(pg)
                         elif end_fragments:
                             conflict_assignments[i]["c2_conflict"].setdefault(pg, {'features':{}})
                             conflict_assignments[i]["c2_conflict"][pg]["features"].setdefault(ik,set([])).update(features)
-                        else:
+                            #self.no_edge.add(pg)
+                        elif conflict:
                             conflict_assignments[i]["c1_conflict"].setdefault(pg, {'features':{}})
                             conflict_assignments[i]["c1_conflict"][pg]["features"].setdefault(ik,set([])).update(features)
+                            num_c1+=1
+                            #self.no_edge.add(pg)
+                        else:
+                            num_regular +=1
+
             i-=1            
 
 
@@ -2353,6 +2382,8 @@ def main():
     gmaker=GraphMaker(feature_tab=args.feature_table, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
+    if gmaker.break_conflict:
+        gmaker.break_edges()
     nx.readwrite.write_gexf(gmaker.rf_graph, args.output_basename+".rf_graph.gexf")
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
