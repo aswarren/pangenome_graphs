@@ -567,7 +567,7 @@ class GraphMaker():
         self.debug = False
         self.prebundle = False
         self.eat_repeats =False
-        self.anchor_instance_keys={} #structured as {instance_key, [pg_assignment, [features with this instance key]]}
+        self.anchor_instance_keys={} #structured as {instance_key: [pg_assignment, [features with this instance key]]}
         self.non_anchor_guides={} # this is a lookup with the following structure [pg_id][rf_id]=feature_id. Allows looking of a guide_feature based on the pan-genome/transition to a particular rf_id. Should get limited use.
         #self.ignore_fams=ignore_fams
         self.kmerLevel=0 #the level of a kmer increases if it occurs in repeated series with itself
@@ -715,16 +715,16 @@ class GraphMaker():
                 #the function actually flips the kmer
                 #if instance_reverse:
                 #    lv.reverse()
-                self.feature_index[f].instance_key_orig = ".".join(str(i) for i in lv)
-                self.feature_index[f].instance_key = self.feature_index[f].instance_key_orig+"."+str(self.feature_index[f].repeat_num)+"r"
+                instance_key_orig = ".".join(str(i) for i in lv)
+                self.feature_index[f].instance_key = instance_key_orig+"."+str(self.feature_index[f].repeat_num)+"r"
                 # if the instance key has a single anchor node in it then it is an anchor instance key
-                if self.feature_index[f].instance_key_orig in self.anchor_instance_keys:
-                    self.anchor_instance_keys[self.feature_index[f].instance_key_orig][1].append(f)
+                if instance_key_orig in self.anchor_instance_keys:
+                    self.anchor_instance_keys[instance_key_orig][1].append(f)
                 else:
                     #check to see if any of the instances are anchor nodes
                     for rf in lv:
                         if self.rf_node_index[rf].anchorNode():
-                            self.anchor_instance_keys[self.feature_index[f].instance_key_orig]=[None,[f]]
+                            self.anchor_instance_keys[instance_key_orig]=[None,[f]]
                             break
             f+=1
 
@@ -1454,7 +1454,7 @@ class GraphMaker():
 
     #considering available guides/pg-nodes and conflicts to determine round of assignments
     #put new node assignments under None
-    def determineAssignments(self, feature_pile, pre_assignments, conflicts=None):
+    def determineAssignments(self, feature_pile, pre_assignments, cur_node, conflicts=None):
         if conflicts == None:
             i=self.ksize-1
             while i >= 0:
@@ -1487,7 +1487,10 @@ class GraphMaker():
                         #track guide creates new_node position in pre_assignments
                         guide_feature=next(iter(features))
                         self.track_guide(pre_assignments, guide_feature.new_feature, i, negative=guide_feature.direction, target_pg=tmp_id, new_node=new_status)
-                    pre_assignments[i][assign_block][tmp_id]["features"].setdefault(ik,set([])).update(features)
+                    cur_assignments=pre_assignments[i][assign_block][tmp_id]["features"].setdefault(ik,set([]))
+                    cur_assignments.update(features)
+                    #self.anchorInstanceExpansion(features, cur_node)
+                    
                 i-=1
         else:
             i=self.ksize-1
@@ -1676,21 +1679,25 @@ class GraphMaker():
         return self.feature_index[abs(feature)]
 
     #for all features in all k positions. check if the instance key for the feature is an anchor instance key.
-    #if so expand it through the whole kmer. this shouldn't be used for palindromes since threads here can lack exact orientation relative to the bundle.
     #the only time this can/needs to be used is when it is a duplicate node since anchor nodes will pick up all threads
-    #ACTUALLY palindromes should be fine because the anchor instance key expansion will place it in the position it needs to be in.
+    #palindromes should be fine because the anchor instance key expansion will place it in the position it needs to be in.
     #if its a starting node then its an anchor node (no need to do middle, or lhs)
-    #if its a palindrome can't do this
     #if its a duplicate node then the previous k-1 features will have been checked.
     #NOTE anchor instance keys are really just a move-ahead proceedure since eventually when that anchor rf-node is encountered
     #it will pick up all combine all threads and walk back the ones that haven't been added.
     #instance keys themselves will still be used to segregate assignments when multiple pg-nodes are available
     #also the concept of anchor keys is still valid since that guarantee is held up when the anchor rf-node is encountered.
-    def anchorInstanceExpansion(self, feature_pile, cur_node):
-        if cur_node.palindrome or (not cur_node.duplicate):
-            return False #nothing expanded
-        #expand projection/target selection based on instance key 
-        instances_pkg = self.anchor_instance_keys.get(self.feature_index[nxt_feature].instance_key, [None,[]])
+    def anchorInstanceExpansion(self, features_ptr, cur_node):
+        #if not cur_node.anchorNode():
+        cur_features = set([i.new_feature for i in features_ptr])
+        for f in cur_features:
+            instance_key_orig = ".".join(self.feature_index[f].instance_key.split(".")[:-1])#take off the repeat number
+            #expand projection/target selection based on instance key 
+            instances_pkg = self.anchor_instance_keys.get(instance_key_orig, [None,[]])
+            for extra in instances_pkg[1]:
+                if not extra in cur_features:
+                    #blank feature context
+                    features_ptr.add(self.featureContext(None, None, None, None, extra, None, False, False))
         
 
     
@@ -1825,8 +1832,6 @@ class GraphMaker():
                         prev_feature= rhs_feature + rhs_adj_info['prev_feature_adj']
                         leaving_feature=rhs_feature + rhs_adj_info['leaving_feature_adj']
                         cur_instance_key = self.feature_index[new_feature].instance_key
-                        #get the features with matching instance keys that can be co-assigned
-                        instance_info = self.anchor_instance_keys.get(cur_instance_key, [None,[]])
                         edge_only=False
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
@@ -1897,9 +1902,9 @@ class GraphMaker():
         #anchor_expanded=False
         #anchor_expanded = self.anchorInstanceExpansion(feature_pile)
 
-        self.determineAssignments(feature_pile, pre_assignments, conflicts=None)
+        self.determineAssignments(feature_pile, pre_assignments, cur_node, conflicts=None)
         self.findKConflicts(pre_assignments, conflict_assignments)
-        self.determineAssignments(feature_pile, pre_assignments, conflict_assignments)
+        self.determineAssignments(feature_pile, pre_assignments, cur_node, conflict_assignments)
         self.makeAssignments(pre_assignments)
         #self.storeGuides(pre_assignments)
         #end expand_features
