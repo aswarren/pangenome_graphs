@@ -495,42 +495,58 @@ class famInfo():
         
 class featureParser():
     def __init__(self, **kwargs):
-        self.feature_file=kwargs['feature_file']
+        self.feature_files=kwargs['feature_files']
         self.file_type=kwargs['file_type']
         self.parse=None
-        self.ip={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
+        self.ip = None
+        self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
         #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
+        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15}
+        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16}
+        self.pc_pg_fam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
-    def parseFeatureTab(self):
-        in_handle=open(self.feature_file)
-        for line in in_handle:
-            result=featureInfo()
-            header=False
-            try:
-                header = line.startswith('#')
-                if header:
-                    #define column position based on header
-                    parts=line.strip().replace("#","").split("\t")
-                    x=0
-                    while x < len(parts):
-                        cur_part=parts[x].lower()
-                        if cur_part in self.ip:
-                            self.ip[cur_part]=x
-                        x+=1
-                    continue
+            self.ip = self.plaintab
+        if self.file_type=="patricfigfam":
+            self.parse=self.parseFeatureTab
+            sel.ip = self.pc_figfam
+        if self.file_type=="patricplfam":
+            self.parse=self.parseFeatureTab
+            self.ip = self.pc_plfam
+        if self.file_type=="patricpgfam":
+            self.parse=self.parseFeatureTab
+            self.ip = self.pc_pgfam
 
-                else:
-                    parts=line.strip().split("\t")
-                    result.group_id=parts[self.ip['group']]
-                    result.contig_id=parts[self.ip['contig']]
-                    result.genome_id=parts[self.ip['genome']]
-                    result.start=int(parts[self.ip['start']])
-                    #result.end=parts[ip['end']]
-            except:
-                warning("parsing problem. couldn't parse line: "+line)
-                continue
-            yield result
+    def parseFeatureTab(self):
+        for feature_file in self.feature_files:
+            in_handle=open(self.feature_file)
+            for line in in_handle:
+                result=featureInfo()
+                header=False
+                try:
+                    header = line.startswith('#')
+                    if header:
+                        #define column position based on header
+                        parts=line.strip().replace("#","").split("\t")
+                        x=0
+                        while x < len(parts):
+                            cur_part=parts[x].lower()
+                            if cur_part in self.ip:
+                                self.ip[cur_part]=x
+                            x+=1
+                        continue
+
+                    else:
+                        parts=line.strip().split("\t")
+                        result.group_id=parts[self.ip['group']]
+                        result.contig_id=parts[self.ip['contig']]
+                        result.genome_id=parts[self.ip['genome']]
+                        result.start=int(parts[self.ip['start']])
+                        #result.end=parts[ip['end']]
+                except:
+                    warning("parsing problem. couldn't parse line: "+line)
+                    continue
+                yield result
 
 
             
@@ -547,8 +563,8 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        if "feature_tab" in kwargs:
-            self.feature_parser=featureParser(feature_file=kwargs["feature_tab"], file_type="tab")
+        if "feature_files" in kwargs:
+            self.feature_parser=featureParser(kwargs["feature_files"], file_type=kwargs["file_type"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -2374,17 +2390,24 @@ def stats(graph):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("feature_table", type=str, help="table specifying the group, genome, contig, feature, and start in sorted order")
-    parser.add_argument("output_basename", type=str, help="the path and base name give to the output files")
+
+    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+    parser.set_defaults(file_type="tab")
+    input_type = parser.add_mutually_exclusive_group()
+    input_type.add_argument("--patric_figfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricfigfam")
+    input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
+    input_type.add_argument("--patric_pgfam", dest="file_type", help="PATRIC feature file in tab format. selecting pgfams", action='store_const', const="patricpgfam")
+    input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
     parser.add_argument("context", type=str, choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("ksize", type=int, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
-    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+    parser.add_argument("output_basename", type=str, help="the path and base name give to the output files")
+    parser.add_argument("feature_files", nargs='+', help="files or varying format specifing group, genome, contig, feature, and start in sorted order")
 
     if len(sys.argv) < 5:
         parser.print_help()
         sys.exit()
     args = parser.parse_args()
-    gmaker=GraphMaker(feature_tab=args.feature_table, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
+    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
     if gmaker.break_conflict:
