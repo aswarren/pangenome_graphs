@@ -6,6 +6,7 @@ import json
 import copy
 import argparse
 import networkx as nx
+import fileinput
 from operator import methodcaller
 #from networkx import Graph
 #from networkx import readwrite
@@ -503,7 +504,7 @@ class featureParser():
         #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
         self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15}
         self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16}
-        self.pc_pg_fam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17}
+        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
@@ -518,35 +519,34 @@ class featureParser():
             self.ip = self.pc_pgfam
 
     def parseFeatureTab(self):
-        for feature_file in self.feature_files:
-            in_handle=open(self.feature_file)
-            for line in in_handle:
-                result=featureInfo()
-                header=False
-                try:
-                    header = line.startswith('#')
-                    if header:
-                        #define column position based on header
-                        parts=line.strip().replace("#","").split("\t")
-                        x=0
-                        while x < len(parts):
-                            cur_part=parts[x].lower()
-                            if cur_part in self.ip:
-                                self.ip[cur_part]=x
-                            x+=1
-                        continue
-
-                    else:
-                        parts=line.strip().split("\t")
-                        result.group_id=parts[self.ip['group']]
-                        result.contig_id=parts[self.ip['contig']]
-                        result.genome_id=parts[self.ip['genome']]
-                        result.start=int(parts[self.ip['start']])
-                        #result.end=parts[ip['end']]
-                except:
-                    warning("parsing problem. couldn't parse line: "+line)
+        #if files is empty it should read from stdin
+        for line in fileinput.input(files=self.feature_files):
+            result=featureInfo()
+            header=False
+            try:
+                header = line.startswith('#')
+                if header:
+                    #define column position based on header
+                    parts=line.strip().replace("#","").split("\t")
+                    x=0
+                    while x < len(parts):
+                        cur_part=parts[x].lower()
+                        if cur_part in self.ip:
+                            self.ip[cur_part]=x
+                        x+=1
                     continue
-                yield result
+
+                else:
+                    parts=line.strip().split("\t")
+                    result.group_id=parts[self.ip['group']]
+                    result.contig_id=parts[self.ip['contig']]
+                    result.genome_id=parts[self.ip['genome']]
+                    result.start=int(parts[self.ip['start']])
+                    #result.end=parts[ip['end']]
+            except:
+                warning("parsing problem. couldn't parse line: "+line)
+                continue
+            yield result
 
 
             
@@ -563,8 +563,7 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        if "feature_files" in kwargs:
-            self.feature_parser=featureParser(kwargs["feature_files"], file_type=kwargs["file_type"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -645,12 +644,12 @@ class GraphMaker():
             ambig=0
             if r.numFeatures() >0:
                 ambig+=1
-        print "rf-graph: "+str(ambig)+" nodes unexapanded"
+        sys.stderr.write("rf-graph: "+str(ambig)+" nodes unexapanded"+"\n")
                 #assert LogicError("RFNode unexpanded")
     def checkPGGraph(self):
         for cnode in self.pg_graph.nodes_iter(data=True):
             if len(cnode[1]["features"]) == 0 :
-                print "pg-graph node "+str(cnode[0])+"has no features"
+                sys.stderr.write("pg-graph node "+str(cnode[0])+"has no features"+"\n")
             group_id=None
             for g in cnode[1]["features"]:
                 for contig in cnode[1]["features"][g]:
@@ -661,13 +660,13 @@ class GraphMaker():
                             assert LogicError
 
     def calcStatistics(self):
-        print "rf-graph:"
-        print "nodes "+str(self.rf_graph.number_of_nodes())
-        print "edges "+str(self.rf_graph.number_of_edges())
-        print "pg-graph:"
-        print "nodes "+str(self.pg_graph.number_of_nodes())
-        print "edges "+str(self.pg_graph.number_of_edges())
-        print "alt-nodes "+str(self.alt_counter)
+        sys.stderr.write("rf-graph:\n")
+        sys.stderr.write("nodes "+str(self.rf_graph.number_of_nodes())+"\n")
+        sys.stderr.write("edges "+str(self.rf_graph.number_of_edges())+"\n")
+        sys.stderr.write("pg-graph:"+"\n")
+        sys.stderr.write("nodes "+str(self.pg_graph.number_of_nodes())+"\n")
+        sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
+        sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
 
     def finalizeGraphAttr(self):
         num_genomes=float(len(self.replicon_map.keys()))
@@ -875,7 +874,7 @@ class GraphMaker():
 
 
     def processFeatures(self):
-        print "parsing features and constructing kmer graph"	
+        sys.stderr.write("parsing features and constructing kmer graph\n")	
         kmer_q=deque()
         prev_feature=None
         #loop through figfams to create kmers
@@ -980,7 +979,7 @@ class GraphMaker():
     #expects summary taxid, tax level, and the taxpath comma seperated values
     def parseSummary(self, summary_file):
         inHandle=open(summary_file, 'r')
-        print "parsing taxonomy information and constructing taxon table"
+        sys.stderr.write("parsing taxonomy information and constructing taxon table\n")
         #header=inHandle.readline()
         for line in inHandle:
             if line.startswith('#'):
@@ -997,7 +996,7 @@ class GraphMaker():
     #expects two column family name information
     def parseFamilyInfo(self, family_file):
         in_handle=open(family_file, 'r')
-        print "parsing family information table"
+        sys.stderr.write("parsing family information table\n")
         #header=inHandle.readline()
         for line in in_handle:
             if line.startswith('#'):
@@ -1181,7 +1180,7 @@ class GraphMaker():
         return num_features
 
     def merge_pg_node(self, node_id1, node_id2):
-        print "merging "+str(node_id1)+" "+str(node_id2)
+        sys.stderr.write("merging "+str(node_id1)+" "+str(node_id2)+"\n")
         conflict=False
         insert_level=None
         if node_id1 < node_id2:
@@ -1293,7 +1292,7 @@ class GraphMaker():
         if self.context_levels[insert_level] > self.context_levels[self.context]:
             conflict=True
             cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
-            print "conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)
+            sys.stderr.write("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)+"\n")
             #determine if it is conflict class 1
             if self.context == "genome" and insert_level=="contig":
                 nf_end=False
@@ -1593,15 +1592,15 @@ class GraphMaker():
                     #conflict occurs when mixed bundling tries to violate synteny context
                     num_split, num_conflict, c1_conflict, assign_list = self.find_conflicts(assign_list, target_guide)
                 if num_split > 0:
-                    print "SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets)
+                    sys.stderr.write("SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets)+"\n")
                 elif num_conflict > 0:
                     if c1_conflict:
-                        print "C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
+                        sys.stderr.write("C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)+"\n")
                     else:
                         if self.break_conflict:
                             break_here=True
                             target_guide=None
-                        print "C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)
+                        sys.stderr.write("C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)+"\n")
                 default_guide = default_guide_cat = default_guide_side = None
                 split_guide = split_guide_cat = split_guide_side = None
                 for cur_tuple in assign_list:
@@ -1638,9 +1637,9 @@ class GraphMaker():
                         else:
                             assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=target_guide)
                             if up_targets and conflict:
-                                print "conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
+                                sys.stderr.write("conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)+"\n")
                             elif conflict:
-                                print "conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)
+                                sys.stderr.write("conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)+"\n")
                     #make sure that where ever the feature is assigned, that all the other features in this visit, with the same instance key are there too.
                     instance_key = self.feature_index[new_feature].instance_key
                     #if instance_key in target_guides:
@@ -1851,14 +1850,14 @@ class GraphMaker():
                         edge_only=False
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
-                                print "missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
+                                sys.stderr.write("missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
                                 assert LogicError
                             elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
                                 edge_only=True
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                             else:
-                                print "pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)
+                                sys.stderr.write("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
                                 assert LogicError
                         else:
                             #this initial loop through the targets is really just to see if any have already been assigned
@@ -2391,33 +2390,37 @@ def stats(graph):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
     parser.set_defaults(file_type="tab")
+    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+    parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
+    parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
     input_type = parser.add_mutually_exclusive_group()
     input_type.add_argument("--patric_figfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricfigfam")
     input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
     input_type.add_argument("--patric_pgfam", dest="file_type", help="PATRIC feature file in tab format. selecting pgfams", action='store_const', const="patricpgfam")
     input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
-    parser.add_argument("context", type=str, choices=["genome","contig","feature"], help="the synteny context")
-    parser.add_argument("ksize", type=int, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
-    parser.add_argument("output_basename", type=str, help="the path and base name give to the output files")
-    parser.add_argument("feature_files", nargs='+', help="files or varying format specifing group, genome, contig, feature, and start in sorted order")
+    parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
+    parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
+    parser.add_argument("feature_files", type=str, nargs="*", default=["-"], help="Files of varying format specifing group, genome, contig, feature, and start in sorted order. stdin also accepted")
 
-    if len(sys.argv) < 5:
+
+    if len(sys.argv) < 2:
         parser.print_help()
         sys.exit()
     args = parser.parse_args()
+
     gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
     if gmaker.break_conflict:
         gmaker.break_edges()
-    nx.readwrite.write_gexf(gmaker.rf_graph, args.output_basename+".rf_graph.gexf")
+    if args.rfgraph != None:
+        nx.readwrite.write_gexf(gmaker.rf_graph, args.rfgraph)
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, args.output_basename+".gexf")
+    nx.readwrite.write_gexf(gmaker.pg_graph, args.output)
 
 
 def old_main(init_args):
