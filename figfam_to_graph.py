@@ -45,37 +45,6 @@ ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
 fi={'fam_id':0,'fam_description':1}
 
 
-#overload add_graph function to include call to add meta. still needed as of networkx 1.11 
-class GEXFWriter(nx.readwrite.gexf.GEXFWriter):
-
-    def add_meta(self, G, graph_element):
-        # add meta element with creator and date    
-        meta_element = Element('meta')
-        if hasattr(G, "meta") and type(G.meta)==dict:
-            for k in G.meta.keys():
-                SubElement(meta_element, k).text = G.meta[k]
-        SubElement(meta_element, 'creator').text = 'NetworkX {}'.format(nx.__version__)
-        SubElement(meta_element, 'lastmodified').text = time.strftime('%d/%m/%Y')
-        graph_element.append(meta_element)
-
-    def add_graph(self, G):
-        # set graph attributes
-        if G.graph.get('mode') == 'dynamic':
-            mode = 'dynamic'
-        else:
-            mode = 'static'
-        # Add a graph element to the XML
-        if G.is_directed():
-            default = 'directed'
-        else:
-            default = 'undirected'
-        name = G.graph.get('name', '')
-        graph_element = Element('graph', defaultedgetype=default, mode=mode)
-        self.graph_element = graph_element
-        self.add_meta(G, graph_element)
-        self.add_nodes(G, graph_element)
-        self.add_edges(G, graph_element)
-        self.xml.append(graph_element)
 
 
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
