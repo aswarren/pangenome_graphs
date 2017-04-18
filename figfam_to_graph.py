@@ -506,9 +506,9 @@ class featureParser():
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
         #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
-        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14}
-        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14}
-        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14}
+        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14, 'organism':1}
+        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14, 'organism':1}
+        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14, 'organism':1}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
@@ -547,6 +547,7 @@ class featureParser():
                     result.genome_id=parts[self.ip['genome']]
                     result.start=int(parts[self.ip['start']])
                     result.feature_ref = parts[self.ip['feature']]
+                    result.organism = parts[self.ip['organism']]
                     if self.parse_function:
                         result.function = parts[self.ip['function']]
                     #result.end=parts[ip['end']]
@@ -576,6 +577,8 @@ class GraphMaker():
         self.ksize=kwargs["ksize"]
         self.break_conflict=kwargs["break_conflict"]
         self.label_function=kwargs["label_function"]
+        self.diversity=kwargs["diversity"]
+        self.all_diversity={}#for tracking total taxa numbers in the graph
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
@@ -676,6 +679,27 @@ class GraphMaker():
         sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
         sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
 
+    def getTaxaIndicator(self, feature_id, mode="name"):
+            if mode=="name":
+                string_part = 0
+                if self.diversity == "genus":
+                    string_part =0
+                elif self.diverstiy == "species":
+                    string_part = 1
+                cur_taxa =self.feature_index[feature_id].organism.split()[string_part]
+                return cur_taxa
+
+    def trackDiversity(self, feature_id, tracking_dict):
+        taxa = self.getTaxaIndicator(feature_id)
+        tracking_dict.setdefault(taxa, 0)
+        tracking_dict[taxa]+=1
+
+    def calcDiversity(self, feature_id, cur_profile):
+        taxa=self.getTaxaIndicator(feature_id)
+        diversity = float(cur_profile[taxa])/float(self.all_diversity[taxa])
+        return diversity
+        
+
     def finalizeGraphAttr(self, replaceIDs=False):
         num_genomes=float(len(self.replicon_map.keys()))
         for e in self.pg_graph.edges_iter():
@@ -685,12 +709,14 @@ class GraphMaker():
             for a in attr:
                 if type(attr[a])==set:
                     attr[a] = ','.join(attr[a])
-        
         for n,d in self.pg_graph.nodes_iter(data=True):
             label_set =set([])
+            cur_diversity = {}
             f_id=d["features"].values()[0].values()[0][0]
             d["label"]=self.feature_index[f_id].group_id
             for g in d["features"]:
+                f_id=d["features"][g].values()[0][0]
+                self.trackDiversity(f_id, cur_diversity)
                 for s in d["features"][g]:
                     feature_refs=[]
                     for f in d["features"][g][s]:
@@ -698,6 +724,8 @@ class GraphMaker():
                         if self.label_function:
                             label_set.add(self.feature_index[f].function)
                     d["features"][g][s] = feature_refs
+            diversity=self.calcDiversity(f_id, cur_diversity)
+            d["diversity"]=diversity            
             if self.label_function:
                 d["family"]=d["label"] 
                 d["label"]=list(label_set)[0]
@@ -919,6 +947,8 @@ class GraphMaker():
                 update_repeats=[]
             feature.feature_id= len(self.feature_index)
             self.feature_index.append(feature)
+            if prev_feature == None or prev_feature.genome_id != feature.genome_id:
+                self.trackDiversity(feature.feature_id, self.all_diversity)
             if feature.genome_id not in self.replicon_map:
                 self.replicon_map[feature.genome_id]=set()
             else:
@@ -2419,6 +2449,7 @@ def main():
     parser.add_argument('--no_function', help='No functions as labels. Keep file size smaller.', required=False, default=False, action='store_true')
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
+    parser.add_argument("--diversity", type=str, help="calculate diversity quotient according to given taxa level", required=False, default="genus", choices=["genus","species"])
     input_type = parser.add_mutually_exclusive_group()
     input_type.add_argument("--patric_figfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricfigfam")
     input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
@@ -2434,7 +2465,7 @@ def main():
         sys.exit()
     args = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function))
+    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function),diversity=args.diversity)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
     #if gmaker.break_conflict:
