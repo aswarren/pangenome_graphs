@@ -46,7 +46,6 @@ fi={'fam_id':0,'fam_description':1}
 
 
 
-
 #Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
 edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
 edgePossible=set([1,2,4,8])
@@ -62,10 +61,12 @@ class featureInfo():
         self.contig_id=None
         self.genome_id=None
         self.feature_id=None
+        self.feature_ref=None
         self.group_id=None
         self.group_num=None
         self.start=None
         self.end=None
+        self.function=""
         self.rf_forward=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
         self.pg_assignment=None
@@ -500,13 +501,14 @@ class featureParser():
     def __init__(self, **kwargs):
         self.feature_files=kwargs['feature_files']
         self.file_type=kwargs['file_type']
+        self.parse_function=kwargs['parse_function']
         self.parse=None
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
         #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
-        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15}
-        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16}
-        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17}
+        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14}
+        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14}
+        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14}
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
@@ -544,6 +546,9 @@ class featureParser():
                     result.contig_id=parts[self.ip['contig']]
                     result.genome_id=parts[self.ip['genome']]
                     result.start=int(parts[self.ip['start']])
+                    result.feature_ref = parts[self.ip['feature']]
+                    if self.parse_function:
+                        result.function = parts[self.ip['function']]
                     #result.end=parts[ip['end']]
             except:
                 warning("parsing problem. couldn't parse line: "+line)
@@ -565,11 +570,12 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
         self.break_conflict=kwargs["break_conflict"]
+        self.label_function=kwargs["label_function"]
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
@@ -670,7 +676,7 @@ class GraphMaker():
         sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
         sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
 
-    def finalizeGraphAttr(self):
+    def finalizeGraphAttr(self, replaceIDs=False):
         num_genomes=float(len(self.replicon_map.keys()))
         for e in self.pg_graph.edges_iter():
             attr=self.pg_graph.get_edge_data(*e)
@@ -679,6 +685,22 @@ class GraphMaker():
             for a in attr:
                 if type(attr[a])==set:
                     attr[a] = ','.join(attr[a])
+        
+        for n,d in self.pg_graph.nodes_iter(data=True):
+            label_set =set([])
+            f_id=d["features"].values()[0].values()[0][0]
+            d["label"]=self.feature_index[f_id].group_id
+            for g in d["features"]:
+                for s in d["features"][g]:
+                    feature_refs=[]
+                    for f in d["features"][g][s]:
+                        feature_refs.append(self.feature_index[f].feature_ref)
+                        if self.label_function:
+                            label_set.add(self.feature_index[f].function)
+                    d["features"][g][s] = feature_refs
+            if self.label_function:
+                d["family"]=d["label"] 
+                d["label"]=list(label_set)[0]
 
     class taxInfo():
         def __init__(self, genome_name, summary_id):
@@ -2393,7 +2415,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.set_defaults(file_type="tab")
-    parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+    #parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
+    parser.add_argument('--no_function', help='No functions as labels. Keep file size smaller.', required=False, default=False, action='store_true')
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
     input_type = parser.add_mutually_exclusive_group()
@@ -2411,11 +2434,11 @@ def main():
         sys.exit()
     args = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=args.break_conflict)
+    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function))
     gmaker.processFeatures()
     gmaker.RF_to_PG()
-    if gmaker.break_conflict:
-        gmaker.break_edges()
+    #if gmaker.break_conflict:
+    #    gmaker.break_edges()
     if args.rfgraph != None:
         nx.readwrite.write_gexf(gmaker.rf_graph, args.rfgraph)
     gmaker.checkPGGraph()
