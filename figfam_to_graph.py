@@ -554,7 +554,7 @@ class featureParser():
                         result.function = parts[self.ip['function']]
                     #result.end=parts[ip['end']]
             except:
-                warning("parsing problem. couldn't parse line: "+line)
+                warning("warning: couldn't parse line: "+line)
                 continue
             yield result
 
@@ -2481,11 +2481,18 @@ def main():
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
     if args.layout:
+        file_out = False
+        if type(args.output) == str:
+            file_out =True
+            out_str = args.output
+            args.output = open(out_str, 'w')
         gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
         cur_path = os.path.dirname(os.path.realpath(__file__))
-        p = Popen(["java -jar"+os.path.join(cur_path, "layout/gexf_layout/gephi_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
+        sys.stderr.write("java -jar "+os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")+"\n")
+        p = Popen(["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
         args.output.write( p.communicate(input=gexf_capture.getvalue())[0])
+        if file_out: args.output.close()
         
     else:
         nx.readwrite.write_gexf(gmaker.pg_graph, args.output)
