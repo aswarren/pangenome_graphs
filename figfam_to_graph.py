@@ -15,6 +15,8 @@ import DOMLight, json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
+from subprocess import Popen, PIPE, STDOUT
+
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
 if sys.version_info < (2, 7):
@@ -729,6 +731,7 @@ class GraphMaker():
             if self.label_function:
                 d["family"]=d["label"] 
                 d["label"]=list(label_set)[0]
+            d["features"]=json.dumps(d["features"])
 
     class taxInfo():
         def __init__(self, genome_name, summary_id):
@@ -2447,6 +2450,7 @@ def main():
     parser.set_defaults(file_type="tab")
     #parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
     parser.add_argument('--no_function', help='No functions as labels. Keep file size smaller.', required=False, default=False, action='store_true')
+    parser.add_argument('--layout', help='run gephi layout code for gexf', required=False, default=False, action='store_true')
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
     parser.add_argument("--diversity", type=str, help="calculate diversity quotient according to given taxa level", required=False, default="genus", choices=["genus","species"])
@@ -2476,7 +2480,15 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    nx.readwrite.write_gexf(gmaker.pg_graph, args.output)
+    if args.layout:
+        gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
+        nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
+        cur_path = os.path.dirname(os.path.realpath(__file__))
+        p = Popen(["java -jar"+os.path.join(cur_path, "layout/gexf_layout/gephi_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
+        args.output.write( p.communicate(input=gexf_capture.getvalue())[0])
+        
+    else:
+        nx.readwrite.write_gexf(gmaker.pg_graph, args.output)
 
 
 def old_main(init_args):
