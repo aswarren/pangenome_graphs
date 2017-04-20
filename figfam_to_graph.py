@@ -2489,7 +2489,7 @@ def main():
         gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
         cur_path = os.path.dirname(os.path.realpath(__file__))
-        sys.stderr.write("java -jar "+os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")+"\n")
+        sys.stderr.write("laying out graph\n")
         p = Popen(["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
         args.output.write( p.communicate(input=gexf_capture.getvalue())[0])
         if file_out: args.output.close()
