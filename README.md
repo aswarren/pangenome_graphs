@@ -1,5 +1,4 @@
 usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]
-
                        [--rfgraph RFGRAPH] [--diversity {genus,species}]
 
                        [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]
