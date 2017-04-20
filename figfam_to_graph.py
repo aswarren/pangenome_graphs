@@ -10,7 +10,7 @@ import fileinput
 from operator import methodcaller
 #from networkx import Graph
 #from networkx import readwrite
-i#from Bio import bgzf
+#from Bio import bgzf
 import json
 from collections import deque
 from collections import OrderedDict
