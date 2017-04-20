@@ -2480,7 +2480,7 @@ def main():
 
 def old_main(init_args):
     if(len(init_args)<5):
-        sys.stderr.write("Usage: figfam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
+        sys.stderr.write("Usage: fam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
         sys.exit()
     k_size=int(init_args[4])
     minOrg=int(init_args[5])
