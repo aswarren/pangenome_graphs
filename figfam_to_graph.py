@@ -10,8 +10,8 @@ import fileinput
 from operator import methodcaller
 #from networkx import Graph
 #from networkx import readwrite
-from Bio import bgzf
-import DOMLight, json
+i#from Bio import bgzf
+import json
 from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
@@ -2284,26 +2284,6 @@ class pFamGraph(nx.Graph):
 
 
 
-    def toXGMML(self, fhandle):
-        xml = DOMLight.XMLMaker()
-        fhandle.write("""<?xml version="1.0" encoding="UTF-8"?>
-        <graph xmlns="http://www.cs.rpi.edu/XGMML" directed="0" label="PFam assembly">
-        """)
-        cid = 0
-        cur_ids = {}
-        for cn in self.nodes_iter():
-            cur_ids[cn] = cid
-            fhandle.write(str(xml.node({'id': cid, 'label': cn}, '<att type="real" name="weight" value="'+str(self.node[cn]['weight'])+'"/>')) + "\n")
-            cid += 1
-        count = 0
-        for edge in self.edges_weight_iter():
-            dom_edge=xml.edge()
-            dom_edge.set({'weight': edge[2]['weight'], 'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'label': ""}, '<att type="real" name="weight" value="'+str(edge[2]['weight'])+'"/>')
-            fhandle.write(str(dom_edge) + "\n")
-            #if count == 1000:
-            #	break
-            count += 1
-        fhandle.write("</graph>")
                             
     def toJSON(self, fhandle):
         cid = 0
