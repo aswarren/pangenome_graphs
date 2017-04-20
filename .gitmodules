@@ -1,0 +1,3 @@
+[submodule "layout/pangenome_layout"]
+	path = layout/pangenome_layout
+	url = https://github.com/aswarren/pangenome_layout.git
