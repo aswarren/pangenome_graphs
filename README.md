@@ -1,16 +1,10 @@
-usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]
-                       [--rfgraph RFGRAPH] [--diversity {genus,species}]
-
-                       [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]
-
-                       [--context {genome,contig,feature}]
-
-                       [--ksize {3,4,5,6,7,8,9}]
-
-                       [feature_files [feature_files ...]]
-
-positional arguments:
-
+usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]  
+                       [--rfgraph RFGRAPH] [--diversity {genus,species}]  
+                       [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]  
+                       [--context {genome,contig,feature}]  
+                       [--ksize {3,4,5,6,7,8,9}]  
+                       [feature_files [feature_files ...]]  
+positional arguments:  
   feature_files         Files of varying format specifing group, genome,
 
                         contig, feature, and start in sorted order. stdin also
