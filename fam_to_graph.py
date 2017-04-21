@@ -686,7 +686,7 @@ class GraphMaker():
                 string_part = 0
                 if self.diversity == "genus":
                     string_part =0
-                elif self.diverstiy == "species":
+                elif self.diversity == "species":
                     string_part = 1
                 cur_taxa =self.feature_index[feature_id].organism.split()[string_part]
                 return cur_taxa
