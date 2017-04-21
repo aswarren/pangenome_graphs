@@ -696,9 +696,9 @@ class GraphMaker():
         tracking_dict.setdefault(taxa, 0)
         tracking_dict[taxa]+=1
 
-    def calcDiversity(self, feature_id, cur_profile):
-        taxa=self.getTaxaIndicator(feature_id)
-        diversity = float(cur_profile[taxa])/float(self.all_diversity[taxa])
+    def calcDiversity(self, cur_profile):
+        #taxa=self.getTaxaIndicator(feature_id)
+        diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
         
 
@@ -726,7 +726,7 @@ class GraphMaker():
                         if self.label_function:
                             label_set.add(self.feature_index[f].function)
                     d["features"][g][s] = feature_refs
-            diversity=self.calcDiversity(f_id, cur_diversity)
+            diversity=self.calcDiversity(cur_diversity)
             d["diversity"]=diversity            
             if self.label_function:
                 d["family"]=d["label"] 
