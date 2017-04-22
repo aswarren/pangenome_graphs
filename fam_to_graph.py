@@ -686,7 +686,7 @@ class GraphMaker():
                 string_part = 0
                 if self.diversity == "genus":
                     string_part =0
-                elif self.diverstiy == "species":
+                elif self.diversity == "species":
                     string_part = 1
                 cur_taxa =self.feature_index[feature_id].organism.split()[string_part]
                 return cur_taxa
@@ -696,9 +696,9 @@ class GraphMaker():
         tracking_dict.setdefault(taxa, 0)
         tracking_dict[taxa]+=1
 
-    def calcDiversity(self, feature_id, cur_profile):
-        taxa=self.getTaxaIndicator(feature_id)
-        diversity = float(cur_profile[taxa])/float(self.all_diversity[taxa])
+    def calcDiversity(self, cur_profile):
+        #taxa=self.getTaxaIndicator(feature_id)
+        diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
         
 
@@ -726,7 +726,7 @@ class GraphMaker():
                         if self.label_function:
                             label_set.add(self.feature_index[f].function)
                     d["features"][g][s] = feature_refs
-            diversity=self.calcDiversity(f_id, cur_diversity)
+            diversity=self.calcDiversity(cur_diversity)
             d["diversity"]=diversity            
             if self.label_function:
                 d["family"]=d["label"] 
@@ -820,7 +820,8 @@ class GraphMaker():
             if duplicate:
                 self.cur_rf_node.duplicate=True
                 dup_number=1
-        self.context_bin.add(kmer_key)
+        if self.context != "feature":
+            self.context_bin.add(kmer_key)
         self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key, duplicate=dup_number)
 
         #here we add a key that marks which kmers the feature occurs in for later disambiguation
@@ -1262,7 +1263,7 @@ class GraphMaker():
                             if not f in merge_set:
                                 merge_set.add(f)
                         self.pg_graph.node[keep]['features'][g][c]=list(merge_set)
-            if self.context != "all" and insert_level != self.context:
+            if self.context != "feature" and insert_level != self.context:
                 conflict=True
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
