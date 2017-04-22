@@ -820,7 +820,8 @@ class GraphMaker():
             if duplicate:
                 self.cur_rf_node.duplicate=True
                 dup_number=1
-        self.context_bin.add(kmer_key)
+        if self.context != "feature":
+            self.context_bin.add(kmer_key)
         self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key, duplicate=dup_number)
 
         #here we add a key that marks which kmers the feature occurs in for later disambiguation
@@ -1262,7 +1263,7 @@ class GraphMaker():
                             if not f in merge_set:
                                 merge_set.add(f)
                         self.pg_graph.node[keep]['features'][g][c]=list(merge_set)
-            if self.context != "all" and insert_level != self.context:
+            if self.context != "feature" and insert_level != self.context:
                 conflict=True
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
