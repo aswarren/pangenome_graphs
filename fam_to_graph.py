@@ -1268,8 +1268,6 @@ class GraphMaker():
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
                 for f in self.pg_graph.node[remove]['features'][g][c]:
-                    if keep == 74 and remove == 3161:
-                        print "assigning "+str(f)+" to 74"
                     self.feature_index[f].pg_assignment=keep
         for e in self.pg_graph.edges(remove, data=True):
             if self.pg_graph.has_edge(keep, e[1]):
@@ -1956,8 +1954,6 @@ class GraphMaker():
             #Determine the best guide to use
 
 
-        #TODO figure out consistentcy palindrome procedure. Flip LHS to RHS. Has to take place w/ targets.
-        #TODO look at anchor instance keys. AND other instance keys. Do cardinality of instance keys
 
         #the only place where all k-features are added is at an anchor node if there are features that are not currently part of a bundle
         #if a "feature thread" is already in the bundle then the previous k-1 features have been processed
