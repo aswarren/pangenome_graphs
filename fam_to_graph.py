@@ -516,7 +516,7 @@ class featureParser():
             self.ip = self.plaintab
         if self.file_type=="patricfigfam":
             self.parse=self.parseFeatureTab
-            sel.ip = self.pc_figfam
+            self.ip = self.pc_figfam
         if self.file_type=="patricplfam":
             self.parse=self.parseFeatureTab
             self.ip = self.pc_plfam
