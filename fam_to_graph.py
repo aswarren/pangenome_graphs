@@ -16,6 +16,7 @@ from collections import deque
 from collections import OrderedDict
 from cStringIO import StringIO
 from subprocess import Popen, PIPE, STDOUT
+import time
 
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
@@ -205,6 +206,7 @@ class rfNode():
         self.visited=False
         self.queued=False
         self.self_edge=False
+        self.numBins =0
         #self.curRevStatus=rev_status
     
     def bidirectional(self):
@@ -516,7 +518,7 @@ class featureParser():
             self.ip = self.plaintab
         if self.file_type=="patricfigfam":
             self.parse=self.parseFeatureTab
-            sel.ip = self.pc_figfam
+            self.ip = self.pc_figfam
         if self.file_type=="patricplfam":
             self.parse=self.parseFeatureTab
             self.ip = self.pc_plfam
@@ -586,6 +588,7 @@ class GraphMaker():
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
         self.replicon_map={}
+        self.minSeq = kwargs["minSeq"]
         self.no_edge=set([])
         self.conflicts={}
         self.groups_seen={}
@@ -653,8 +656,8 @@ class GraphMaker():
 
 
     def checkRFGraph(self):
+        ambig=0
         for r in self.rf_node_index:
-            ambig=0
             if r.numFeatures() >0:
                 ambig+=1
         sys.stderr.write("rf-graph: "+str(ambig)+" nodes unexapanded"+"\n")
@@ -704,6 +707,18 @@ class GraphMaker():
 
     def finalizeGraphAttr(self, replaceIDs=False):
         num_genomes=float(len(self.replicon_map.keys()))
+        alt_group = {}
+        processed_n =set([])
+        grp_id =0
+        for n, alts in self.pg_node_alt.iteritems():
+            if n in processed_n:
+                continue
+            else:
+                processed_n.update(alts)
+                for n in alts:
+                    alt_group[n]=grp_id
+                grp_id+=1
+
         for e in self.pg_graph.edges_iter():
             attr=self.pg_graph.get_edge_data(*e)
             if "genomes" in attr:
@@ -732,6 +747,13 @@ class GraphMaker():
                 d["family"]=d["label"] 
                 d["label"]=list(label_set)[0]
             d["features"]=json.dumps(d["features"])
+            #make conflict attribute always present
+            if not "conflict" in d:
+                d["conflict"]= 0
+            grp_id = alt_group.get(n, 0)
+            d["alternate"]= grp_id
+        #sys.stderr.write("real alt number: "+str(len(processed_n))+"\n")
+            
 
     class taxInfo():
         def __init__(self, genome_name, summary_id):
@@ -823,6 +845,8 @@ class GraphMaker():
         if self.context != "feature":
             self.context_bin.add(kmer_key)
         self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key, duplicate=dup_number)
+        if not duplicate:
+            self.cur_rf_node.numBins+=1
 
         #here we add a key that marks which kmers the feature occurs in for later disambiguation
         for f in feature_indices:
@@ -1170,7 +1194,7 @@ class GraphMaker():
         prev_queued=True #has the rfid EVER been queued on THIS traversal
         up_queue= up_node!=None and nxt_rf_id == up_node.nodeID
         #If there are no unassigned features in the nxt node is there any point in visiting? conflict detection etc.?
-        if nxt_rf_id!=None and self.rf_node_index[nxt_rf_id].numFeatures() > 0:
+        if nxt_rf_id!=None and self.rf_node_index[nxt_rf_id].numFeatures() > 0 and self.rf_node_index[nxt_rf_id].numBins > self.minSeq:
             bundle_id=nxt_rf_id
             cur_rf_id = cur_node.nodeID
 
@@ -1268,8 +1292,6 @@ class GraphMaker():
         for g in self.pg_graph.node[remove]['features']:
             for c in self.pg_graph.node[remove]['features'][g]:
                 for f in self.pg_graph.node[remove]['features'][g][c]:
-                    if keep == 74 and remove == 3161:
-                        print "assigning "+str(f)+" to 74"
                     self.feature_index[f].pg_assignment=keep
         for e in self.pg_graph.edges(remove, data=True):
             if self.pg_graph.has_edge(keep, e[1]):
@@ -1350,7 +1372,10 @@ class GraphMaker():
         if self.context_levels[insert_level] > self.context_levels[self.context]:
             conflict=True
             cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
-            sys.stderr.write("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)+"\n")
+            if not split:
+                if self.debug:
+                    sys.stderr.write("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)+"\n")
+                sys.stderr.write("conflict between "+self.feature_index[new_feature].feature_ref+" and "+self.feature_index[cf].feature_ref+" in "+str(cur_pg_id)+"\n")
             #determine if it is conflict class 1
             if self.context == "genome" and insert_level=="contig":
                 nf_end=False
@@ -1412,10 +1437,9 @@ class GraphMaker():
     def get_pg_id(self):
         return self.num_pg_nodes;
 
-    def assign_pg_node(self, prev_feature, new_feature, pg_node):
+    def assign_pg_node(self, prev_feature, new_feature, pg_node, conflict=None):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
-        conflict=False
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         #if there is already a node for this feature
@@ -1446,11 +1470,12 @@ class GraphMaker():
                 self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}})
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
-        #REMOVE THIS
-        #anomolous=set([2893])#, 1639, 1636, 3503, 2943, 3524, 3521, 1179, 1176])
-        #if cur_pg_id in anomolous:
-        #    print "hmmm"
-        #END REMOVE
+        if conflict != None:
+            if conflict != "shift" and not "conflict" in self.pg_graph.node[cur_pg_id]:
+                self.pg_graph.node[cur_pg_id]["conflict"]=conflict
+            # else where for more comprehensive marking
+            #if conflict == "shift" and not "alternate" in self.pg_graph.node[cur_pg_id]:
+            #    self.pg_graph.node[cur_pg_id]["alternate"]=1
 
         if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
@@ -1588,20 +1613,30 @@ class GraphMaker():
             self.pg_node_alt.setdefault(i, set([])).update(pg_ids)
 
     #make assignments that are in pre_assignments
-    def makeAssignments(self, pre_assignments):
+    def makeAssignments(self, pre_assignments, conflicts):
         i=self.ksize-1
         while i >= 0:
-            new_nodes= set(pre_assignments[i]["assignments"].keys()+pre_assignments[i]["new_nodes"].keys())
-            if len(new_nodes) > 1: self.storeAlternates(new_nodes)
+            alt_nodes = set([])
+            alt_nodes.update(pre_assignments[i]["assignments"].keys())
             for pg in pre_assignments[i]["assignments"]:
+                conflict_status = None
+                if ("c2_conflict" in conflicts[i] and pg in conflicts[i]["c2_conflict"]):
+                    conflict_status = 2
+                if ("c1_conflict" in conflicts[i] and pg in conflicts[i]["c1_conflict"]):
+                    conflict_status = 1
+                #nothing taking advantage of this for now
+                #if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
+                #    conflict_status = "shift"
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
                     for f in features:
-                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg)
+                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflict=conflict_status)
             for pg in pre_assignments[i]["new_nodes"]:
                 new_pg = None
                 for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].iteritems():
                     for f in features:
-                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg)
+                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflict=None)
+                        alt_nodes.add(new_pg)
+            if len(alt_nodes) > 1: self.storeAlternates(alt_nodes)
             i-=1
                         
                         
@@ -1956,8 +1991,6 @@ class GraphMaker():
             #Determine the best guide to use
 
 
-        #TODO figure out consistentcy palindrome procedure. Flip LHS to RHS. Has to take place w/ targets.
-        #TODO look at anchor instance keys. AND other instance keys. Do cardinality of instance keys
 
         #the only place where all k-features are added is at an anchor node if there are features that are not currently part of a bundle
         #if a "feature thread" is already in the bundle then the previous k-1 features have been processed
@@ -1978,7 +2011,7 @@ class GraphMaker():
         self.determineAssignments(feature_pile, pre_assignments, cur_node, conflicts=None)
         self.findKConflicts(pre_assignments, conflict_assignments)
         self.determineAssignments(feature_pile, pre_assignments, cur_node, conflict_assignments)
-        self.makeAssignments(pre_assignments)
+        self.makeAssignments(pre_assignments, conflict_assignments)
         #self.storeGuides(pre_assignments)
         #end expand_features
 
@@ -2000,7 +2033,7 @@ class GraphMaker():
     
     #get a guide from a target bundle
     #this is used when new targets are returned from DFS/TFS.
-    #Because of this the new target will be on the opposite side than the previous targets
+    #Because of this the new target will be on the opposte side than the previous targets
     def getTargetGuide(self,targets):
         kmer_side=0
         guide=None
@@ -2442,6 +2475,7 @@ def main():
     input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
     parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
+    parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
     parser.add_argument("feature_files", type=str, nargs="*", default=["-"], help="Files of varying format specifing group, genome, contig, feature, and start in sorted order. stdin also accepted")
 
 
@@ -2450,7 +2484,7 @@ def main():
         sys.exit()
     args = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function),diversity=args.diversity)
+    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function),diversity=args.diversity, minSeq=args.min)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
     #if gmaker.break_conflict:
@@ -2512,4 +2546,6 @@ def old_main(init_args):
     #result_handle.close()
     
 if __name__ == "__main__":
+    start_time = time.time()
     main()
+    sys.stderr.write(("--- %s seconds ---" % (time.time() - start_time))+"\n")
