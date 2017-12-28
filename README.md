@@ -6,20 +6,15 @@
 
 ```
 //core code
-
 python 2.7 (for now)
-
 networkx
 
 
 // layout algorithm
-
 java
 
 // visualization
-
 firefox for web based browsing
-
 gephi for graph editing and manipulation
 ```
 
@@ -28,9 +23,7 @@ gephi for graph editing and manipulation
 
 ```
 git clone --recursive https://github.com/aswarren/pangenome_graphs.git
-
 cd pangenome_graphs
-
 pip install -r requirements.txt
 ```
 
@@ -83,3 +76,4 @@ Currently the most conveniently accessible supported format is PATRIC's feature 
 An example run for creating a graph:
 
 python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
+```
