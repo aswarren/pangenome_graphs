@@ -4,17 +4,22 @@
 
 ## Requirements
 
+```
 //core code
+
 python 2.7 (for now)
+
 networkx
 
-```
+
 // layout algorithm
+
 java
 
-```
 // visualization
+
 firefox for web based browsing
+
 gephi for graph editing and manipulation
 ```
 
@@ -23,7 +28,9 @@ gephi for graph editing and manipulation
 
 ```
 git clone --recursive https://github.com/aswarren/pangenome_graphs.git
+
 cd pangenome_graphs
+
 pip install -r requirements.txt
 ```
 
