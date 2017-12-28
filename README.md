@@ -68,7 +68,8 @@ python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gex
 ## Data
 
 Examples from the paper https://www.biorxiv.org/content/early/2017/11/08/215988
-can be found in the data directory.
+
+Zipped versions can be found in the data directory.
 
 These data can also be found and manipulated at PATRIC BRC (currently requires free account) at the following 
 https://patricbrc.org/workspace/public/panaconda@patricbrc.org/Panaconda/PanSyntenyExamples
