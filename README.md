@@ -62,7 +62,7 @@ optional arguments:
                         the size of the kmer to use in constructing synteny  
 
 ```
-####An example run for creating a graph
+#### Example run for creating a graph
 python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
 
 ## Data
