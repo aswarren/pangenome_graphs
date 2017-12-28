@@ -65,6 +65,23 @@ optional arguments:
 #### Example run for creating a graph
 python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
 
+#### Visualizing data
+Resulting gexf files can be opened in Gephi or through the JS visualizer distributed with Panaconda.
+Files can be loaded from local disk but Chrome currently restricts this. To run the javascript based visualizer
+locally you can use python to host a webserver and use a URL to view the data.
+
+To do this:
+
+cd viewer/gexf-js/
+
+Soft link or copy a gexf file you want to view into the gexf-js folder. e.g. ln -s ../../data/BrucellaInversion/psgraph.gexf ./brucellainversion.gexf
+
+python -m SimpleHTTPServer 8080
+
+In firefox navigate to http://localhost:8080/index.html#brucellainversion.gexf
+
+
+
 ## Data
 
 Examples from the paper https://www.biorxiv.org/content/early/2017/11/08/215988
