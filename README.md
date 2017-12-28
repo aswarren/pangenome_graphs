@@ -1,3 +1,37 @@
+
+# Panaconda
+
+
+## Requirements
+
+//core code
+python 2.7 (for now)
+networkx
+
+```
+// layout algorithm
+java
+
+```
+// visualization
+firefox for web based browsing
+gephi for graph editing and manipulation
+```
+
+
+## Installation
+
+```
+git clone --recursive https://github.com/aswarren/pangenome_graphs.git
+cd pangenome_graphs
+pip install -r requirements.txt
+```
+
+
+## Running
+```
+
+
 usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]  
                        [--rfgraph RFGRAPH] [--diversity {genus,species}]  
                        [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]  
@@ -27,3 +61,18 @@ optional arguments:
                         the synteny context  
   --ksize {3,4,5,6,7,8,9}  
                         the size of the kmer to use in constructing synteny  
+
+```
+## Data
+```
+Examples from the paper https://www.biorxiv.org/content/early/2017/11/08/215988
+can be found in the data directory.
+
+These data can also be found and manipulated at PATRIC BRC (currently requires free account) at the following 
+https://patricbrc.org/workspace/public/panaconda@patricbrc.org/Panaconda/PanSyntenyExamples
+
+Currently the most conveniently accessible supported format is PATRIC's feature tab format. It can be downloaded using 
+
+An example run for creating a graph:
+
+python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
