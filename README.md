@@ -29,9 +29,8 @@ pip install -r requirements.txt
 
 
 ## Running
+
 ```
-
-
 usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]  
                        [--rfgraph RFGRAPH] [--diversity {genus,species}]  
                        [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]  
@@ -63,17 +62,18 @@ optional arguments:
                         the size of the kmer to use in constructing synteny  
 
 ```
+//An example run for creating a graph:
+python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
+
 ## Data
-```
+
 Examples from the paper https://www.biorxiv.org/content/early/2017/11/08/215988
 can be found in the data directory.
 
 These data can also be found and manipulated at PATRIC BRC (currently requires free account) at the following 
 https://patricbrc.org/workspace/public/panaconda@patricbrc.org/Panaconda/PanSyntenyExamples
 
-Currently the most conveniently accessible supported format is PATRIC's feature tab format. It can be downloaded using 
+Currently the most conveniently accessible supported format is PATRIC's feature tab format.
+Groups can be downloaded from the "feature tab" in PATRIC.  
 
-An example run for creating a graph:
 
-python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
-```
