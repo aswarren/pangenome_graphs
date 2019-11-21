@@ -21,7 +21,7 @@ import time
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
 if sys.version_info < (2, 7):
-    raise "must use python 2.7 or greater"
+    raise Exception("must use python 2.7 or greater")
 
 #from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
 #try:
@@ -673,7 +673,7 @@ class GraphMaker():
                         if group_id == None:
                             group_id = self.feature_index[int(f)].group_id
                         elif group_id != self.feature_index[int(f)].group_id:
-                            assert LogicError
+                            raise Exception("LogicError")
 
     def calcStatistics(self):
         sys.stderr.write("rf-graph:\n")
@@ -987,7 +987,7 @@ class GraphMaker():
                 self.prev_indices=[]
             elif prev_feature and prev_feature.contig_id == feature.contig_id:
                 if prev_feature.start > feature.start:
-                    assert InputError
+                    raise Exception("InputError")
             #depending on the context populate the context bin with appropriate ids to detect duplicates
             if self.context:
                 if(prev_feature and prev_feature.getContextValue(self.context) != feature.getContextValue(self.context)):
@@ -1123,7 +1123,7 @@ class GraphMaker():
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             if not palindrome:
                 sys.stderr.write("logic problem. calculated leaving side does not match")
-                assert LogicError
+                raise Exception("LogicError")
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
         flip=edge_data["flip"]
@@ -1155,7 +1155,7 @@ class GraphMaker():
                     nxt_position = 1
                     nxt_target=nxt_feature
                 else:
-                    assert LogicError
+                    raise Exception("LogicError")
             to_queue.append((nxt_position, nxt_orientation, nxt_target))
         else:
             if flip==1:
@@ -1843,7 +1843,7 @@ class GraphMaker():
         if target_pg == None:
             target_pg =self.getFeatureRecord(new_guide).pg_assignment
             if target_pg == None:
-                assert LogicError
+                raise Exception("LogicError")
         if not new_node:
             pre_assignments[col]["assignments"].setdefault(target_pg, {'guides':{},'features':{}})
             pre_assignments[col]["assignments"][target_pg]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
@@ -1944,14 +1944,14 @@ class GraphMaker():
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
                                 sys.stderr.write("missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
-                                assert LogicError
+                                raise Exception("LogicError")
                             elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
                                 edge_only=True
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                             else:
                                 sys.stderr.write("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
-                                assert LogicError
+                                raise Exception("LogicError")
                         else:
                             #this initial loop through the targets is really just to see if any have already been assigned
                             if self.feature_index[new_feature].pg_assignment != None:
@@ -2048,7 +2048,7 @@ class GraphMaker():
                 direction+=1
             kmer_side+=1
         if guide == None:
-            assert LogicError
+            raise Exception("LogicError")
         return guide
 
 
