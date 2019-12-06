@@ -8,6 +8,7 @@ import argparse
 import networkx as nx
 import fileinput
 from operator import methodcaller
+from operator import itemgetter
 #from networkx import Graph
 #from networkx import readwrite
 #from Bio import bgzf
@@ -587,7 +588,7 @@ class GraphMaker():
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
-        self.replicon_map={}#stores {genome_id:set(contig_id)}
+        self.replicon_map=OrderedDict()#stores {genome_id:OrderedDict(contig_id)}
         self.minSeq = kwargs["minSeq"]
         self.no_edge=set([])
         self.conflicts={}
@@ -688,6 +689,28 @@ class GraphMaker():
         sys.stderr.write("nodes "+str(self.pg_graph.number_of_nodes())+"\n")
         sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
         sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
+
+    def write_contigs(self, contig_file):
+        #first assure that all contigs are represented
+        missing_contigs=0
+        missing_genomes=0
+        for k,v in self.replicon_map.iteritems():
+            if k not in self.contig_order:
+                missing_genomes+=1
+                sys.stderr.write("WARNING: missing genome in contig order "+k+"\n")
+                self.contig_order.setdefault(k, OrderedDict())
+            for contig_id in v.keys():
+                if contig_id not in self.contig_order[k]:
+                    missing_contigs+=1
+                    sys.stderr.write("WARNING: missing contig in contig order "+" ".join([k,contig_id])+"\n")
+                    self.contig_order[k].setdefault(contig_id,[])
+        if missing_contigs or missing_genomes:
+            sys.stderr.write("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
+        with open(contig_file, 'w') as ch:
+            for g in self.replicon_map.keys():
+                ch.write("\t".join([g]+self.contig_order[g].keys())+"\n")
+
+
 
     def getTaxaIndicator(self, feature_id, mode="name"):
             if mode=="name":
@@ -984,7 +1007,7 @@ class GraphMaker():
             self.feature_index.append(feature)
             if prev_feature == None or prev_feature.genome_id != feature.genome_id:
                 self.trackDiversity(feature.feature_id, self.all_diversity)
-            self.replicon_map.setdefault(feature.genome_id,set()).add(feature.contig_id)
+            self.replicon_map.setdefault(feature.genome_id,OrderedDict()).setdefault(feature.contig_id,[]).append(feature.feature_id)
             if(prev_feature and prev_feature.contig_id != feature.contig_id):
                 kmer_q=deque()#clear kmer stack because switching replicons
                 self.prev_node=None
@@ -1014,10 +1037,14 @@ class GraphMaker():
             if node.anchorNode():
                 self.rf_starting_list.append(node)
         self.finalizeInstanceKeys()
+        #sort by area that it will take up, then by whether it is earlier in the contig
         if self.traverse_priority == "area":
             #numBins will be the number of contexts the kmer will show up in (non-dup). this number will be inflated but correct for relative sorting.
             self.contig_weight={contig:sum([self.rf_node_index[r].numBins for r in rf_list]) for contig,rf_list in self.contig_to_rf.iteritems()}
-	    self.rf_starting_list.sort(key=lambda x: self.rfNodeToMaxAlignArea(x.nodeID), reverse=True)
+            temp_starting_list = [(self.rfNodeToMaxAlignArea(i.nodeID, start_tuple=True), i) for i in self.rf_starting_list] #make a list of ((weight, start), rfnode) tuples
+	    temp_starting_list.sort(key=lambda x: x[0][1])#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
+	    temp_starting_list.sort(key=lambda x: x[0][0], reverse=True)#second we sort by area/weight so taht higher values come first (as a primary sort criteria)
+            self.rf_starting_list=[i[1] for i in temp_starting_list]
         else:
 	    #start with nodes that have the most features
 	    self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
@@ -1025,15 +1052,22 @@ class GraphMaker():
             if rf_node.numFeatures() > 0:
                 self.tfs_expand_nr(None, rf_node, None, None)
 
-    def rfNodeToMaxAlignArea(self, rf_target_id, node_bundle=None):
+    def rfNodeToMaxAlignArea(self, rf_target_id, node_bundle=None, start_tuple=False):
         cur_weights=[]
         if node_bundle != None:
-            features= sum([list(i) for i in node_bundle[rf_target_id]], []) #a bunch of sets of features in the node bundle.
+            features= sum([list(i) for i in sum(node_bundle[rf_target_id],[])], []) #a bunch of sets of features in the node bundle.
         else:
-            features=sum(self.rf_node_index[rf_target_id].features,[]) # get concatenated list of features
+            features=sum([list(i) for i in self.rf_node_index[rf_target_id].features],[]) # get concatenated list of features
         for f in features:
-            cur_weights.append(self.contig_weight[self.feature_index[f].contig_id])
-        return max(cur_weights)
+            feature_obj = self.feature_index[f]
+            cur_weights.append((self.contig_weight[feature_obj.contig_id], feature_obj.start))
+        if start_tuple:
+            cur_weights.sort(key=itemgetter(1))#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
+            cur_weights.sort(key=itemgetter(0), reverse=True)#second we sort by area/weight so that higher values come first (as a primary sort criteria)
+            return cur_weights[0]
+        else:
+            return max(cur_weights, key=itemgetter(0))
+
 
 
         
@@ -1244,7 +1278,7 @@ class GraphMaker():
                             self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
                     #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                     if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
-                        temp_self_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                        temp_self_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
                     else:
                         temp_reg_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
                 #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
@@ -1943,8 +1977,8 @@ class GraphMaker():
 
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
-	temp_self_queue=deque()
-	temp_reg_queue=deque()
+	temp_self_queue=[]
+	temp_reg_queue=[]
         if (num_targets>0):
             # if there are targets then this isn't the first node visited
             # this means only one new column aka 'character' in the kmer needs to be expanded 
@@ -2315,7 +2349,7 @@ class pFamGraph(nx.Graph):
         num_orgs=len(storage.summaryLookup.keys())
         temp_size=len(storage.kmerLookup.keys())
         total_tax=len(storage.completeTaxSummary())
-        for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
+        for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k].keys())
         print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
         for n in storage.pg_initial:
             if n != None:
