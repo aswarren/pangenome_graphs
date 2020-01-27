@@ -593,6 +593,7 @@ class GraphMaker():
         self.no_edge=set([])
         self.conflicts={}
         self.contig_order={}#stores {genome_id:OrderedDict{contig_id:[feature_number]}}
+        self.contig_unorder={}#stores {genome_id:OrderedDict{contig_id:[feature_number]}}
         self.order_contigs=False
         self.contig_to_rf ={}# track which contigs have which rf-nodes
         self.contig_weight={} # for calculating which contigs should be prioritized in traversal to use in layout algorithm
@@ -690,7 +691,8 @@ class GraphMaker():
         sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
         sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
 
-    def write_contigs(self, contig_file):
+    def write_contigs(self, contig_file, unsorted_file=None):
+            
         #first assure that all contigs are represented
         missing_contigs=0
         missing_genomes=0
@@ -703,12 +705,19 @@ class GraphMaker():
                 if contig_id not in self.contig_order[k]:
                     missing_contigs+=1
                     sys.stderr.write("WARNING: missing contig in contig order "+" ".join([k,contig_id])+"\n")
-                    self.contig_order[k].setdefault(contig_id,[])
+                    if unsorted_file != None:
+                        self.contig_unorder.setdefault(k,{}).setdefault(contig_id,[])
+                    else:
+                        self.contig_order[k].setdefault(contig_id,[])
         if missing_contigs or missing_genomes:
             sys.stderr.write("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
         with open(contig_file, 'w') as ch:
             for g in self.replicon_map.keys():
                 ch.write("\t".join([g]+self.contig_order[g].keys())+"\n")
+        if unsorted_file != None:
+            with open(unsorted_file, 'w') as ch:
+                for g in self.contig_unorder.keys():
+                    ch.write("\t".join([g]+self.contig_unorder[g].keys())+"\n")
 
 
 
@@ -2588,7 +2597,8 @@ def main():
     else:
         nx.readwrite.write_gexf(gmaker.pg_graph, pargs.output)
     if pargs.order_contigs != "none":
-        gmaker.write_contigs(pargs.contig_output)
+        unsorted_file = pargs.contig_output+".unsorted"
+        gmaker.write_contigs(pargs.contig_output, unsorted_file)
 
 
 def old_main(init_args):
