@@ -586,7 +586,7 @@ class GraphMaker():
         self.all_diversity={}#for tracking total taxa numbers in the graph
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
-        self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
+        self.pg_graph=pFamGraph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
         self.replicon_map=OrderedDict()#stores {genome_id:OrderedDict(contig_id)}
         self.minSeq = kwargs["minSeq"]
@@ -755,7 +755,6 @@ class GraphMaker():
                 for n in alts:
                     alt_group[n]=grp_id
                 grp_id+=1
-
         for e in self.pg_graph.edges_iter():
             attr=self.pg_graph.get_edge_data(*e)
             if "genomes" in attr:
@@ -923,8 +922,8 @@ class GraphMaker():
                     fflip = "no"
                 if self.prev_node.palindrome:
                     rflip= "no"
-                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":fflip,"leaving_position":leaving_position})
-                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":rflip,"leaving_position":reverse_lp})
+                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, **{"flip":fflip,"leaving_position":leaving_position})
+                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, **{"flip":rflip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
         self.prev_node=self.cur_rf_node
         self.prev_reverse=reverse
@@ -1361,7 +1360,8 @@ class GraphMaker():
                 for k in e[-1]:#edge dictionary
                     cur_edge_data[k].update(e[-1][k])
             else:
-                self.pg_graph.add_edge(keep, e[1], attr_dict=e[-1])
+                attr_dict=e[-1]
+                self.pg_graph.add_edge(keep, e[1], **attr_dict)
         self.pg_graph.remove_node(remove)
         return (keep, conflict)
 
@@ -2262,171 +2262,31 @@ class GraphMaker():
 
 # undirected weighted
 class pFamGraph(nx.Graph):
-    def __init__(self, storage, minOrg=2):
+    def __init__(self):
         #Graph.__init__(self, weighted=True)
-        Graph.__init__(self)
-        self.createGraph(storage, minOrg)
-    def add_path_cumul_attr(self,nlist,**kwargs):
-        edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
-        edge_ids=[]
-        for e in edges:
-            if self.has_edge(*e):
-                for k in kwargs:
-                    if type(kwargs[k])==set:
-                        try: self.adj[e[0]][e[1]][k] |= kwargs[k]#  union of attribute
-                        except: 
-                            try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
-                            except: self.adj[e[0]][e[1]]=kwargs[k]
+        nx.Graph.__init__(self)
+    if not hasattr(nx.Graph,"nodes_iter"):
+        def nodes_iter(self, data=False):
+            if data ==True:
+                for i in self.nodes:
+                    yield (i,self.nodes[i])
+            if data ==False:
+                for i in self.nodes:
+                    yield i 
+    if not hasattr(nx.Graph,"edges_iter"):
+        def edges_iter(self, data=False):
+            if data ==True:
+                for i in self.edges:
+                    yield (i,self.get_edge_data(*i))
             else:
-                kwargs['id']=str(self.number_of_edges())
-                self.add_edge(e[0],e[1],kwargs)
-                if kwargs['id']=="0":
-                    warning("edge 0 is "+e[0]+" "+e[1])
-            try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
-            except: warning("no ID for edge "+e[0]+" "+e[1])
-        return edge_ids 
+                for i in self.edges:
+                    yield i
 
-    #update the edge weight based on a designated attribute
-    #also flatten to a string since writing list objects isn't supported
-    #weight_attr has to be weight. label_attr = (what to get, and what to label it)
-    #also setting ID so that it can be used in building map from sid to edge
-    def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
-        edge_counter=itertools.count()
-        for u,v,data in self.edges_iter(data=True):
-            #try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
-            #except: pass
-            data['label']=''
-            weight_set=set()
-            label_set=set()
-            for i in data['instances']:
-                weight_set.add(getattr(i,weight_attr))
-                label_set.add(getattr(i,label_attr[0])())
-            try: data['weight']=len(weight_set)/float(divisor)
-            except:
-                try:data['weight']=0
-                except: pass
-            if label_attr:
-                try: data[label_attr[1]]=", ".join(list(label_set))
-                except: pass
-            for r in remove_attrs:
-                try: data.pop(r,None)
-                except: pass
-            data['id']=next(edge_counter)
-                
-    def update_node_cumul_attr(self, n_id, **kwargs ):
-        if n_id in self.node:
-            for k in kwargs:
-                try: self.node[n_id][k]=kwargs[k] | self.node[n_id][k]
-                except:
-                    try: self.node[n_id][k]=kwargs[k].copy()
-                    except: print "cannot add attribute to node "+str(n_id)
-    
-    #calculate the node weight and change the set attributes to string
-    #so that they can be written by graphml writer
-    def update_node_attr_final(self, weight_func, family_func, divisor=1, remove_attrs=[], minOrg=2):
-        remove_set=set()
-        for n in self.nodes():
-            weight_set=weight_func(n)
-            node_summary=n.get_summary()
-            if len(node_summary['organisms']) < minOrg:
-                remove_set.add(n)
-            try:
-                self.node[n]['weight']=len(weight_set)/float(divisor)
-                self.node[n]['id']=str(n.id)
-                self.node[n]['familyID']=str(n.famID)
-                self.node[n]['label']=family_func(n.famID)
-                self.node[n]['locations']=','.join(list(node_summary['locations']))
-                self.node[n]['organisms']=','.join(list(node_summary['organisms']))
-                
-            except: pass
-            for r in remove_attrs:
-                try: self.node[n].pop(r,None)
-                except: pass
-            for a in self.node[n]:
-                if type(self.node[n][a])==set:
-                    self.node[n][a] = ','.join(self.node[n][a])
-        for n in remove_set:
-            self.remove_node(n)
 
                                 
                             
                     
                 
-                
-    ##this function takes the storage class and constructs the graph from it
-    def createGraph(self, storage, minOrg):
-        num_orgs=len(storage.summaryLookup.keys())
-        temp_size=len(storage.kmerLookup.keys())
-        total_tax=len(storage.completeTaxSummary())
-        for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k].keys())
-        print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
-        for n in storage.pg_initial:
-            if n != None:
-                for e in n.edges:
-                    n2=storage.getPGNode(e)
-                    if n.subsumed or n2.subsumed:
-                        sys.stderr.write("Logic Error: A node that should have been subsumed and removed is in the graph\n")
-                        sys.exit()
-                    self.add_edge(n.famSubset, n2.famSubset)
-                    if not 'instances' in self[n.famSubset][n2.famSubset]:
-                        self[n.famSubset][n2.famSubset]['instances']=set()
-                    self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
-    
-    def labelGraph(self, storage, minOrg):	
-        num_orgs=len(storage.summaryLookup.keys())
-        total_tax=len(storage.completeTaxSummary())
-        self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
-        self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg=minOrg)
-        
-        #create attribute called paths which represents edges per replicon
-        #self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
-            
-
-        #get list of nodes and edges for testing
-        #node_handle=open('new_loop_node_list.txt','w')
-        #for n in self.nodes_iter():
-        #	node_handle.write(n+"\n")
-        #node_handle.close()
-        #edge_handle=open('new_loop_edge_list.txt','w')
-        #for e in self.edges_iter():
-        #	edge_handle.write(str(e)+"\n")
-        #edge_handle.close()
-
-
-
-                            
-    def toJSON(self, fhandle):
-        cid = 0
-        cur_ids = {}
-        #fhandle.write("{\n\tnodes:[\n")
-        results={"nodes" : [], "links" :[]}
-        for cn in self.nodes_iter():
-            cur_ids[cn] = cid
-            results["nodes"].append({'id': cid, 'label': cn, 'weight': self.node[cn]['weight']})
-            #fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
-            cid += 1
-        #fhandle.write("\t],\n")
-        #fhandle.write("\tlinks:[\n")
-        count = 0
-        for edge in self.edges_weight_iter():
-            #fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
-            results["links"].append({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})
-            #if count == 1000:
-            #	break
-            count += 1
-        #fhandle.write("\t]\n}")
-        fhandle.write(json.dumps(results, indent=1))
-
-    ## Get weighted edgesD from this graph.
-    #def edges(self):
-        # This is just the code from networkx.graph - except call our
-    #	return list(self.edges_iter())
-                
-
-    ## Overwrite Graph edges_iter method so we get weight information too
-    def edges_weight_iter(self, nbunch=None):
-        for edge in Graph.edges_iter(self, nbunch, data=True):
-            yield edge
 
 def toGML(cur_graph, file_name):
         readwrite.graphml.write_graphml(cur_graph, file_name)
@@ -2493,7 +2353,7 @@ def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
 def find_rearrangements(pgraph, storage, out_file, gminimum=None):
     out_handle=open(out_file,'w')
     if not gminimum:
-        gminimum=len(storage.summaryLookup)#default to all genomes in 
+        gminimum=len(storage.summaryLookup)#default to all genomes in
     for u,v,data in pgraph.edges_iter(data=True):
         us=u.get_summary()
         vs=v.get_summary()
