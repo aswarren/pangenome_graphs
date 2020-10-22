@@ -8,7 +8,6 @@ import argparse
 import networkx as nx
 import fileinput
 from operator import methodcaller
-from operator import itemgetter
 #from networkx import Graph
 #from networkx import readwrite
 #from Bio import bgzf
@@ -18,6 +17,7 @@ from collections import OrderedDict
 from cStringIO import StringIO
 from subprocess import Popen, PIPE, STDOUT
 import time
+import requests
 
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
@@ -507,6 +507,7 @@ class featureParser():
         self.feature_files=kwargs['feature_files']
         self.file_type=kwargs['file_type']
         self.parse_function=kwargs['parse_function']
+        self.pull_genome_ids=kwargs["pull_genome_ids"]
         self.parse=None
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
@@ -514,6 +515,7 @@ class featureParser():
         self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14, 'organism':1}
         self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14, 'organism':1}
         self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14, 'organism':1}
+        
         if self.file_type=="tab":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
@@ -528,8 +530,15 @@ class featureParser():
             self.ip = self.pc_pgfam
 
     def parseFeatureTab(self):
+        #if parsing the feature_files to download patric genome ids, need to use the generator defined by genome_id_feature_gen
+        kwargs = dict()
+        if self.pull_genome_ids:
+            generator = self.genome_id_feature_gen()
+        else:
+            generator = fileinput.input(files=self.feature_files)
         #if files is empty it should read from stdin
-        for line in fileinput.input(files=self.feature_files):
+#         for line in fileinput.input(files=self.feature_files):
+        for line in generator:
             result=featureInfo()
             header=False
             try:
@@ -560,6 +569,34 @@ class featureParser():
                 warning("warning: couldn't parse line: "+line)
                 continue
             yield result
+            
+    def genome_id_feature_gen(self, limit=2500000):
+        genome_id_files=self.feature_files
+        genome_ids = []
+        
+        #Will open all files, or stdin if no arguments passed (or if "-" is passed as an argument)
+        for line in fileinput.input(files=self.feature_files):
+            #Parses all files for the genome_ids, and will split on commas, or tabs (as well as newlines implcitly by the iterator above)
+            delim = "," if "," in line else "\t"
+            line = line.strip().split(delim)
+            for l in line:
+                genome_ids.append(l)
+                print(l)
+        selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(genome_ids))]
+        genomes = "and({})".format(','.join(selectors))   
+        limit = "limit({})".format(limit)
+        select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway)&sort(+genome_id,+sequence_id,+start)"
+        base = "https://www.patricbrc.org/api/genome_feature/"
+        query = "&".join([genomes, limit, select])
+        headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
+
+        #Stream the request so that we don't have to load it all into memory
+        r = requests.post(url=base, data=query, headers=headers, stream=True) 
+
+        if r.encoding is None:
+            r.encoding = "utf-8"
+        for line in r.iter_lines(decode_unicode=True):
+            yield line
 
 
             
@@ -576,7 +613,7 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], pull_genome_ids=kwargs["pull_genome_ids"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -586,18 +623,12 @@ class GraphMaker():
         self.all_diversity={}#for tracking total taxa numbers in the graph
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
-        self.pg_graph=pFamGraph()# pg-graph is an undirected grpah
+        self.pg_graph=nx.Graph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
-        self.replicon_map=OrderedDict()#stores {genome_id:OrderedDict(contig_id)}
+        self.replicon_map={}
         self.minSeq = kwargs["minSeq"]
         self.no_edge=set([])
         self.conflicts={}
-        self.contig_order={}#stores {genome_id:OrderedDict{contig_id:[feature_number]}}
-        self.contig_unorder={}#stores {genome_id:OrderedDict{contig_id:[feature_number]}}
-        self.order_contigs=False
-        self.contig_to_rf ={}# track which contigs have which rf-nodes
-        self.contig_weight={} # for calculating which contigs should be prioritized in traversal to use in layout algorithm
-        self.traverse_priority = None
         self.groups_seen={}
         self.group_index=[]
         self.context_bin=set([])
@@ -691,36 +722,6 @@ class GraphMaker():
         sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
         sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
 
-    def write_contigs(self, contig_file, unsorted_file=None):
-            
-        #first assure that all contigs are represented
-        missing_contigs=0
-        missing_genomes=0
-        for k,v in self.replicon_map.iteritems():
-            if k not in self.contig_order:
-                missing_genomes+=1
-                sys.stderr.write("WARNING: missing genome in contig order "+k+"\n")
-                self.contig_order.setdefault(k, OrderedDict())
-            for contig_id in v.keys():
-                if contig_id not in self.contig_order[k]:
-                    missing_contigs+=1
-                    sys.stderr.write("WARNING: missing contig in contig order "+" ".join([k,contig_id])+"\n")
-                    if unsorted_file != None:
-                        self.contig_unorder.setdefault(k,{}).setdefault(contig_id,[])
-                    else:
-                        self.contig_order[k].setdefault(contig_id,[])
-        if missing_contigs or missing_genomes:
-            sys.stderr.write("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
-        with open(contig_file, 'w') as ch:
-            for g in self.replicon_map.keys():
-                ch.write("\t".join([g]+self.contig_order[g].keys())+"\n")
-        if unsorted_file != None:
-            with open(unsorted_file, 'w') as ch:
-                for g in self.contig_unorder.keys():
-                    ch.write("\t".join([g]+self.contig_unorder[g].keys())+"\n")
-
-
-
     def getTaxaIndicator(self, feature_id, mode="name"):
             if mode=="name":
                 string_part = 0
@@ -755,6 +756,7 @@ class GraphMaker():
                 for n in alts:
                     alt_group[n]=grp_id
                 grp_id+=1
+
         for e in self.pg_graph.edges_iter():
             attr=self.pg_graph.get_edge_data(*e)
             if "genomes" in attr:
@@ -883,8 +885,6 @@ class GraphMaker():
         self.rf_graph.add_node(self.cur_rf_node.nodeID, label=kmer_key, duplicate=dup_number)
         if not duplicate:
             self.cur_rf_node.numBins+=1
-        if self.traverse_priority == "area":
-            self.contig_to_rf.setdefault(feature_list[0].contig_id,[]).append(self.cur_rf_node.nodeID)
 
         #here we add a key that marks which kmers the feature occurs in for later disambiguation
         for f in feature_indices:
@@ -922,8 +922,8 @@ class GraphMaker():
                     fflip = "no"
                 if self.prev_node.palindrome:
                     rflip= "no"
-                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, **{"flip":fflip,"leaving_position":leaving_position})
-                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, **{"flip":rflip,"leaving_position":reverse_lp})
+                self.rf_graph.add_edge(self.prev_node.nodeID, self.cur_rf_node.nodeID, attr_dict={"flip":fflip,"leaving_position":leaving_position})
+                self.rf_graph.add_edge(self.cur_rf_node.nodeID, self.prev_node.nodeID, attr_dict={"flip":rflip,"leaving_position":reverse_lp})
         self.prev_indices=feature_indices
         self.prev_node=self.cur_rf_node
         self.prev_reverse=reverse
@@ -1015,7 +1015,10 @@ class GraphMaker():
             self.feature_index.append(feature)
             if prev_feature == None or prev_feature.genome_id != feature.genome_id:
                 self.trackDiversity(feature.feature_id, self.all_diversity)
-            self.replicon_map.setdefault(feature.genome_id,OrderedDict()).setdefault(feature.contig_id,[]).append(feature.feature_id)
+            if feature.genome_id not in self.replicon_map:
+                self.replicon_map[feature.genome_id]=set()
+            else:
+                self.replicon_map[feature.genome_id].add(feature.contig_id)
             if(prev_feature and prev_feature.contig_id != feature.contig_id):
                 kmer_q=deque()#clear kmer stack because switching replicons
                 self.prev_node=None
@@ -1045,37 +1048,11 @@ class GraphMaker():
             if node.anchorNode():
                 self.rf_starting_list.append(node)
         self.finalizeInstanceKeys()
-        #sort by area that it will take up, then by whether it is earlier in the contig
-        if self.traverse_priority == "area":
-            #numBins will be the number of contexts the kmer will show up in (non-dup). this number will be inflated but correct for relative sorting.
-            self.contig_weight={contig:sum([self.rf_node_index[r].numBins for r in rf_list]) for contig,rf_list in self.contig_to_rf.iteritems()}
-            temp_starting_list = [(self.rfNodeToMaxAlignArea(i.nodeID, start_tuple=True), i) for i in self.rf_starting_list] #make a list of ((weight, start), rfnode) tuples
-	    temp_starting_list.sort(key=lambda x: x[0][1])#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
-	    temp_starting_list.sort(key=lambda x: x[0][0], reverse=True)#second we sort by area/weight so taht higher values come first (as a primary sort criteria)
-            self.rf_starting_list=[i[1] for i in temp_starting_list]
-        else:
-	    #start with nodes that have the most features
-	    self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
+        #start with nodes that have the most features
+        self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
         for rf_node in self.rf_starting_list:
             if rf_node.numFeatures() > 0:
                 self.tfs_expand_nr(None, rf_node, None, None)
-
-    def rfNodeToMaxAlignArea(self, rf_target_id, node_bundle=None, start_tuple=False):
-        cur_weights=[]
-        if node_bundle != None:
-            features= sum([list(i) for i in sum(node_bundle[rf_target_id],[])], []) #a bunch of sets of features in the node bundle.
-        else:
-            features=sum([list(i) for i in self.rf_node_index[rf_target_id].features],[]) # get concatenated list of features
-        for f in features:
-            feature_obj = self.feature_index[f]
-            cur_weights.append((self.contig_weight[feature_obj.contig_id], feature_obj.start))
-        if start_tuple:
-            cur_weights.sort(key=itemgetter(1))#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
-            cur_weights.sort(key=itemgetter(0), reverse=True)#second we sort by area/weight so that higher values come first (as a primary sort criteria)
-            return cur_weights[0]
-        else:
-            return max(cur_weights, key=itemgetter(0))
-
 
 
         
@@ -1250,7 +1227,7 @@ class GraphMaker():
     #orientation = 0 is increasing, orientation =1 is decreasing (feature series progression relative to kmer orientation) e.g 1,2,3 or 3,2,1
     #if a guide is passed, it is a feature from the leaving position. find its pg_node,
     #use that in combination with the nxt_rf_id to see if a guide/cat should be passed
-    def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, temp_self_queue, temp_reg_queue, node_bundles, up_node=None):
+    def queueFeature(self, cur_node, kmer_side, orientation, leaving_feature, node_queue, node_bundles, up_node=None):
         nxt_rf_id = self.nextRFNode(kmer_side, orientation, leaving_feature)
         prev_queued=True #has the rfid EVER been queued on THIS traversal
         up_queue= up_node!=None and nxt_rf_id == up_node.nodeID
@@ -1286,9 +1263,9 @@ class GraphMaker():
                             self.non_anchor_guides[pg_node_id][nxt_rf_id]=(nxt_target, nxt_direction, nxt_position)
                     #no existing targets so needs to be queued. if its prev_queued then it will be queued with guide. else guide=None
                     if nxt_rf_id == cur_node.nodeID: #self loop goes first. 
-                        temp_self_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                        node_queue.appendleft((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
                     else:
-                        temp_reg_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
+                        node_queue.append((nxt_rf_id,[nxt_guide, nxt_guide_cat, nxt_guide_side]))
                 #node bundles exist separate from queue but are cleared out when rfid is taken from the queue
                 node_bundles[bundle_id][nxt_position][nxt_direction].add(nxt_target)
             return nxt_rf_id
@@ -1360,8 +1337,7 @@ class GraphMaker():
                 for k in e[-1]:#edge dictionary
                     cur_edge_data[k].update(e[-1][k])
             else:
-                attr_dict=e[-1]
-                self.pg_graph.add_edge(keep, e[1], **attr_dict)
+                self.pg_graph.add_edge(keep, e[1], attr_dict=e[-1])
         self.pg_graph.remove_node(remove)
         return (keep, conflict)
 
@@ -1519,8 +1495,6 @@ class GraphMaker():
 
         #if this feature has yet to be assigned to a pg-node
         else:
-            if self.order_contigs:
-                self.contig_order.setdefault(genome_id,OrderedDict()).setdefault(sequence_id, []).append(new_feature)
             if pg_node!=None:
                 #REPLACED insert_level=None
                 cur_pg_id=pg_node
@@ -1808,7 +1782,7 @@ class GraphMaker():
     #process features remaining in cur_node.features
     #targets organized as targets["left" & "right" == 0 & 1][ "increasing" & "decreasing" == 0 & 1 ]
     #targets are all RHS representative
-    def kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node, temp_self_queue, temp_reg_queue, node_bundles, targets):
+    def kfill_feature_pile(self, feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles, targets):
             i=0
             while i < self.ksize: #because any features remaining represent "new" threads need to assign the entire k-mer
                 for direction in self.target_cat:
@@ -1833,10 +1807,10 @@ class GraphMaker():
                                 #there are two cases where the feature could be about to leave the kmer-frame. If they are on the left or right of the kmeri
                                 if i == 0:
                                     #this feature is on the rhs of kmer
-                                    self.queueFeature(cur_node, 1, direction, new_feature, temp_self_queue, temp_reg_queue, node_bundles, up_node=prev_node)
+                                    self.queueFeature(cur_node, 1, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                                 if i == self.ksize-1:
                                     #this feature is on the lhs of kmer
-                                    self.queueFeature(cur_node, 0, direction, new_feature, temp_self_queue, temp_reg_queue, node_bundles, up_node=prev_node)
+                                    self.queueFeature(cur_node, 0, direction, new_feature, node_queue, node_bundles, up_node=prev_node)
                             #only want to fill features/track guides that are from new (non-targets) and from the parts 
                             if status == "new" or i != skip_count:
                                 if self.feature_index[new_feature].pg_assignment != None:
@@ -1986,8 +1960,6 @@ class GraphMaker():
 
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
-	temp_self_queue=[]
-	temp_reg_queue=[]
         if (num_targets>0):
             # if there are targets then this isn't the first node visited
             # this means only one new column aka 'character' in the kmer needs to be expanded 
@@ -2034,10 +2006,9 @@ class GraphMaker():
                             self.track_feature(self.side_to_kcoord(kmer_side), feature_pile, new_feature, cur_info, cur_instance_key)
                         if up_targets:#if up_targets is true then these features were returned from a DFS exploration of an anchor node and passed here as target.
                             #when queueing based on return 'new' features make sure don't do a DFS "up"
-                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, temp_self_queue, temp_reg_queue, node_bundles, up_node=prev_node) #no prevent_node
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles, up_node=prev_node) #no prevent_node
                         elif not edge_only:
-                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, temp_self_queue, temp_reg_queue, node_bundles) #no prevent_node
-
+                            q_rfid = self.queueFeature(cur_node, (not kmer_side), direction, leaving_feature, node_queue, node_bundles) #no prevent_node
                     #in the case of an anchor node also add non-target features as potential guides
                     #but to be used here they must be on the same side/direction as incoming targets
                     #REPLACED if cur_node.anchorNode() and len(targets[kmer_side][direction]):
@@ -2067,19 +2038,10 @@ class GraphMaker():
             #if this is an anchor node and had targets incoming then everything remaining is new and needs to be fully expanded
             #at this point anything remaining is regarded as 'new' and can be passed as targets up or down !!!!!
             #rhs_guide is used to track a feature "thread" that has already been assigned so that current features can be assigned to the correct pg_node
-            self.kfill_feature_pile(feature_pile, pre_assignments, cur_node, prev_node, temp_self_queue, temp_reg_queue, node_bundles, targets)
+            self.kfill_feature_pile(feature_pile, pre_assignments, cur_node, prev_node, node_queue, node_bundles, targets)
             self.fill_guides(pre_assignments)
             cur_node.features[0]=set([])#after assigning all features clear it out.
             cur_node.features[1]=set([])#after assigning all features clear it out.
-	
-	if self.traverse_priority == "area":
-	    #mod these to sort based on maximum area next
-	    temp_self_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
-	    temp_reg_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
-
-	node_queue.extendleft(temp_self_queue)
-        node_queue.extend(temp_reg_queue)
-
 
         #anchor_expanded=False
         #anchor_expanded = self.anchorInstanceExpansion(feature_pile)
@@ -2262,31 +2224,171 @@ class GraphMaker():
 
 # undirected weighted
 class pFamGraph(nx.Graph):
-    def __init__(self):
+    def __init__(self, storage, minOrg=2):
         #Graph.__init__(self, weighted=True)
-        nx.Graph.__init__(self)
-    if not hasattr(nx.Graph,"nodes_iter"):
-        def nodes_iter(self, data=False):
-            if data ==True:
-                for i in self.nodes:
-                    yield (i,self.nodes[i])
-            if data ==False:
-                for i in self.nodes:
-                    yield i 
-    if not hasattr(nx.Graph,"edges_iter"):
-        def edges_iter(self, data=False):
-            if data ==True:
-                for i in self.edges:
-                    yield (i,self.get_edge_data(*i))
+        Graph.__init__(self)
+        self.createGraph(storage, minOrg)
+    def add_path_cumul_attr(self,nlist,**kwargs):
+        edges=list(zip(nlist[:-1],nlist[1:]))#create list of edges
+        edge_ids=[]
+        for e in edges:
+            if self.has_edge(*e):
+                for k in kwargs:
+                    if type(kwargs[k])==set:
+                        try: self.adj[e[0]][e[1]][k] |= kwargs[k]#  union of attribute
+                        except: 
+                            try: self.adj[e[0]][e[1]][k]=kwargs[k].copy()
+                            except: self.adj[e[0]][e[1]]=kwargs[k]
             else:
-                for i in self.edges:
-                    yield i
+                kwargs['id']=str(self.number_of_edges())
+                self.add_edge(e[0],e[1],kwargs)
+                if kwargs['id']=="0":
+                    warning("edge 0 is "+e[0]+" "+e[1])
+            try: edge_ids.append(self.adj[e[0]][e[1]]['id'])
+            except: warning("no ID for edge "+e[0]+" "+e[1])
+        return edge_ids 
 
+    #update the edge weight based on a designated attribute
+    #also flatten to a string since writing list objects isn't supported
+    #weight_attr has to be weight. label_attr = (what to get, and what to label it)
+    #also setting ID so that it can be used in building map from sid to edge
+    def update_edges(self, weight_attr='getOrganism', divisor=1, label_attr=('getReplicon','replicons'), remove_attrs=[]):
+        edge_counter=itertools.count()
+        for u,v,data in self.edges_iter(data=True):
+            #try: self.adj[e[0]][e[1]][e_attr]=list(self.adj[e[0]][e[1]][e_attr])
+            #except: pass
+            data['label']=''
+            weight_set=set()
+            label_set=set()
+            for i in data['instances']:
+                weight_set.add(getattr(i,weight_attr))
+                label_set.add(getattr(i,label_attr[0])())
+            try: data['weight']=len(weight_set)/float(divisor)
+            except:
+                try:data['weight']=0
+                except: pass
+            if label_attr:
+                try: data[label_attr[1]]=", ".join(list(label_set))
+                except: pass
+            for r in remove_attrs:
+                try: data.pop(r,None)
+                except: pass
+            data['id']=next(edge_counter)
+                
+    def update_node_cumul_attr(self, n_id, **kwargs ):
+        if n_id in self.node:
+            for k in kwargs:
+                try: self.node[n_id][k]=kwargs[k] | self.node[n_id][k]
+                except:
+                    try: self.node[n_id][k]=kwargs[k].copy()
+                    except: print "cannot add attribute to node "+str(n_id)
+    
+    #calculate the node weight and change the set attributes to string
+    #so that they can be written by graphml writer
+    def update_node_attr_final(self, weight_func, family_func, divisor=1, remove_attrs=[], minOrg=2):
+        remove_set=set()
+        for n in self.nodes():
+            weight_set=weight_func(n)
+            node_summary=n.get_summary()
+            if len(node_summary['organisms']) < minOrg:
+                remove_set.add(n)
+            try:
+                self.node[n]['weight']=len(weight_set)/float(divisor)
+                self.node[n]['id']=str(n.id)
+                self.node[n]['familyID']=str(n.famID)
+                self.node[n]['label']=family_func(n.famID)
+                self.node[n]['locations']=','.join(list(node_summary['locations']))
+                self.node[n]['organisms']=','.join(list(node_summary['organisms']))
+                
+            except: pass
+            for r in remove_attrs:
+                try: self.node[n].pop(r,None)
+                except: pass
+            for a in self.node[n]:
+                if type(self.node[n][a])==set:
+                    self.node[n][a] = ','.join(self.node[n][a])
+        for n in remove_set:
+            self.remove_node(n)
 
                                 
                             
                     
                 
+                
+    ##this function takes the storage class and constructs the graph from it
+    def createGraph(self, storage, minOrg):
+        num_orgs=len(storage.summaryLookup.keys())
+        temp_size=len(storage.kmerLookup.keys())
+        total_tax=len(storage.completeTaxSummary())
+        for k in storage.replicon_map: storage.replicon_map[k]=list(storage.replicon_map[k])
+        print " ".join(["starting",str(temp_size),str(total_tax),str(num_orgs)])
+        for n in storage.pg_initial:
+            if n != None:
+                for e in n.edges:
+                    n2=storage.getPGNode(e)
+                    if n.subsumed or n2.subsumed:
+                        sys.stderr.write("Logic Error: A node that should have been subsumed and removed is in the graph\n")
+                        sys.exit()
+                    self.add_edge(n.famSubset, n2.famSubset)
+                    if not 'instances' in self[n.famSubset][n2.famSubset]:
+                        self[n.famSubset][n2.famSubset]['instances']=set()
+                    self[n.famSubset][n2.famSubset]['instances'].update(n.edges[e])
+    
+    def labelGraph(self, storage, minOrg):	
+        num_orgs=len(storage.summaryLookup.keys())
+        total_tax=len(storage.completeTaxSummary())
+        self.update_edges(weight_attr='getOrganism',divisor=float(num_orgs), label_attr=('getReplicon','replicons'), remove_attrs=['instances'])
+        self.update_node_attr_final(weight_func=storage.nodeTaxSummary, family_func=storage.getFamilyInfo, divisor=float(total_tax), remove_attrs=['instances'], minOrg=minOrg)
+        
+        #create attribute called paths which represents edges per replicon
+        #self["paths"]=';'.join([k+':'+','.join(v) for k,v in storage.replicon_edges_dict.iteritems()])
+            
+
+        #get list of nodes and edges for testing
+        #node_handle=open('new_loop_node_list.txt','w')
+        #for n in self.nodes_iter():
+        #	node_handle.write(n+"\n")
+        #node_handle.close()
+        #edge_handle=open('new_loop_edge_list.txt','w')
+        #for e in self.edges_iter():
+        #	edge_handle.write(str(e)+"\n")
+        #edge_handle.close()
+
+
+
+                            
+    def toJSON(self, fhandle):
+        cid = 0
+        cur_ids = {}
+        #fhandle.write("{\n\tnodes:[\n")
+        results={"nodes" : [], "links" :[]}
+        for cn in self.nodes_iter():
+            cur_ids[cn] = cid
+            results["nodes"].append({'id': cid, 'label': cn, 'weight': self.node[cn]['weight']})
+            #fhandle.write(json.dumps({'id': cid, 'label': cn, 'weight': str(self.node[cn]['weight'])})+"\n")
+            cid += 1
+        #fhandle.write("\t],\n")
+        #fhandle.write("\tlinks:[\n")
+        count = 0
+        for edge in self.edges_weight_iter():
+            #fhandle.write(json.dumps({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})+"\n")
+            results["links"].append({'source': cur_ids[edge[0]], 'target': cur_ids[edge[1]], 'weight': edge[2]['weight']})
+            #if count == 1000:
+            #	break
+            count += 1
+        #fhandle.write("\t]\n}")
+        fhandle.write(json.dumps(results, indent=1))
+
+    ## Get weighted edgesD from this graph.
+    #def edges(self):
+        # This is just the code from networkx.graph - except call our
+    #	return list(self.edges_iter())
+                
+
+    ## Overwrite Graph edges_iter method so we get weight information too
+    def edges_weight_iter(self, nbunch=None):
+        for edge in Graph.edges_iter(self, nbunch, data=True):
+            yield edge
 
 def toGML(cur_graph, file_name):
         readwrite.graphml.write_graphml(cur_graph, file_name)
@@ -2353,7 +2455,7 @@ def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
 def find_rearrangements(pgraph, storage, out_file, gminimum=None):
     out_handle=open(out_file,'w')
     if not gminimum:
-        gminimum=len(storage.summaryLookup)#default to all genomes in
+        gminimum=len(storage.summaryLookup)#default to all genomes in 
     for u,v,data in pgraph.edges_iter(data=True):
         us=u.get_summary()
         vs=v.get_summary()
@@ -2399,9 +2501,7 @@ def main():
 
     parser.set_defaults(file_type="tab")
     #parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
-    parser.add_argument('--no_function', help='no functions as labels. keep file size smaller.', required=False, default=False, action='store_true')
-    parser.add_argument('--order_contigs', choices=["none","area","tfs"], help='produce output that orders contigs for rectilinear layout', required=False, default="none")
-    parser.add_argument('--contig_output', help='output file that orders contigs for rectilinear layout', required=False, default=None)
+    parser.add_argument('--no_function', help='No functions as labels. Keep file size smaller.', required=False, default=False, action='store_true')
     parser.add_argument('--layout', help='run gephi layout code for gexf', required=False, default=False, action='store_true')
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
@@ -2411,54 +2511,45 @@ def main():
     input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
     input_type.add_argument("--patric_pgfam", dest="file_type", help="PATRIC feature file in tab format. selecting pgfams", action='store_const', const="patricpgfam")
     input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
+    parser.add_argument("--patric_genomes", default=False, action='store_true', help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
     parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
     parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
     parser.add_argument("feature_files", type=str, nargs="*", default=["-"], help="Files of varying format specifing group, genome, contig, feature, and start in sorted order. stdin also accepted")
 
-
     if len(sys.argv) < 2:
         parser.print_help()
         sys.exit()
-    pargs = parser.parse_args()
+    args = parser.parse_args()
+    
 
-    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min)
-    if pargs.order_contigs !="none":
-        if pargs.contig_output == None:
-            sys.stderr.write("Need contig_ouptut parameter specified to output contig ordering\n")
-            sys.exit()
-        gmaker.order_contigs=True
-        if pargs.order_contigs == "area":
-            gmaker.traverse_priority = pargs.order_contigs
+    gmaker=GraphMaker(feature_files=args.feature_files, file_type=args.file_type, context=args.context, ksize=args.ksize, break_conflict=False, label_function= (not args.no_function),diversity=args.diversity, minSeq=args.min, pull_genome_ids=args.patric_genomes)
     gmaker.processFeatures()
     gmaker.RF_to_PG()
     #if gmaker.break_conflict:
     #    gmaker.break_edges()
-    if pargs.rfgraph != None:
-        nx.readwrite.write_gexf(gmaker.rf_graph, pargs.rfgraph)
+    if args.rfgraph != None:
+        nx.readwrite.write_gexf(gmaker.rf_graph, args.rfgraph)
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    if pargs.layout:
+    if args.layout:
         file_out = False
-        if type(pargs.output) == str:
+        if type(args.output) == str:
             file_out =True
-            out_str = pargs.output
-            pargs.output = open(out_str, 'w')
+            out_str = args.output
+            args.output = open(out_str, 'w')
         gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
         cur_path = os.path.dirname(os.path.realpath(__file__))
         sys.stderr.write("laying out graph\n")
         p = Popen(["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
-        pargs.output.write( p.communicate(input=gexf_capture.getvalue())[0])
-        if file_out: pargs.output.close()
+        args.output.write( p.communicate(input=gexf_capture.getvalue())[0])
+        if file_out: args.output.close()
         
     else:
-        nx.readwrite.write_gexf(gmaker.pg_graph, pargs.output)
-    if pargs.order_contigs != "none":
-        unsorted_file = pargs.contig_output+".unsorted"
-        gmaker.write_contigs(pargs.contig_output, unsorted_file)
+        nx.readwrite.write_gexf(gmaker.pg_graph, args.output)
 
 
 def old_main(init_args):
