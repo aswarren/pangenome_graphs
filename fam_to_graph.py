@@ -2459,7 +2459,7 @@ def main():
         sys.exit()
     pargs = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min)
+    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, pull_genome_ids=pargs.patric_genomes)
     if pargs.order_contigs !="none":
         if pargs.contig_output == None:
             sys.stderr.write("Need contig_ouptut parameter specified to output contig ordering\n")
