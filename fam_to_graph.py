@@ -18,6 +18,7 @@ from collections import OrderedDict
 from cStringIO import StringIO
 from subprocess import Popen, PIPE, STDOUT
 import time
+import requests
 
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
@@ -507,6 +508,7 @@ class featureParser():
         self.feature_files=kwargs['feature_files']
         self.file_type=kwargs['file_type']
         self.parse_function=kwargs['parse_function']
+        self.pull_genome_ids=kwargs["pull_genome_ids"]
         self.parse=None
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
@@ -528,8 +530,14 @@ class featureParser():
             self.ip = self.pc_pgfam
 
     def parseFeatureTab(self):
+        #if parsing the feature_files to download patric genome ids, need to use the generator defined by genome_id_feature_gen
+        if self.pull_genome_ids:
+            generator = self.genome_id_feature_gen()
+        else:
+            generator = fileinput.input(files=self.feature_files)
         #if files is empty it should read from stdin
-        for line in fileinput.input(files=self.feature_files):
+#         for line in fileinput.input(files=self.feature_files):
+        for line in generator:
             result=featureInfo()
             header=False
             try:
@@ -562,6 +570,33 @@ class featureParser():
             yield result
 
 
+    def genome_id_feature_gen(self, limit=2500000):
+        genome_id_files=self.feature_files
+        genome_ids = []
+
+        #Will open all files, or stdin if no arguments passed (or if "-" is passed as an argument)
+        for line in fileinput.input(files=self.feature_files):
+            #Parses all files for the genome_ids, and will split on commas, or tabs (as well as newlines implcitly by the iterator above)
+            delim = "," if "," in line else "\t"
+            line = line.strip().split(delim)
+            for l in line:
+                genome_ids.append(l)
+                print(l)
+        selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(genome_ids))]
+        genomes = "and({})".format(','.join(selectors))   
+        limit = "limit({})".format(limit)
+        select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway)&sort(+genome_id,+sequence_id,+start)"
+        base = "https://www.patricbrc.org/api/genome_feature/"
+        query = "&".join([genomes, limit, select])
+        headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
+
+        #Stream the request so that we don't have to load it all into memory
+        r = requests.post(url=base, data=query, headers=headers, stream=True) 
+
+        if r.encoding is None:
+            r.encoding = "utf-8"
+        for line in r.iter_lines(decode_unicode=True):
+            yield line
             
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
@@ -576,7 +611,7 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], pull_genome_ids=kwargs["pull_genome_ids"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -2411,6 +2446,8 @@ def main():
     input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
     input_type.add_argument("--patric_pgfam", dest="file_type", help="PATRIC feature file in tab format. selecting pgfams", action='store_const', const="patricpgfam")
     input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
+    parser.add_argument("--patric_genomes", default=False, action='store_true', help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
+
     parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
     parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
@@ -2422,7 +2459,7 @@ def main():
         sys.exit()
     pargs = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min)
+    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, pull_genome_ids=pargs.patric_genomes)
     if pargs.order_contigs !="none":
         if pargs.contig_output == None:
             sys.stderr.write("Need contig_ouptut parameter specified to output contig ordering\n")
