@@ -3,6 +3,7 @@
 import os, sys
 import itertools
 import json
+import re
 import copy
 import argparse
 import networkx as nx
@@ -19,6 +20,18 @@ from cStringIO import StringIO
 from subprocess import Popen, PIPE, STDOUT
 import time
 import requests
+
+
+def pretty_print_POST(req):
+    """
+    printed and may differ from the actual request.
+    """
+    print('{}\n{}\n{}\n\n{}'.format(
+        '-----------START-----------',
+        req.method + ' ' + req.url,
+        '\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items()),
+        req.body,
+    ))
 
 # heap analysis from guppy import hpy
 #requires 2.7 or greater
@@ -569,6 +582,8 @@ class featureParser():
                 continue
             yield result
 
+    def chunker(self, seq, size):
+        return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
 
     def genome_id_feature_gen(self, limit=2500000):
         genome_id_files=self.feature_files
@@ -577,26 +592,31 @@ class featureParser():
         #Will open all files, or stdin if no arguments passed (or if "-" is passed as an argument)
         for line in fileinput.input(files=self.feature_files):
             #Parses all files for the genome_ids, and will split on commas, or tabs (as well as newlines implcitly by the iterator above)
-            delim = "," if "," in line else "\t"
-            line = line.strip().split(delim)
+            delim ='; |, |,|;| |\t'
+            line = re.split(delim,line.strip())
             for l in line:
                 genome_ids.append(l)
                 print(l)
-        selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(genome_ids))]
-        genomes = "and({})".format(','.join(selectors))   
-        limit = "limit({})".format(limit)
-        select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway)&sort(+genome_id,+sequence_id,+start)"
-        base = "https://www.patricbrc.org/api/genome_feature/"
-        query = "&".join([genomes, limit, select])
-        headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
+        for gids in self.chunker(genome_ids, 10):
+            selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(gids))]
+            genomes = "and({})".format(','.join(selectors))   
+            limit = "limit({})".format(limit)
+            select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway)&sort(+genome_id,+sequence_id,+start)"
+            base = "https://www.patricbrc.org/api/genome_feature/"
+            query = "&".join([genomes, limit, select])
+            headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
 
-        #Stream the request so that we don't have to load it all into memory
-        r = requests.post(url=base, data=query, headers=headers, stream=True) 
-
-        if r.encoding is None:
-            r.encoding = "utf-8"
-        for line in r.iter_lines(decode_unicode=True):
-            yield line
+            #Stream the request so that we don't have to load it all into memory
+            r = requests.post(url=base, data=query, headers=headers, stream=True) 
+            #r = requests.Request('POST', url=base, headers=headers, data=query)
+            #prepared = r.prepare()
+            #pretty_print_POST(prepared)
+            if r.encoding is None:
+                r.encoding = "utf-8"
+            if not r.ok:
+                sys.stderr.write("Error in API request \n")
+            for line in r.iter_lines(decode_unicode=True):
+                yield line
             
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
