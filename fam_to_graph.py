@@ -521,7 +521,7 @@ class featureParser():
         self.feature_files=kwargs['feature_files']
         self.file_type=kwargs['file_type']
         self.parse_function=kwargs['parse_function']
-        self.pull_genome_ids=kwargs["pull_genome_ids"]
+        self.alpha=kwargs["alpha"]
         self.parse=None
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
@@ -529,22 +529,20 @@ class featureParser():
         self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14, 'organism':1}
         self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14, 'organism':1}
         self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14, 'organism':1}
-        if self.file_type=="tab":
+        if self.file_type=="patric_tab" or self.file_type=="patric_genomes":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
-        if self.file_type=="patricfigfam":
-            self.parse=self.parseFeatureTab
-            self.ip = self.pc_figfam
-        if self.file_type=="patricplfam":
-            self.parse=self.parseFeatureTab
-            self.ip = self.pc_plfam
-        if self.file_type=="patricpgfam":
-            self.parse=self.parseFeatureTab
-            self.ip = self.pc_pgfam
+            if self.alpha=="patric_figfam":
+                self.ip = self.pc_figfam
+            if self.alpha=="patric_plfam":
+                self.ip = self.pc_plfam
+            if self.alpha=="patric_pgfam":
+                self.ip = self.pc_pgfam
+    
 
     def parseFeatureTab(self):
         #if parsing the feature_files to download patric genome ids, need to use the generator defined by genome_id_feature_gen
-        if self.pull_genome_ids:
+        if self.file_type=="patric_genomes":
             generator = self.genome_id_feature_gen()
         else:
             generator = fileinput.input(files=self.feature_files)
@@ -631,7 +629,7 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], pull_genome_ids=kwargs["pull_genome_ids"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], alpha=kwargs["alpha"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -2452,7 +2450,7 @@ def stats(graph):
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.set_defaults(file_type="tab")
+    parser.set_defaults(file_type="patric_tab")
     #parser.add_argument('--break_conflict', help='Uses methods for dealing with latent updating to APIs', required=False, default=False, action='store_true')
     parser.add_argument('--no_function', help='no functions as labels. keep file size smaller.', required=False, default=False, action='store_true')
     parser.add_argument('--order_contigs', choices=["none","area","tfs"], help='produce output that orders contigs for rectilinear layout', required=False, default="none")
@@ -2461,12 +2459,11 @@ def main():
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
     parser.add_argument("--diversity", type=str, help="calculate diversity quotient according to given taxa level", required=False, default="genus", choices=["genus","species"])
+    parser.add_argument("--alpha", type=str, help="alphabet i.e. 'family type' to use", required=False, default="patric_pgfam", choices=["patric_figfam","patric_plfam","patric_pgfam"])
     input_type = parser.add_mutually_exclusive_group()
-    input_type.add_argument("--patric_figfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricfigfam")
-    input_type.add_argument("--patric_plfam", dest="file_type", help="PATRIC feature file in tab format", action='store_const', const="patricplfam")
-    input_type.add_argument("--patric_pgfam", dest="file_type", help="PATRIC feature file in tab format. selecting pgfams", action='store_const', const="patricpgfam")
-    input_type.add_argument("--generic", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="tab")
-    parser.add_argument("--patric_genomes", default=False, action='store_true', help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
+    input_type.add_argument("--patric", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="patric_tab")
+    input_type.add_argument("--patric_genomes", dest="file_type", action='store_const', const="patric_genomes", help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
+
 
     parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
@@ -2479,7 +2476,7 @@ def main():
         sys.exit()
     pargs = parser.parse_args()
 
-    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, pull_genome_ids=pargs.patric_genomes)
+    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, alpha=pargs.alpha)
     if pargs.order_contigs !="none":
         if pargs.contig_output == None:
             sys.stderr.write("Need contig_ouptut parameter specified to output contig ordering\n")
