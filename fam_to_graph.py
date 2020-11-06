@@ -20,7 +20,7 @@ from cStringIO import StringIO
 from subprocess import Popen, PIPE, STDOUT
 import time
 import requests
-
+import logging
 
 def pretty_print_POST(req):
     """
@@ -169,7 +169,7 @@ class featureInfo():
             result['start']=parts[ip['start']]
             result['end']=parts[ip['end']]
         except:
-            warning("parsing problem. couldn't parse line: "+line)
+            logging.debug("parsing problem. couldn't parse line: "+line)
         return result
     def getLocation(self):
         result=self.parse_line(self.line)
@@ -243,7 +243,7 @@ class rfNode():
     def addInfo(self, position, cur_fam, info):
         if self.infoList[position] != None:
             if self.infoList[position][0]!=cur_fam:
-                sys.stderr.write("logical error: trying to insert information about wrong family\n")
+                logging.warning("logical error: trying to insert information about wrong family\n")
                 sys.exit()
             self.infoList[position][-1].append(info)
         else:
@@ -269,7 +269,7 @@ class rfNode():
     def updateNode(self, prev_node, in_edge_status, storage):
         update_pos=[] #ordered pg-node references to project onto current node	
         if (not in_edge_status in edgePossible):
-            sys.stderr.write("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
+            logging.warning("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
         #update references to pg-nodes from overlapping portion of previous k-mer
         if in_edge_status & 1:
             update_pos = range(1,len(prev_node.pgRefs),1)+[None]
@@ -355,7 +355,7 @@ class rfNode():
         else:
             
             if (not in_edge_status in edgePossible):
-                sys.stderr.write("unforseen case: transitioning from "+"|".join([x[0] for x in prev_node.infoList])+" to "+"|".join([x[0] for x in self.infoList]))
+                logging.warning("unforseen case: transitioning from "+"|".join([x[0] for x in prev_node.infoList])+" to "+"|".join([x[0] for x in self.infoList]))
 
             #if the beginnning of this kmer is new create a pg-node for it and a reference to it in this kmer
             #handle new portion exposed in this kmer
@@ -532,11 +532,11 @@ class featureParser():
         if self.file_type=="patric_tab" or self.file_type=="patric_genomes":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
-            if self.alpha=="patric_figfam":
+            if self.alpha=="figfam_id":
                 self.ip = self.pc_figfam
-            if self.alpha=="patric_plfam":
+            if self.alpha=="plfam_id":
                 self.ip = self.pc_plfam
-            if self.alpha=="patric_pgfam":
+            if self.alpha=="pgfam_id":
                 self.ip = self.pc_pgfam
     
 
@@ -576,7 +576,7 @@ class featureParser():
                         result.function = parts[self.ip['function']]
                     #result.end=parts[ip['end']]
             except:
-                warning("warning: couldn't parse line: "+line)
+                logging.debug("warning: couldn't parse line: "+line)
                 continue
             yield result
 
@@ -612,7 +612,7 @@ class featureParser():
             if r.encoding is None:
                 r.encoding = "utf-8"
             if not r.ok:
-                sys.stderr.write("Error in API request \n")
+                logging.warning("Error in API request \n")
             for line in r.iter_lines(decode_unicode=True):
                 yield line
             
@@ -720,12 +720,12 @@ class GraphMaker():
         for r in self.rf_node_index:
             if r.numFeatures() >0:
                 ambig+=1
-        sys.stderr.write("rf-graph: "+str(ambig)+" nodes unexapanded"+"\n")
+        logging.info("rf-graph: "+str(ambig)+" nodes unexapanded")
                 #assert LogicError("RFNode unexpanded")
     def checkPGGraph(self):
         for cnode in self.pg_graph.nodes_iter(data=True):
             if len(cnode[1]["features"]) == 0 :
-                sys.stderr.write("pg-graph node "+str(cnode[0])+"has no features"+"\n")
+                logging.warning("pg-graph node "+str(cnode[0])+"has no features")
             group_id=None
             for g in cnode[1]["features"]:
                 for contig in cnode[1]["features"][g]:
@@ -736,13 +736,13 @@ class GraphMaker():
                             raise Exception("LogicError")
 
     def calcStatistics(self):
-        sys.stderr.write("rf-graph:\n")
-        sys.stderr.write("nodes "+str(self.rf_graph.number_of_nodes())+"\n")
-        sys.stderr.write("edges "+str(self.rf_graph.number_of_edges())+"\n")
-        sys.stderr.write("pg-graph:"+"\n")
-        sys.stderr.write("nodes "+str(self.pg_graph.number_of_nodes())+"\n")
-        sys.stderr.write("edges "+str(self.pg_graph.number_of_edges())+"\n")
-        sys.stderr.write("alt-nodes "+str(self.alt_counter)+"\n")
+        logging.info("rf-graph:")
+        logging.info("nodes "+str(self.rf_graph.number_of_nodes()))
+        logging.info("edges "+str(self.rf_graph.number_of_edges()))
+        logging.info("pg-graph:")
+        logging.info("nodes "+str(self.pg_graph.number_of_nodes()))
+        logging.info("edges "+str(self.pg_graph.number_of_edges()))
+        logging.info("alt-nodes "+str(self.alt_counter))
 
     def write_contigs(self, contig_file, unsorted_file=None):
             
@@ -752,18 +752,18 @@ class GraphMaker():
         for k,v in self.replicon_map.iteritems():
             if k not in self.contig_order:
                 missing_genomes+=1
-                sys.stderr.write("WARNING: missing genome in contig order "+k+"\n")
+                logging.warning("WARNING: missing genome in contig order "+k+"\n")
                 self.contig_order.setdefault(k, OrderedDict())
             for contig_id in v.keys():
                 if contig_id not in self.contig_order[k]:
                     missing_contigs+=1
-                    sys.stderr.write("WARNING: missing contig in contig order "+" ".join([k,contig_id])+"\n")
+                    logging.warning("WARNING: missing contig in contig order "+" ".join([k,contig_id])+"\n")
                     if unsorted_file != None:
                         self.contig_unorder.setdefault(k,{}).setdefault(contig_id,[])
                     else:
                         self.contig_order[k].setdefault(contig_id,[])
         if missing_contigs or missing_genomes:
-            sys.stderr.write("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
+            logging.warning("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
         with open(contig_file, 'w') as ch:
             for g in self.replicon_map.keys():
                 ch.write("\t".join([g]+self.contig_order[g].keys())+"\n")
@@ -1045,7 +1045,7 @@ class GraphMaker():
 
 
     def processFeatures(self):
-        sys.stderr.write("parsing features and constructing kmer graph\n")	
+        logging.warning("parsing features and constructing kmer graph")	
         kmer_q=deque()
         prev_feature=None
         #loop through figfams to create kmers
@@ -1175,7 +1175,7 @@ class GraphMaker():
     #expects summary taxid, tax level, and the taxpath comma seperated values
     def parseSummary(self, summary_file):
         inHandle=open(summary_file, 'r')
-        sys.stderr.write("parsing taxonomy information and constructing taxon table\n")
+        logging.warning("parsing taxonomy information and constructing taxon table")
         #header=inHandle.readline()
         for line in inHandle:
             if line.startswith('#'):
@@ -1192,7 +1192,7 @@ class GraphMaker():
     #expects two column family name information
     def parseFamilyInfo(self, family_file):
         in_handle=open(family_file, 'r')
-        sys.stderr.write("parsing family information table\n")
+        logging.warning("parsing family information table")
         #header=inHandle.readline()
         for line in in_handle:
             if line.startswith('#'):
@@ -1236,7 +1236,7 @@ class GraphMaker():
         to_queue=[] # used to process features with same instance key
         if (edge_data["leaving_position"]==self.ksize-1 and kmer_side!=1) or (edge_data["leaving_position"]==0 and kmer_side!=0):
             if not palindrome:
-                sys.stderr.write("logic problem. calculated leaving side does not match")
+                logging.warning("logic problem. calculated leaving side does not match")
                 raise Exception("LogicError")
         #project from leaving feature and orientation to what next feature should be next
         nxt_orientation=orientation
@@ -1376,7 +1376,7 @@ class GraphMaker():
         return num_features
 
     def merge_pg_node(self, node_id1, node_id2):
-        sys.stderr.write("merging "+str(node_id1)+" "+str(node_id2)+"\n")
+        logging.info("merging "+str(node_id1)+" "+str(node_id2))
         conflict=False
         insert_level=None
         if node_id1 < node_id2:
@@ -1489,8 +1489,8 @@ class GraphMaker():
             cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
             if not split:
                 if self.debug:
-                    sys.stderr.write("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id)+"\n")
-                sys.stderr.write("conflict between "+self.feature_index[new_feature].feature_ref+" and "+self.feature_index[cf].feature_ref+" in "+str(cur_pg_id)+"\n")
+                    logging.info("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id))
+                logging.info("conflict between "+self.feature_index[new_feature].feature_ref+" and "+self.feature_index[cf].feature_ref+" in "+str(cur_pg_id))
             #determine if it is conflict class 1
             if self.context == "genome" and insert_level=="contig":
                 nf_end=False
@@ -1686,7 +1686,7 @@ class GraphMaker():
                         assign_block = "new_nodes" if new_status else "assignments"
                     elif len(max_keys) > 1:
                         #pick the one with the most features. this should be rare.
-                        sys.stderr.write("Tie for pg-node selection based on instance keys "+" ".join(max_keys)+"\n")
+                        logging.debug("Tie for pg-node selection based on instance keys "+" ".join(max_keys))
                         max_features =0
                         tmp_id = None
                         mk = None
@@ -1802,15 +1802,15 @@ class GraphMaker():
                     #conflict occurs when mixed bundling tries to violate synteny context
                     num_split, num_conflict, c1_conflict, assign_list = self.find_conflicts(assign_list, target_guide)
                 if num_split > 0:
-                    sys.stderr.write("SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets)+"\n")
+                    logging.info("SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets))
                 elif num_conflict > 0:
                     if c1_conflict:
-                        sys.stderr.write("C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)+"\n")
+                        logging.info("C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets))
                     else:
                         if self.break_conflict:
                             break_here=True
                             target_guide=None
-                        sys.stderr.write("C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets)+"\n")
+                        logging.info("C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets))
                 default_guide = default_guide_cat = default_guide_side = None
                 split_guide = split_guide_cat = split_guide_side = None
                 for cur_tuple in assign_list:
@@ -1847,9 +1847,9 @@ class GraphMaker():
                         else:
                             assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=target_guide)
                             if up_targets and conflict:
-                                sys.stderr.write("conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)+"\n")
+                                logging.info("conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID))
                             elif conflict:
-                                sys.stderr.write("conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID)+"\n")
+                                logging.info("conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID))
                     #make sure that where ever the feature is assigned, that all the other features in this visit, with the same instance key are there too.
                     instance_key = self.feature_index[new_feature].instance_key
                     #if instance_key in target_guides:
@@ -2000,7 +2000,7 @@ class GraphMaker():
             self.visit_number+=1
             existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
             self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
-            sys.stderr.write("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
+            logging.debug("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes()))
         #sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
         if (targets!=None):
@@ -2062,14 +2062,14 @@ class GraphMaker():
                         edge_only=False
                         if not rhs_feature in cur_node.features[direction]:
                             if not rhs_feature in cur_node.assigned_features[direction]:
-                                sys.stderr.write("missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
+                                logging.warning("missing projected "+str(rhs_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID))
                                 raise Exception("LogicError")
                             elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
                                 edge_only=True
                                 self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
                             else:
-                                sys.stderr.write("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID)+"\n")
+                                logging.warning("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID))
                                 raise Exception("LogicError")
                         else:
                             #this initial loop through the targets is really just to see if any have already been assigned
@@ -2459,7 +2459,7 @@ def main():
     parser.add_argument("--output", type=str, help="the path and base name give to the output files. if not given goes to stdout", required=False, default=sys.stdout)
     parser.add_argument("--rfgraph", type=str, help="create rf-graph gexf file at the following location", required=False, default=None)
     parser.add_argument("--diversity", type=str, help="calculate diversity quotient according to given taxa level", required=False, default="genus", choices=["genus","species"])
-    parser.add_argument("--alpha", type=str, help="alphabet i.e. 'family type' to use", required=False, default="patric_pgfam", choices=["patric_figfam","patric_plfam","patric_pgfam"])
+    parser.add_argument("--alpha", type=str, help="alphabet i.e. 'family type' to use", required=False, default="pgfam_id", choices=["figfam_id","plfam_id","pgfam_id"])
     input_type = parser.add_mutually_exclusive_group()
     input_type.add_argument("--patric", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="patric_tab")
     input_type.add_argument("--patric_genomes", dest="file_type", action='store_const', const="patric_genomes", help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
@@ -2475,6 +2475,14 @@ def main():
         parser.print_help()
         sys.exit()
     pargs = parser.parse_args()
+    if type(pargs.output) == str:
+        logging.basicConfig(filename=pargs.output+'.log.txt',level=logging.INFO, filemode='w', format='%(message)s')
+    root = logging.getLogger()
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.WARNING)
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
 
     gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, alpha=pargs.alpha)
     if pargs.order_contigs !="none":
@@ -2494,6 +2502,7 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
+
     if pargs.layout:
         file_out = False
         if type(pargs.output) == str:
@@ -2503,8 +2512,10 @@ def main():
         gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
         cur_path = os.path.dirname(os.path.realpath(__file__))
-        sys.stderr.write("laying out graph\n")
-        p = Popen(["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")], stdout=PIPE, stdin=PIPE, stderr=PIPE)
+        logging.warning("laying out graph")
+        layout_cmd=["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
+        logging.warning(" ".join(layout_cmd))
+        p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE)
         pargs.output.write( p.communicate(input=gexf_capture.getvalue())[0])
         if file_out: pargs.output.close()
         
