@@ -594,7 +594,7 @@ class featureParser():
             line = re.split(delim,line.strip())
             for l in line:
                 genome_ids.append(l)
-            logger.info("genome_ids:"+",".join(genome_ids))
+            logging.info("genome_ids:"+",".join(genome_ids))
         for gids in self.chunker(genome_ids, 10):
             selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(gids))]
             genomes = "and({})".format(','.join(selectors))   
