@@ -65,7 +65,7 @@ optional arguments:
                         alphabet i.e. 'family type' to use
   --patric              table specifying the group, genome, contig, feature,
                         and start in sorted order
-  --patric_genomes      use the files listed in --feature_files as a comma or
+  --patric_genomes      use the feature_files as a comma or
                         tab separated file specifying genome ids to pull from
                         patric. automatically downloads and uses the data
                         stream for those genome ids.
