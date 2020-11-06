@@ -31,39 +31,54 @@ pip install -r requirements.txt
 ## Running
 
 ```
-usage: fam_to_graph.py [-h] [--no_function] [--layout] [--output OUTPUT]  
-                       [--rfgraph RFGRAPH] [--diversity {genus,species}]  
-                       [--patric_figfam | --patric_plfam | --patric_pgfam | --generic]  
-                       [--context {genome,contig,feature}]  
-                       [--ksize {3,4,5,6,7,8,9}]  
-                       [feature_files [feature_files ...]]  
-positional arguments:  
-  feature_files         Files of varying format specifing group, genome,  
-                        contig, feature, and start in sorted order. stdin also  
-                        accepted  
-optional arguments:  
-  -h, --help            show this help message and exit  
-  --no_function         No functions as labels. Keep file size smaller.  
-  --layout              run gephi layout code for gexf  
-  --output OUTPUT       the path and base name give to the output files. if  
-                        not given goes to stdout  
-  --rfgraph RFGRAPH     create rf-graph gexf file at the following location  
-  --diversity {genus,species}  
-                        calculate diversity quotient according to given taxa  
-                        level  
-  --patric_figfam       PATRIC feature file in tab format  
-  --patric_plfam        PATRIC feature file in tab format  
-  --patric_pgfam        PATRIC feature file in tab format. selecting pgfams  
-  --generic             table specifying the group, genome, contig, feature,  
-                        and start in sorted order  
-  --context {genome,contig,feature}  
-                        the synteny context  
-  --ksize {3,4,5,6,7,8,9}  
-                        the size of the kmer to use in constructing synteny  
+usage: fam_to_graph.py [-h] [--no_function] [--order_contigs {none,area,tfs}]
+                       [--contig_output CONTIG_OUTPUT] [--layout]
+                       [--output OUTPUT] [--rfgraph RFGRAPH]
+                       [--diversity {genus,species}]
+                       [--alpha {figfam_id,plfam_id,pgfam_id}]
+                       [--patric | --patric_genomes]
+                       [--context {genome,contig,feature}]
+                       [--ksize {3,4,5,6,7,8,9}] [--min MIN]
+                       [feature_files [feature_files ...]]
+
+positional arguments:
+  feature_files         Files of varying format specifing group, genome,
+                        contig, feature, and start in sorted order. stdin also
+                        accepted
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --no_function         no functions as labels. keep file size smaller.
+  --order_contigs {none,area,tfs}
+                        produce output that orders contigs for rectilinear
+                        layout
+  --contig_output CONTIG_OUTPUT
+                        output file that orders contigs for rectilinear layout
+  --layout              run gephi layout code for gexf
+  --output OUTPUT       the path and base name give to the output files. if
+                        not given goes to stdout
+  --rfgraph RFGRAPH     create rf-graph gexf file at the following location
+  --diversity {genus,species}
+                        calculate diversity quotient according to given taxa
+                        level
+  --alpha {figfam_id,plfam_id,pgfam_id}
+                        alphabet i.e. 'family type' to use
+  --patric              table specifying the group, genome, contig, feature,
+                        and start in sorted order
+  --patric_genomes      use the files listed in --feature_files as a comma or
+                        tab separated file specifying genome ids to pull from
+                        patric. automatically downloads and uses the data
+                        stream for those genome ids.
+  --context {genome,contig,feature}
+                        the synteny context
+  --ksize {3,4,5,6,7,8,9}
+                        the size of the kmer to use in constructing synteny
+  --min MIN             minimum required sequences aligned to be in the
+                        resulting graph
 
 ```
 #### Example run for creating a graph
-python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --patric_pgfam ./data/BrucellaInversion/*.tab
+python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --alpha pgfam_id ./data/BrucellaInversion/*.tab
 
 #### Visualizing data
 Resulting gexf files can be opened in Gephi or through the JS visualizer distributed with Panaconda.
