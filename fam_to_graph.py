@@ -736,13 +736,15 @@ class GraphMaker():
                             raise Exception("LogicError")
 
     def calcStatistics(self):
-        logging.info("rf-graph:")
-        logging.info("nodes "+str(self.rf_graph.number_of_nodes()))
-        logging.info("edges "+str(self.rf_graph.number_of_edges()))
-        logging.info("pg-graph:")
-        logging.info("nodes "+str(self.pg_graph.number_of_nodes()))
-        logging.info("edges "+str(self.pg_graph.number_of_edges()))
-        logging.info("alt-nodes "+str(self.alt_counter))
+        stats=[]
+        stats.append("rf-graph:")
+        stats.append("nodes "+str(self.rf_graph.number_of_nodes()))
+        stats.append("edges "+str(self.rf_graph.number_of_edges()))
+        stats.append("ps-graph:")
+        stats.append("nodes "+str(self.pg_graph.number_of_nodes()))
+        stats.append("edges "+str(self.pg_graph.number_of_edges()))
+        stats.append("alt-nodes "+str(self.alt_counter))
+        logging.warning("\n"+"\n".join(stats))
 
     def write_contigs(self, contig_file, unsorted_file=None):
             
