@@ -78,8 +78,9 @@ optional arguments:
 
 ```
 #### Example run for creating a graph
+```
 python fam_to_graph.py --layout --output data/BrucellaInversion/test_psgraph.gexf --alpha pgfam_id ./data/BrucellaInversion/*.tab
-
+```
 #### Visualizing data
 Resulting gexf files can be opened in Gephi or through the JS visualizer distributed with Panaconda.
 Files can be loaded from local disk but Chrome currently restricts this. To run the javascript based visualizer
