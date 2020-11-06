@@ -11,7 +11,7 @@ networkx
 
 
 // layout algorithm
-java
+java 1.8
 
 // visualization
 firefox for web based browsing
