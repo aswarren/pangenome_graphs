@@ -76,6 +76,7 @@ def warning(*objs):
 class featureInfo():
         #expand to parse out this information from different sources
     def __init__(self, line=None):
+        self.md5=None
         self.contig_id=None
         self.genome_id=None
         self.feature_id=None
@@ -570,8 +571,13 @@ class featureParser():
                     result.contig_id=parts[self.ip['contig']]
                     result.genome_id=parts[self.ip['genome']]
                     result.start=int(parts[self.ip['start']])
+                    result.end=int(parts[self.ip['end']])
                     result.feature_ref = parts[self.ip['feature']]
                     result.organism = parts[self.ip['organism']]
+                    
+                    if self.file_type=="patric_genomes":
+                        result.md5 = parts[-1]
+                    
                     if self.parse_function:
                         result.function = parts[self.ip['function']]
                     #result.end=parts[ip['end']]
@@ -599,7 +605,7 @@ class featureParser():
             selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(gids))]
             genomes = "and({})".format(','.join(selectors))   
             limit = "limit({})".format(limit)
-            select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway)&sort(+genome_id,+sequence_id,+start)"
+            select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway,aa_sequence_md5)&sort(+genome_id,+sequence_id,+start)"
             base = "https://www.patricbrc.org/api/genome_feature/"
             query = "&".join([genomes, limit, select])
             headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
@@ -728,6 +734,10 @@ class GraphMaker():
                 logging.warning("pg-graph node "+str(cnode[0])+"has no features")
             group_id=None
             for g in cnode[1]["features"]:
+                
+                if g in ["md5", "start", "end", "info"]:
+                    continue
+                
                 for contig in cnode[1]["features"][g]:
                     for f in cnode[1]["features"][g][contig]:
                         if group_id == None:
@@ -820,9 +830,15 @@ class GraphMaker():
         for n,d in self.pg_graph.nodes_iter(data=True):
             label_set =set([])
             cur_diversity = {}
-            f_id=d["features"].values()[0].values()[0][0]
+
+            f_id=[i for key, i in d["features"].items() if type(i) == dict and key != "info"][0].values()[0][0]
             d["label"]=self.feature_index[f_id].group_id
+            import pdb; 
             for g in d["features"]:
+                
+                if g in ["md5", "start", "end", "info"]:
+                    continue
+                
                 f_id=d["features"][g].values()[0][0]
                 self.trackDiversity(f_id, cur_diversity)
                 for s in d["features"][g]:
@@ -1449,13 +1465,18 @@ class GraphMaker():
 
     def insert_feature(self, cur_pg_id, new_feature):
         #emit_extra=False
+        md5=self.feature_index[new_feature].md5
+        start=self.feature_index[new_feature].start
+        end=self.feature_index[new_feature].end
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
             self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
+            self.pg_graph.node[cur_pg_id]['features']['info'][genome_id]={sequence_id:[{'md5':md5, 'start':start, 'end':end}]}
             insert_level="genome"
         elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
             self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+            self.pg_graph.node[cur_pg_id]['features']['info'][genome_id][sequence_id]=[{'md5':md5, 'start':start, 'end':end}]
             insert_level="contig"
         else:
             #if self.context!="feature":
@@ -1467,6 +1488,7 @@ class GraphMaker():
                 #        break
             #if not emit_extra:
                 self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+                self.pg_graph.node[cur_pg_id]['features']['info'][genome_id][sequence_id].append({'md5':md5, 'start':start, 'end':end})
                 insert_level="feature"
         return (insert_level)
 
@@ -1559,6 +1581,9 @@ class GraphMaker():
         #determine if there is a conflict based on mixed bundling
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
+        md5=self.feature_index[new_feature].md5
+        start=self.feature_index[new_feature].start
+        end=self.feature_index[new_feature].end
         #if there is already a node for this feature
         if self.feature_index[new_feature].pg_assignment != None:
             if (pg_node != None):
@@ -1586,7 +1611,8 @@ class GraphMaker():
             else:
                 cur_pg_id=self.num_pg_nodes
                 self.num_pg_nodes+=1
-                self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}})
+#                 self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'md5':md5, 'start':start, 'end':end})
+                self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'info':{genome_id:{sequence_id:[{'md5':md5, 'start':start, 'end':end}]}}})
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         if conflict != None:
