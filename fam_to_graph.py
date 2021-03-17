@@ -520,6 +520,7 @@ class famInfo():
 class featureParser():
     def __init__(self, **kwargs):
         self.feature_files=kwargs['feature_files']
+        self.feature_selector=kwargs['feature_selector']
         self.file_type=kwargs['file_type']
         self.parse_function=kwargs['parse_function']
         self.alpha=kwargs["alpha"]
@@ -575,7 +576,7 @@ class featureParser():
                     result.feature_ref = parts[self.ip['feature']]
                     result.organism = parts[self.ip['organism']]
                     
-                    if self.file_type=="patric_genomes":
+                    if self.file_type=="patric_genomes" or self.alpha=="pgfam_id":
                         result.md5 = parts[-1]
                     
                     if self.parse_function:
@@ -602,10 +603,10 @@ class featureParser():
                 genome_ids.append(l)
             logging.info("genome_ids:"+",".join(genome_ids))
         for gids in self.chunker(genome_ids, 10):
-            selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in(genome_id,({}))".format(','.join(gids))]
+            selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in({},({}))".format(self.feature_selector, ','.join(gids))]
             genomes = "and({})".format(','.join(selectors))   
             limit = "limit({})".format(limit)
-            select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway,aa_sequence_md5)&sort(+genome_id,+sequence_id,+start)"
+            select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway,aa_sequence_md5)&sort(+genome_id,+accession,+start)"
             base = "https://www.patricbrc.org/api/genome_feature/"
             query = "&".join([genomes, limit, select])
             headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
@@ -635,7 +636,7 @@ class GraphMaker():
         #print str(ksize)
         self.feature_parser=None
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], alpha=kwargs["alpha"])
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], feature_selector=kwargs["feature_selector"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], alpha=kwargs["alpha"])
         self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
         self.ksize=kwargs["ksize"]
@@ -1468,6 +1469,7 @@ class GraphMaker():
         md5=self.feature_index[new_feature].md5
         start=self.feature_index[new_feature].start
         end=self.feature_index[new_feature].end
+#         group_id=self.feature_index[new_feature].group_id
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
@@ -1579,6 +1581,7 @@ class GraphMaker():
     def assign_pg_node(self, prev_feature, new_feature, pg_node, conflict=None):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
+#         group_id=self.feature_index[new_feature].group_id
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         md5=self.feature_index[new_feature].md5
@@ -2342,11 +2345,32 @@ class GraphMaker():
                     cur_knode.addPGEdges(self)
 
 # undirected weighted
-class pFamGraph(nx.Graph):
+# class pFamGraph(nx.Graph):
+#     def __init__(self):
+#         #Graph.__init__(self, weighted=True)
+#         nx.Graph.__init__(self)
+#     if not hasattr(nx.Graph,"nodes_iter"):
+#         def nodes_iter(self, data=False):
+#             if data ==True:
+#                 for i in self.nodes:
+#                     yield (i,self.nodes[i])
+#             if data ==False:
+#                 for i in self.nodes:
+#                     yield i 
+#     if not hasattr(nx.Graph,"edges_iter"):
+#         def edges_iter(self, data=False):
+#             if data ==True:
+#                 for i in self.edges:
+#                     yield (i,self.get_edge_data(*i))
+#             else:
+#                 for i in self.edges:
+#                     yield i
+                    
+class pFamGraph(nx.DiGraph):
     def __init__(self):
         #Graph.__init__(self, weighted=True)
-        nx.Graph.__init__(self)
-    if not hasattr(nx.Graph,"nodes_iter"):
+        nx.DiGraph.__init__(self)
+    if not hasattr(nx.DiGraph,"nodes_iter"):
         def nodes_iter(self, data=False):
             if data ==True:
                 for i in self.nodes:
@@ -2354,7 +2378,7 @@ class pFamGraph(nx.Graph):
             if data ==False:
                 for i in self.nodes:
                     yield i 
-    if not hasattr(nx.Graph,"edges_iter"):
+    if not hasattr(nx.DiGraph,"edges_iter"):
         def edges_iter(self, data=False):
             if data ==True:
                 for i in self.edges:
@@ -2491,8 +2515,8 @@ def main():
     input_type = parser.add_mutually_exclusive_group()
     input_type.add_argument("--patric", dest="file_type", help="table specifying the group, genome, contig, feature, and start in sorted order", action='store_const', const="patric_tab")
     input_type.add_argument("--patric_genomes", dest="file_type", action='store_const', const="patric_genomes", help="use the files listed in --feature_files as a comma or tab separated file specifying genome ids to pull from patric. automatically downloads and uses the data stream for those genome ids.")
-
-
+    
+    parser.add_argument("--feature_selector", type=str, required=False, default="genome_id", choices=["genome_id", "accession"], help="What key to use to filter the results from a patric stream. Only has an effect if the --patric_genomes flag is also used.")
     parser.add_argument("--context", type=str, required=False, default="genome", choices=["genome","contig","feature"], help="the synteny context")
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
     parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
@@ -2512,7 +2536,7 @@ def main():
     handler.setFormatter(formatter)
     root.addHandler(handler)
 
-    gmaker=GraphMaker(feature_files=pargs.feature_files, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, alpha=pargs.alpha)
+    gmaker=GraphMaker(feature_files=pargs.feature_files, feature_selector=pargs.feature_selector, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, alpha=pargs.alpha)
     if pargs.order_contigs !="none":
         if pargs.contig_output == None:
             sys.stderr.write("Need contig_ouptut parameter specified to output contig ordering\n")
