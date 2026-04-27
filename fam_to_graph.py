@@ -891,66 +891,66 @@ class GraphMaker():
 
         logging.warning(f"SV Detection: Tagged {inversions//2} inversions and {translocations} translocations.")
 
-        def export_gfa(self, gfa_file):
-            """
-            Exports the PS-graph to GFA v1.1 format.
-            Nodes -> Segments (S), Edges -> Links (L), Sequences -> Walks (W).
-            """
-            logging.warning(f"Exporting GFA v1.1 to {gfa_file}")
-            with open(gfa_file, 'w') as out:
-                # Header
-                out.write("H\tVN:Z:1.1\n")
+    def export_gfa(self, gfa_file):
+        """
+        Exports the PS-graph to GFA v1.1 format.
+        Nodes -> Segments (S), Edges -> Links (L), Sequences -> Walks (W).
+        """
+        logging.warning(f"Exporting GFA v1.1 to {gfa_file}")
+        with open(gfa_file, 'w') as out:
+            # Header
+            out.write("H\tVN:Z:1.1\n")
+            
+            # 1. Write Segments (Nodes)
+            for n, d in self.pg_graph.nodes(data=True):
+                # We use the generic labels/families you established
+                family = d.get('label', 'unknown')
+                dv = d.get('diversity', 0.0)
+                cf = d.get('conflict', 0)
+                al = d.get('alternate', 0)
                 
-                # 1. Write Segments (Nodes)
-                for n, d in self.pg_graph.nodes(data=True):
-                    # We use the generic labels/families you established
-                    family = d.get('label', 'unknown')
-                    dv = d.get('diversity', 0.0)
-                    cf = d.get('conflict', 0)
-                    al = d.get('alternate', 0)
+                # We abstract sequence as '*', and encode metadata as standard SAM tags
+                tags = f"fm:Z:{family}\tdv:f:{dv:.4f}\tcf:i:{cf}\tal:i:{al}"
+                out.write(f"S\t{n}\t*\t{tags}\n")
+                
+            # 2. Write Links (Edges)
+            for u, v, d in self.pg_graph.edges(data=True):
+                seq_count = len(d.get('sequences', set()))
+                gen_count = len(d.get('genomes', set()))
+                
+                sv_tag = ""
+                if "sv_type" in d and d["sv_type"] != "syntenic":
+                    sv_tag = f"\tsv:Z:{d['sv_type']}"
                     
-                    # We abstract sequence as '*', and encode metadata as standard SAM tags
-                    tags = f"fm:Z:{family}\tdv:f:{dv:.4f}\tcf:i:{cf}\tal:i:{al}"
-                    out.write(f"S\t{n}\t*\t{tags}\n")
-                    
-                # 2. Write Links (Edges)
-                for u, v, d in self.pg_graph.edges(data=True):
-                    seq_count = len(d.get('sequences', set()))
-                    gen_count = len(d.get('genomes', set()))
-                    
-                    sv_tag = ""
-                    if "sv_type" in d and d["sv_type"] != "syntenic":
-                        sv_tag = f"\tsv:Z:{d['sv_type']}"
-                        
-                    # Output topology. Directed edges dictate default + to + traversal
-                    out.write(f"L\t{u}\t+\t{v}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tag}\n")
-                    
-                # 3. Write Walks (Genome Paths)
-                # Reconstruct the explicit path of each contig through the graph
-                for genome_id, contigs in self.replicon_map.items():
-                    for contig_id, features in contigs.items():
-                        path =[]
-                        prev_pg_id = None
-                        for f_id in features:
-                            pg_id = self.feature_index[f_id].pg_assignment
-                            if pg_id is None:
-                                continue
-                                
-                            # Strand Detection Heuristic: 
-                            # If the traversal goes *against* the directed edge of the PS-graph,
-                            # it indicates this specific strain is inverted here.
-                            orient = ">"
-                            if prev_pg_id is not None:
-                                if not self.pg_graph.has_edge(prev_pg_id, pg_id) and self.pg_graph.has_edge(pg_id, prev_pg_id):
-                                    orient = "<"
-                                    
-                            path.append(f"{orient}{pg_id}")
-                            prev_pg_id = pg_id
+                # Output topology. Directed edges dictate default + to + traversal
+                out.write(f"L\t{u}\t+\t{v}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tag}\n")
+                
+            # 3. Write Walks (Genome Paths)
+            # Reconstruct the explicit path of each contig through the graph
+            for genome_id, contigs in self.replicon_map.items():
+                for contig_id, features in contigs.items():
+                    path =[]
+                    prev_pg_id = None
+                    for f_id in features:
+                        pg_id = self.feature_index[f_id].pg_assignment
+                        if pg_id is None:
+                            continue
                             
-                        if path:
-                            path_str = "".join(path)
-                            # W format: Sample Hap Index SeqID Start End Path
-                            out.write(f"W\t{genome_id}\t1\t{contig_id}\t0\t{len(path)}\t{path_str}\n")
+                        # Strand Detection Heuristic: 
+                        # If the traversal goes *against* the directed edge of the PS-graph,
+                        # it indicates this specific strain is inverted here.
+                        orient = ">"
+                        if prev_pg_id is not None:
+                            if not self.pg_graph.has_edge(prev_pg_id, pg_id) and self.pg_graph.has_edge(pg_id, prev_pg_id):
+                                orient = "<"
+                                
+                        path.append(f"{orient}{pg_id}")
+                        prev_pg_id = pg_id
+                        
+                    if path:
+                        path_str = "".join(path)
+                        # W format: Sample Hap Index SeqID Start End Path
+                        out.write(f"W\t{genome_id}\t1\t{contig_id}\t0\t{len(path)}\t{path_str}\n")
     class taxInfo():
         def __init__(self, genome_name, summary_id):
             self.genome_name=genome_name
