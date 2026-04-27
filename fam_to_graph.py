@@ -16,7 +16,8 @@ from operator import itemgetter
 import json
 from collections import deque
 from collections import OrderedDict
-from cStringIO import StringIO
+from io import StringIO
+import io
 from subprocess import Popen, PIPE, STDOUT
 import time
 import requests
@@ -33,10 +34,7 @@ def pretty_print_POST(req):
         req.body,
     ))
 
-# heap analysis from guppy import hpy
-#requires 2.7 or greater
-if sys.version_info < (2, 7):
-    raise Exception("must use python 2.7 or greater")
+
 
 #from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
 #try:
@@ -70,7 +68,7 @@ edgePossible=set([1,2,4,8])
 
 def warning(*objs):
     for o in objs:
-        print >> sys.stderr, o
+        print(o, file=sys.stderr)
 
 ##Class for storing information about the origin of a Kmer
 class featureInfo():
@@ -252,7 +250,7 @@ class rfNode():
     #add intergenic information to what will eventually become pan-genome edges
     def addPGEInfo(self, inter_info, position):
         if position > len(self.peInfo)-1:
-            print "out of bounds "+str(position)+" for "+" ".join(self.peInfo)
+            print("out of bounds "+str(position)+" for "+" ".join(self.peInfo))
         else:
             self.peInfo[position].add(inter_info)
 
@@ -268,18 +266,19 @@ class rfNode():
 
     #if the node has been visited before update its references
     def updateNode(self, prev_node, in_edge_status, storage):
-        update_pos=[] #ordered pg-node references to project onto current node	
+        update_pos=[]
+        #ordered pg-node references to project onto current node	
         if (not in_edge_status in edgePossible):
             logging.warning("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
         #update references to pg-nodes from overlapping portion of previous k-mer
         if in_edge_status & 1:
-            update_pos = range(1,len(prev_node.pgRefs),1)+[None]
+            update_pos = list(range(1, len(prev_node.pgRefs), 1)) + [None]
         elif in_edge_status & 2:
-            update_pos = [None]+range(len(prev_node.pgRefs)-1,0,-1)
+            update_pos = [None] + list(range(len(prev_node.pgRefs)-1, 0, -1))
         elif in_edge_status & 4:
-            update_pos = range(len(prev_node.pgRefs)-2,-1,-1)+[None]
+            update_pos = list(range(len(prev_node.pgRefs)-2, -1, -1)) + [None]
         elif in_edge_status & 8:
-            update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
+            update_pos = [None] + list(range(0, len(prev_node.pgRefs)-1, 1))
         for cur_pos, prev_pos in enumerate(update_pos):
             if prev_pos != None:
                 if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
@@ -304,13 +303,13 @@ class rfNode():
         update_pos=[] #ordered pg-node references to project onto current node	
         #update references to pg-nodes from overlapping portion of previous k-mer
         if in_edge_status & 1:
-            update_pos = range(1,len(prev_node.pgRefs),1)+[None]
+            update_pos = list(range(1, len(prev_node.pgRefs), 1)) + [None]
         elif in_edge_status & 2:
-            update_pos = [None]+range(len(prev_node.pgRefs)-1,0,-1)
+            update_pos = [None] + list(range(len(prev_node.pgRefs)-1, 0, -1))
         elif in_edge_status & 4:
-            update_pos = range(len(prev_node.pgRefs)-2,-1,-1)+[None]
+            update_pos = list(range(len(prev_node.pgRefs)-2, -1, -1)) + [None]
         elif in_edge_status & 8:
-            update_pos = [None]+range(0,len(prev_node.pgRefs)-1,1)
+            update_pos = [None] + list(range(0, len(prev_node.pgRefs)-1, 1))
         for cur_pos, prev_pos in enumerate(update_pos):
             if prev_pos != None:
                 if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
@@ -332,11 +331,11 @@ class rfNode():
         #	print "Debug: pgRefs and in_edge_status screwed up"
         for i in range(0,len(self.pgRefs)-1,1):
             if self.pgRefs[i] == None or self.pgRefs[i+1] == None:
-                print "missing pg-nodes in "+str(self.nodeID)
+                print("missing pg-nodes in "+str(self.nodeID))
                 sys.exit()
             if len(self.peInfo[i]):
                 storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
-        
+
     #1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
     #2nd Add edges to new family added in this kmer FOR ALL INCOMING EDGE TYPES
     #if there is no previous node just straight expand it
@@ -588,7 +587,7 @@ class featureParser():
             yield result
 
     def chunker(self, seq, size):
-        return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
+        return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
     def genome_id_feature_gen(self, limit=2500000):
         genome_id_files=self.feature_files
@@ -725,12 +724,12 @@ class GraphMaker():
     def checkRFGraph(self):
         ambig=0
         for r in self.rf_node_index:
-            if r.numFeatures() >0:
+            if r.numFeatures() > 0:
                 ambig+=1
         logging.info("rf-graph: "+str(ambig)+" nodes unexapanded")
                 #assert LogicError("RFNode unexpanded")
     def checkPGGraph(self):
-        for cnode in self.pg_graph.nodes_iter(data=True):
+        for cnode in self.pg_graph.nodes(data=True):
             if len(cnode[1]["features"]) == 0 :
                 logging.warning("pg-graph node "+str(cnode[0])+"has no features")
             group_id=None
@@ -762,7 +761,7 @@ class GraphMaker():
         #first assure that all contigs are represented
         missing_contigs=0
         missing_genomes=0
-        for k,v in self.replicon_map.iteritems():
+        for k,v in self.replicon_map.items():
             if k not in self.contig_order:
                 missing_genomes+=1
                 logging.warning("WARNING: missing genome in contig order "+k+"\n")
@@ -779,11 +778,11 @@ class GraphMaker():
             logging.warning("WARNING: missing genomes count "+str(missing_genomes)+" missing contigs count "+str(missing_contigs)+"\n")
         with open(contig_file, 'w') as ch:
             for g in self.replicon_map.keys():
-                ch.write("\t".join([g]+self.contig_order[g].keys())+"\n")
+                ch.write("\t".join([g] + list(self.contig_order[g].keys())) + "\n")
         if unsorted_file != None:
             with open(unsorted_file, 'w') as ch:
                 for g in self.contig_unorder.keys():
-                    ch.write("\t".join([g]+self.contig_unorder[g].keys())+"\n")
+                    ch.write("\t".join([g] + list(self.contig_unorder[g].keys())) + "\n")
 
 
 
@@ -813,7 +812,7 @@ class GraphMaker():
         alt_group = {}
         processed_n =set([])
         grp_id =0
-        for n, alts in self.pg_node_alt.iteritems():
+        for n, alts in self.pg_node_alt.items():
             if n in processed_n:
                 continue
             else:
@@ -821,18 +820,19 @@ class GraphMaker():
                 for n in alts:
                     alt_group[n]=grp_id
                 grp_id+=1
-        for e in self.pg_graph.edges_iter():
+        for e in self.pg_graph.edges():
             attr=self.pg_graph.get_edge_data(*e)
             if "genomes" in attr:
                 attr["weight"]=len(attr["genomes"])/num_genomes
             for a in attr:
                 if type(attr[a])==set:
                     attr[a] = ','.join(attr[a])
-        for n,d in self.pg_graph.nodes_iter(data=True):
+        for n,d in self.pg_graph.nodes(data=True):
             label_set =set([])
             cur_diversity = {}
 
-            f_id=[i for key, i in d["features"].items() if type(i) == dict and key != "info"][0].values()[0][0]
+            first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
+            f_id = next(iter(first_group.values()))[0]
             d["label"]=self.feature_index[f_id].group_id
             import pdb; 
             for g in d["features"]:
@@ -840,7 +840,7 @@ class GraphMaker():
                 if g in ["md5", "start", "end", "info"]:
                     continue
                 
-                f_id=d["features"][g].values()[0][0]
+                f_id = next(iter(d["features"][g].values()))[0]
                 self.trackDiversity(f_id, cur_diversity)
                 for s in d["features"][g]:
                     feature_refs=[]
@@ -1051,8 +1051,8 @@ class GraphMaker():
         k_size=len(feature_list)
         palindrome=0
         reverse=0
-        while i<(k_size/2):
-            if feature_list[i]< feature_list[k_size-(i+1)]:
+        while i < (k_size // 2):
+            if feature_list[i] < feature_list[k_size-(i+1)]:
                 return (reverse, palindrome)
             elif feature_list[i] > feature_list[k_size-(i+1)]:
                 reverse=1
@@ -1120,14 +1120,14 @@ class GraphMaker():
         #sort by area that it will take up, then by whether it is earlier in the contig
         if self.traverse_priority == "area":
             #numBins will be the number of contexts the kmer will show up in (non-dup). this number will be inflated but correct for relative sorting.
-            self.contig_weight={contig:sum([self.rf_node_index[r].numBins for r in rf_list]) for contig,rf_list in self.contig_to_rf.iteritems()}
+            self.contig_weight={contig:sum([self.rf_node_index[r].numBins for r in rf_list]) for contig,rf_list in self.contig_to_rf.items()}
             temp_starting_list = [(self.rfNodeToMaxAlignArea(i.nodeID, start_tuple=True), i) for i in self.rf_starting_list] #make a list of ((weight, start), rfnode) tuples
-	    temp_starting_list.sort(key=lambda x: x[0][1])#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
-	    temp_starting_list.sort(key=lambda x: x[0][0], reverse=True)#second we sort by area/weight so taht higher values come first (as a primary sort criteria)
+            temp_starting_list.sort(key=lambda x: x[0][1])#first we sort by start so that lower coordinates come first (as a secondary sort criteria)
+            temp_starting_list.sort(key=lambda x: x[0][0], reverse=True)#second we sort by area/weight so taht higher values come first (as a primary sort criteria)
             self.rf_starting_list=[i[1] for i in temp_starting_list]
         else:
-	    #start with nodes that have the most features
-	    self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
+            #start with nodes that have the most features
+            self.rf_starting_list.sort(key=lambda x: x.numFeatures(), reverse=True)
         for rf_node in self.rf_starting_list:
             if rf_node.numFeatures() > 0:
                 self.tfs_expand_nr(None, rf_node, None, None)
@@ -1155,7 +1155,7 @@ class GraphMaker():
     def getOrgSummary(self, kmer):
         result=set()
         if kmer in self.kmerLookup:
-            for i in self.kmerLookup[kmer][0].infoList.values()[0]:
+            for i in next(iter(self.kmerLookup[kmer][0].infoList.values())):
                 result.add(i.org_id)
         return result
         
@@ -1164,15 +1164,15 @@ class GraphMaker():
     def getTaxSummary(self,kmer):
         result=set()
         if kmer in self.kmerLookup:
-            for i in self.kmerLookup[kmer][0].infoList.values()[0]:
+            for i in next(iter(self.kmerLookup[kmer][0].infoList.values())):
                 if(i.org_id in self.summaryLookup):
                     result.add(self.summaryLookup[i.org_id].get_summary_id())
         return result
+
     #for a given node return a set of the organisms involved
     def nodeOrgSummary(self,cnode):
         result=set()
-        #print cnode.infoList
-        for i in cnode.infoList.values()[0]:
+        for i in next(iter(cnode.infoList.values())):
             result.add(i.org_id)
         return result
     
@@ -1374,7 +1374,7 @@ class GraphMaker():
         #to look it up on re-descent it will give all pg-options.
         for i in [0,self.ksize-1]:
             for pg in pre_assignments[i]:
-                for ik, features in pre_assignments[i][pg]["features"].iteritems():
+                for ik, features in pre_assignments[i][pg]["features"].items():
                     for f in features:
                         cur_guide = f
                         cur_guide_cat = int(f < 0)
@@ -1389,9 +1389,9 @@ class GraphMaker():
 
     def num_features_pg_node(self, node_id):
         num_features=0
-        for g in self.pg_graph.node[node_id]['features']:
-            for c in self.pg_graph.node[node_id]['features'][g]:
-                num_features+=len(self.pg_graph.node[node_id]['features'][g][c])
+        for g in self.pg_graph.nodes[node_id]['features']:
+            for c in self.pg_graph.nodes[node_id]['features'][g]:
+                num_features+=len(self.pg_graph.nodes[node_id]['features'][g][c])
         return num_features
 
     def merge_pg_node(self, node_id1, node_id2):
@@ -1404,27 +1404,27 @@ class GraphMaker():
         else:
             keep=node_id2
             remove=node_id1
-        for g in self.pg_graph.node[remove]['features']:
-            if not g in self.pg_graph.node[keep]['features']:
-                self.pg_graph.node[keep]['features'][g]=self.pg_graph.node[remove]['features'][g]
+        for g in self.pg_graph.nodes[remove]['features']:
+            if not g in self.pg_graph.nodes[keep]['features']:
+                self.pg_graph.nodes[keep]['features'][g]=self.pg_graph.nodes[remove]['features'][g]
                 insert_level="genome"
             else:
-                for c in self.pg_graph.node[remove]['features'][g]:
-                    if not c in self.pg_graph.node[keep]['features'][g]:
-                        self.pg_graph.node[keep]['features'][g][c] = self.pg_graph.node[remove]['features'][g][c]
+                for c in self.pg_graph.nodes[remove]['features'][g]:
+                    if not c in self.pg_graph.nodes[keep]['features'][g]:
+                        self.pg_graph.nodes[keep]['features'][g][c] = self.pg_graph.nodes[remove]['features'][g][c]
                         insert_level="contig"
                     else:
                         insert_level="feature"
-                        merge_set=set(self.pg_graph.node[keep]['features'][g][c])
-                        for f in self.pg_graph.node[remove]['features'][g][c]:
+                        merge_set=set(self.pg_graph.nodes[keep]['features'][g][c])
+                        for f in self.pg_graph.nodes[remove]['features'][g][c]:
                             if not f in merge_set:
                                 merge_set.add(f)
-                        self.pg_graph.node[keep]['features'][g][c]=list(merge_set)
+                        self.pg_graph.nodes[keep]['features'][g][c]=list(merge_set)
             if self.context != "feature" and insert_level != self.context:
                 conflict=True
-        for g in self.pg_graph.node[remove]['features']:
-            for c in self.pg_graph.node[remove]['features'][g]:
-                for f in self.pg_graph.node[remove]['features'][g][c]:
+        for g in self.pg_graph.nodes[remove]['features']:
+            for c in self.pg_graph.nodes[remove]['features'][g]:
+                for f in self.pg_graph.nodes[remove]['features'][g][c]:
                     self.feature_index[f].pg_assignment=keep
         for e in self.pg_graph.edges(remove, data=True):
             if self.pg_graph.has_edge(keep, e[1]):
@@ -1472,25 +1472,25 @@ class GraphMaker():
 #         group_id=self.feature_index[new_feature].group_id
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
-        if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
-            self.pg_graph.node[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
-            self.pg_graph.node[cur_pg_id]['features']['info'][genome_id]={sequence_id:[{'md5':md5, 'start':start, 'end':end}]}
+        if not genome_id in self.pg_graph.nodes[cur_pg_id]['features']:
+            self.pg_graph.nodes[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
+            self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id]={sequence_id:[{'md5':md5, 'start':start, 'end':end}]}
             insert_level="genome"
-        elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
-            self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
-            self.pg_graph.node[cur_pg_id]['features']['info'][genome_id][sequence_id]=[{'md5':md5, 'start':start, 'end':end}]
+        elif not sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
+            self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
+            self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id]=[{'md5':md5, 'start':start, 'end':end}]
             insert_level="contig"
         else:
             #if self.context!="feature":
-                #for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+                #for cf in self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]:
                 #    #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
                 #    if abs(cf-new_feature)< self.ksize:
                 #        emit_extra=True
                 #        insert_level=self.context #so there won't be a problem
                 #        break
             #if not emit_extra:
-                self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
-                self.pg_graph.node[cur_pg_id]['features']['info'][genome_id][sequence_id].append({'md5':md5, 'start':start, 'end':end})
+                self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
+                self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id].append({'md5':md5, 'start':start, 'end':end})
                 insert_level="feature"
         return (insert_level)
 
@@ -1503,16 +1503,16 @@ class GraphMaker():
         split=False
         if cur_pg_id == self.feature_index[new_feature].pg_assignment:
             return split, conflict, end_fragments
-        if not genome_id in self.pg_graph.node[cur_pg_id]['features']:
+        if not genome_id in self.pg_graph.nodes[cur_pg_id]['features']:
             insert_level="genome"
-        elif not sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
+        elif not sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
             insert_level="contig"
         else:
             insert_level="feature"
             split =True
         if self.context_levels[insert_level] > self.context_levels[self.context]:
             conflict=True
-            cf = self.pg_graph.node[cur_pg_id]['features'][genome_id].values()[0][0]
+            cf = next(iter(self.pg_graph.nodes[cur_pg_id]['features'][genome_id].values()))[0]
             if not split:
                 if self.debug:
                     logging.info("conflict between "+str(new_feature)+" and "+str(cf)+" in "+str(cur_pg_id))
@@ -1537,9 +1537,9 @@ class GraphMaker():
                         break
                     i+=1
             #if self.context!="feature" and \
-            #genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
-            #sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
-            #    for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+            #genome_id in self.pg_graph.nodes[cur_pg_id]['features'] and \
+            #sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
+            #    for cf in self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]:
                     #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
             #        if abs(cf-new_feature)< self.ksize:
             #            split=True
@@ -1550,19 +1550,19 @@ class GraphMaker():
         genome_id=self.feature_index[new_feature].genome_id
         sequence_id=self.feature_index[new_feature].contig_id
         if self.context!="feature" and \
-        genome_id in self.pg_graph.node[cur_pg_id]['features'] and \
-        sequence_id in self.pg_graph.node[cur_pg_id]['features'][genome_id]:
-            for cf in self.pg_graph.node[cur_pg_id]['features'][genome_id][sequence_id]:
+        genome_id in self.pg_graph.nodes[cur_pg_id]['features'] and \
+        sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
+            for cf in self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]:
                 #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
                 if abs(cf-new_feature)< self.ksize:
                     return True
 
     def move_features(self, target_pg_id, target_features):
-        tn = self.pg_graph.node[target_pg_id]
+        tn = self.pg_graph.nodes[target_pg_id]
         for t in target_features:
             rn_id = self.feature_index[t].pg_assignment
             if target_pg_id != rn_id:
-                rn = self.pg_graph.node[rn_id]
+                rn = self.pg_graph.nodes[rn_id]
                 #print "moving feature"
                 genome = self.feature_index[t].genome_id
                 contig = self.feature_index[t].contig_id
@@ -1619,11 +1619,11 @@ class GraphMaker():
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         if conflict != None:
-            if conflict != "shift" and not "conflict" in self.pg_graph.node[cur_pg_id]:
-                self.pg_graph.node[cur_pg_id]["conflict"]=conflict
+            if conflict != "shift" and not "conflict" in self.pg_graph.nodes[cur_pg_id]:
+                self.pg_graph.nodes[cur_pg_id]["conflict"]=conflict
             # else where for more comprehensive marking
-            #if conflict == "shift" and not "alternate" in self.pg_graph.node[cur_pg_id]:
-            #    self.pg_graph.node[cur_pg_id]["alternate"]=1
+            #if conflict == "shift" and not "alternate" in self.pg_graph.nodes[cur_pg_id]:
+            #    self.pg_graph.nodes[cur_pg_id]["alternate"]=1
 
         if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
@@ -1673,7 +1673,7 @@ class GraphMaker():
             for pg in pre_assignments[i]["assignments"]:
                 num_regular =0
                 num_c1 =0
-                for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
+                for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
                         #think about how the conflict should be represented overall
                         #look at the data structure required for determineAssignments
@@ -1704,7 +1704,7 @@ class GraphMaker():
         if conflicts == None:
             i=self.ksize-1
             while i >= 0:
-                for ik, features in feature_pile[i]["by_instance"].iteritems():
+                for ik, features in feature_pile[i]["by_instance"].items():
                     max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
                     if max_keys[0] == None: #no guides exist
                         #create new node and put it in
@@ -1775,12 +1775,12 @@ class GraphMaker():
                 #nothing taking advantage of this for now
                 #if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
                 #    conflict_status = "shift"
-                for ik, features in pre_assignments[i]["assignments"][pg]["features"].iteritems():
+                for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
                         self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflict=conflict_status)
             for pg in pre_assignments[i]["new_nodes"]:
                 new_pg = None
-                for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].iteritems():
+                for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].items():
                     for f in features:
                         new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflict=None)
                         alt_nodes.add(new_pg)
@@ -1809,7 +1809,7 @@ class GraphMaker():
                     else:
                         target_guide = None
             elif len(target_guides.keys()) >= 1: #all instance keys refer to the same pg-node
-                target_guide = target_guides.values()[0][0]
+                target_guide = next(iter(target_guides.values()))[0]
             else:
                 target_guide = None
             if target_guide != None:
@@ -1823,7 +1823,7 @@ class GraphMaker():
                 #    assert LogicError
 
             #PHASE 4:Make assignments based on the previous two phases
-            for pg_node, assign_tuple in guide_to_assign.iteritems():
+            for pg_node, assign_tuple in guide_to_assign.items():
                 #PHASE 3: Determine if there are ANY conflicts.
                 target_guide, assign_list = assign_tuple
                 num_conflict=num_split=0
@@ -2029,8 +2029,8 @@ class GraphMaker():
 
         if self.debug:
             self.visit_number+=1
-            existing_label = self.rf_graph.node[cur_node.nodeID]["visit"]
-            self.rf_graph.node[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
+            existing_label = self.rf_graph.nodes[cur_node.nodeID]["visit"]
+            self.rf_graph.nodes[cur_node.nodeID]["visit"] =  ",".join([str(self.visit_number),existing_label]) if len(existing_label) else str(self.visit_number)
             logging.debug("visiting rf-"+str(cur_node.nodeID)+" number of pg-nodes is "+str(self.pg_graph.number_of_nodes()))
         #sys.stderr.write("number of pg-nodes is "+str(self.pg_graph.number_of_nodes())+"\n")
         num_targets=0
@@ -2070,8 +2070,8 @@ class GraphMaker():
 
                         
         #whether this is an anchor or not there will be targets passed down if it is not the start of a traversal.
-	temp_self_queue=[]
-	temp_reg_queue=[]
+        temp_self_queue=[]
+        temp_reg_queue=[]
         if (num_targets>0):
             # if there are targets then this isn't the first node visited
             # this means only one new column aka 'character' in the kmer needs to be expanded 
@@ -2103,7 +2103,7 @@ class GraphMaker():
                                 logging.warning("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID))
                                 raise Exception("LogicError")
                         else:
-                            #this initial loop through the targets is really just to see if any have already been assigned
+                            #this initial loop through the targets is really just to see if any have been assigned
                             if self.feature_index[new_feature].pg_assignment != None:
                                 #REPLACED rhs_guide = rhs_feature
                                 #REPLACED rhs_guide_cat=direction
@@ -2156,12 +2156,12 @@ class GraphMaker():
             cur_node.features[0]=set([])#after assigning all features clear it out.
             cur_node.features[1]=set([])#after assigning all features clear it out.
 	
-	if self.traverse_priority == "area":
-	    #mod these to sort based on maximum area next
-	    temp_self_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
-	    temp_reg_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
+        if self.traverse_priority == "area":
+            #mod these to sort based on maximum area next
+            temp_self_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
+            temp_reg_queue.sort(key=lambda x: self.rfNodeToMaxAlignArea(x[0],node_bundles), reverse=True)
 
-	node_queue.extendleft(temp_self_queue)
+        node_queue.extendleft(temp_self_queue)
         node_queue.extend(temp_reg_queue)
 
 
@@ -2203,7 +2203,7 @@ class GraphMaker():
             direction=0
             while direction < len(targets[kmer_side]):
                 if len(targets[kmer_side][direction]) > 0:
-                    guide= (iter(targets[kmer_side][direction]).next(),direction, not kmer_side) #can be any feature just assigned.
+                    guide = (next(iter(targets[kmer_side][direction])), direction, not kmer_side)
                     break
                 direction+=1
             kmer_side+=1
@@ -2284,7 +2284,7 @@ class GraphMaker():
                 #must process 
                 #just got new targets returned from a DFS. expand them, and update queue based on them
                 if(len(new_targets)):
-                    new_guide= iter(targets).next() #can be any feature just assigned.
+                    new_guide= self.getTargetGuide(cv.targets)#can be any feature just assigned.
                     #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
                     #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
                     #so if there is a guide: 
@@ -2306,7 +2306,7 @@ class GraphMaker():
     #if the minOrg requirment is not met the node is added to the graph but is marked in active.
     #dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
     def bfsExpand(self, minOrg):
-        print "expanding kmer graph in to pg-graph total knodes: "+str(len(self.rf_node_list))
+        print("expanding kmer graph in to pg-graph total knodes: "+str(len(self.rf_node_list)))
         for start_k_id, start_knode in enumerate(self.rf_node_list):
             if start_knode.visited:
                 continue
@@ -2370,22 +2370,6 @@ class pFamGraph(nx.DiGraph):
     def __init__(self):
         #Graph.__init__(self, weighted=True)
         nx.DiGraph.__init__(self)
-    if not hasattr(nx.DiGraph,"nodes_iter"):
-        def nodes_iter(self, data=False):
-            if data ==True:
-                for i in self.nodes:
-                    yield (i,self.nodes[i])
-            if data ==False:
-                for i in self.nodes:
-                    yield i 
-    if not hasattr(nx.DiGraph,"edges_iter"):
-        def edges_iter(self, data=False):
-            if data ==True:
-                for i in self.edges:
-                    yield (i,self.get_edge_data(*i))
-            else:
-                for i in self.edges:
-                    yield i
 
 
                                 
@@ -2423,7 +2407,7 @@ def create_indices(storage, pgraph, csize, gff_outfile):
     storage.graph_to_offset={}#maps graph ID (node or edge) to offset location start,end
     for n in pgraph.nodes():
         ncount=str(next(node_counter))
-        pgraph.node[n]['id']=ncount
+        pgraph.nodes[n]['id']=ncount
         start_voff=bgzf_handle.tell()
         node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
         end_voff=bgzf_handle.tell()
@@ -2434,7 +2418,7 @@ def create_indices(storage, pgraph, csize, gff_outfile):
         for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
             storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
             #edge_to_gff(bgzf_handle)
-    for k,v in storage.summaryLookup.iteritems():
+    for k,v in storage.summaryLookup.items():
         storage.org_map[k]=v.genome_name
 
 
@@ -2459,7 +2443,7 @@ def find_rearrangements(pgraph, storage, out_file, gminimum=None):
     out_handle=open(out_file,'w')
     if not gminimum:
         gminimum=len(storage.summaryLookup)#default to all genomes in
-    for u,v,data in pgraph.edges_iter(data=True):
+    for u,v,data in pgraph.edges(data=True):
         us=u.get_summary()
         vs=v.get_summary()
         if len(data['instances']) == 1 and len(us['organisms']) >= gminimum and len(vs['organisms']) >= gminimum:
@@ -2496,7 +2480,7 @@ def stats(graph):
     num_nodes=graph.order()
     num_edges=graph.size()
     avg_degree= float(num_edges)/num_nodes
-    print "\t".join([str(num_nodes),str(num_edges),str(avg_degree)])
+    print("\t".join([str(num_nodes),str(num_edges),str(avg_degree)]))
 
 
 def main():
@@ -2558,21 +2542,44 @@ def main():
     if pargs.layout:
         file_out = False
         if type(pargs.output) == str:
-            file_out =True
+            file_out = True
             out_str = pargs.output
             pargs.output = open(out_str, 'w')
-        gexf_capture=StringIO() # there might be a better way to leverage system pipes / buffering than reading keeping a whole copy
+        
+        # FIX: Use BytesIO because write_gexf outputs utf-8 encoded bytes
+        gexf_capture = io.BytesIO() 
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
+        # Decode the bytes into a string
+        raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
+
         cur_path = os.path.dirname(os.path.realpath(__file__))
         logging.warning("laying out graph")
-        layout_cmd=["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
+        layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
         logging.warning(" ".join(layout_cmd))
-        p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE)
-        pargs.output.write( p.communicate(input=gexf_capture.getvalue())[0])
+        
+        # In Python 3, Popen with string input requires text=True
+        p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True)
+        raw_gexf_output, err = p.communicate(input=raw_gexf_str)
+        
+        # --- FIX: Clean up malformed JSON double-quotes "" created by Gephi Java exporter ---
+        cleaned_gexf = re.sub(r'""', r'&quot;', raw_gexf_output)
+        
+        pargs.output.write(cleaned_gexf)
         if file_out: pargs.output.close()
         
     else:
-        nx.readwrite.write_gexf(gmaker.pg_graph, pargs.output)
+        # If not using layout, intercept NetworkX bytes buffer to ensure clean JSON
+        gexf_capture = io.BytesIO()
+        nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture)
+        
+        raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
+        cleaned_gexf = re.sub(r'""', r'&quot;', raw_gexf_str)
+        
+        if type(pargs.output) == str:
+            with open(pargs.output, 'w') as f:
+                f.write(cleaned_gexf)
+        else:
+            pargs.output.write(cleaned_gexf)
     if pargs.order_contigs != "none":
         unsorted_file = pargs.contig_output+".unsorted"
         gmaker.write_contigs(pargs.contig_output, unsorted_file)
