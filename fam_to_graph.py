@@ -834,7 +834,21 @@ class GraphMaker():
             first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
             f_id = next(iter(first_group.values()))[0]
             d["label"]=self.feature_index[f_id].group_id
-            import pdb; 
+
+            total_len = 0
+            feat_count = 0
+            for g_id, c_dict in d["features"].items():
+                if g_id in["info", "md5", "start", "end"]: # safeguard against old data
+                    continue
+                for c_id, f_list in c_dict.items():
+                    for f_idx in f_list:
+                        # Direct lookup in the global feature index
+                        f_obj = self.feature_index[f_idx]
+                        total_len += abs(int(f_obj.end) - int(f_obj.start)) + 1
+                        feat_count += 1
+            
+            d["length"] = int(total_len / feat_count) if feat_count > 0 else 1
+
             for g in d["features"]:
                 
                 if g in ["md5", "start", "end", "info"]:
@@ -903,30 +917,45 @@ class GraphMaker():
             
             # 1. Write Segments (Nodes)
             for n, d in self.pg_graph.nodes(data=True):
-                # We use the generic labels/families you established
-                family = d.get('label', 'unknown')
+                # In finalizeGraphAttr: 'family' holds the ID, 'label' holds the function string
+                fam_id = d.get('family', 'unknown_fam')
+                function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
                 cf = d.get('conflict', 0)
                 al = d.get('alternate', 0)
+                node_len = d.get('length', 1)
+
+                # Make a Bandage-friendly, space-free Segment Name (e.g., "0_PGF_12345")
+                clean_fam_id = str(fam_id).replace(" ", "_")
+                segment_name = f"{n}_{clean_fam_id}"
                 
-                # We abstract sequence as '*', and encode metadata as standard SAM tags
-                tags = f"fm:Z:{family}\tdv:f:{dv:.4f}\tcf:i:{cf}\tal:i:{al}"
-                out.write(f"S\t{n}\t*\t{tags}\n")
+                # Tags: fm = family ID, fn = function (spaces are allowed in Z tags), LN = visual length
+                tags = f"fm:Z:{fam_id}\tfn:Z:{function_desc}\tdv:f:{dv:.4f}\tcf:i:{cf}\tal:i:{al}\tLN:i:{node_len}"
+                
+                out.write(f"S\t{segment_name}\t*\t{tags}\n")
                 
             # 2. Write Links (Edges)
             for u, v, d in self.pg_graph.edges(data=True):
                 seq_count = len(d.get('sequences', set()))
                 gen_count = len(d.get('genomes', set()))
                 
+                # Format the u and v names to match the new Segment names
+                u_node = self.pg_graph.nodes[u]
+                v_node = self.pg_graph.nodes[v]
+                u_fam = str(u_node.get('family', 'unknown')).replace(" ", "_")
+                v_fam = str(v_node.get('family', 'unknown')).replace(" ", "_")
+                
+                u_name = f"{u}_{u_fam}"
+                v_name = f"{v}_{v_fam}"
+                
                 sv_tag = ""
                 if "sv_type" in d and d["sv_type"] != "syntenic":
                     sv_tag = f"\tsv:Z:{d['sv_type']}"
                     
-                # Output topology. Directed edges dictate default + to + traversal
-                out.write(f"L\t{u}\t+\t{v}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tag}\n")
+                # Output topology
+                out.write(f"L\t{u_name}\t+\t{v_name}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tag}\n")
                 
             # 3. Write Walks (Genome Paths)
-            # Reconstruct the explicit path of each contig through the graph
             for genome_id, contigs in self.replicon_map.items():
                 for contig_id, features in contigs.items():
                     path =[]
@@ -936,21 +965,26 @@ class GraphMaker():
                         if pg_id is None:
                             continue
                             
-                        # Strand Detection Heuristic: 
-                        # If the traversal goes *against* the directed edge of the PS-graph,
-                        # it indicates this specific strain is inverted here.
+                        # Format the path segment to match the new Segment names
+                        pg_node = self.pg_graph.nodes[pg_id]
+                        fam = str(pg_node.get('family', 'unknown')).replace(" ", "_")
+                        segment_name = f"{pg_id}_{fam}"
+                        
                         orient = ">"
                         if prev_pg_id is not None:
+                            # Strand detection heuristic for inversion
                             if not self.pg_graph.has_edge(prev_pg_id, pg_id) and self.pg_graph.has_edge(pg_id, prev_pg_id):
                                 orient = "<"
                                 
-                        path.append(f"{orient}{pg_id}")
+                        path.append(f"{orient}{segment_name}")
                         prev_pg_id = pg_id
                         
                     if path:
                         path_str = "".join(path)
                         # W format: Sample Hap Index SeqID Start End Path
                         out.write(f"W\t{genome_id}\t1\t{contig_id}\t0\t{len(path)}\t{path_str}\n")
+
+
     class taxInfo():
         def __init__(self, genome_name, summary_id):
             self.genome_name=genome_name
@@ -1562,11 +1596,13 @@ class GraphMaker():
         sequence_id=self.feature_index[new_feature].contig_id
         if not genome_id in self.pg_graph.nodes[cur_pg_id]['features']:
             self.pg_graph.nodes[cur_pg_id]['features'][genome_id]={sequence_id:[new_feature]}
-            self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id]={sequence_id:[{'md5':md5, 'start':start, 'end':end}]}
+            if embed_info:
+                self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id]={sequence_id:[{'md5':md5, 'start':start, 'end':end}]}
             insert_level="genome"
         elif not sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
             self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]=[new_feature]
-            self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id]=[{'md5':md5, 'start':start, 'end':end}]
+            if embed_info:
+                self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id]=[{'md5':md5, 'start':start, 'end':end}]
             insert_level="contig"
         else:
             #if self.context!="feature":
@@ -1578,7 +1614,8 @@ class GraphMaker():
                 #        break
             #if not emit_extra:
                 self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id].append(new_feature)
-                self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id].append({'md5':md5, 'start':start, 'end':end})
+                if embed_info:
+                    self.pg_graph.nodes[cur_pg_id]['features']['info'][genome_id][sequence_id].append({'md5':md5, 'start':start, 'end':end})
                 insert_level="feature"
         return (insert_level)
 
@@ -2593,6 +2630,8 @@ def main():
     parser.add_argument("--ksize", type=int, default=3, required=False, choices=range(3,10), help="the size of the kmer to use in constructing synteny")
     parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
     parser.add_argument("--gfa", type=str, help="Output the Pan-Synteny graph in GFA v1.1 format", required=False, default=None)
+    parser.add_argument("--embed_info", help="MD5 and coordinates will be embedded at each node", required=False, default=False , action='store_true')
+
     parser.add_argument("feature_files", type=str, nargs="*", default=["-"], help="Files of varying format specifing group, genome, contig, feature, and start in sorted order. stdin also accepted")
 
 
@@ -2608,6 +2647,8 @@ def main():
     formatter = logging.Formatter('%(asctime)s - %(message)s')
     handler.setFormatter(formatter)
     root.addHandler(handler)
+    global embed_info
+    embed_info=pargs.embed_info
 
     gmaker=GraphMaker(feature_files=pargs.feature_files, feature_selector=pargs.feature_selector, file_type=pargs.file_type, context=pargs.context, ksize=pargs.ksize, break_conflict=False, label_function= (not pargs.no_function),diversity=pargs.diversity, minSeq=pargs.min, alpha=pargs.alpha)
     if pargs.order_contigs !="none":
@@ -2655,8 +2696,10 @@ def main():
         raw_gexf_output, err = p.communicate(input=raw_gexf_str)
         
         # --- FIX: Clean up malformed JSON double-quotes "" created by Gephi Java exporter ---
-        cleaned_gexf = re.sub(r'""', r'&quot;', raw_gexf_output)
-        
+        #cleaned_gexf = raw_gexf_output.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
+        #cleaned_gexf = cleaned_gexf.replace('=&quot;', '=""')  # Restores empty attributes like name=""
+        #cleaned_gexf = cleaned_gexf.replace('>&quot;<', '>""<') # Restores empty tags like <tag>""</tag>
+        cleaned_gexf=raw_gexf_output        
         pargs.output.write(cleaned_gexf)
         if file_out: pargs.output.close()
         
@@ -2666,8 +2709,11 @@ def main():
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture)
         
         raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
-        cleaned_gexf = re.sub(r'""', r'&quot;', raw_gexf_str)
-        
+        cleaned_gexf=raw_gexf_str
+        #cleaned_gexf = raw_gexf_str.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
+        #cleaned_gexf = cleaned_gexf.replace('=&quot;', '=""')  # Restores empty attributes like name=""
+        #cleaned_gexf = cleaned_gexf.replace('>&quot;<', '>""<') # Restores empty tags like <tag>""</tag>
+                
         if type(pargs.output) == str:
             with open(pargs.output, 'w') as f:
                 f.write(cleaned_gexf)
