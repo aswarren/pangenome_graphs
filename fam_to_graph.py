@@ -873,7 +873,7 @@ class GraphMaker():
             if not "conflict" in d:
                 d["conflict"]= 0
             grp_id = alt_group.get(n, 0)
-            d["alternate"]= grp_id
+            d["cnv_cluster_id"]= grp_id
         #sys.stderr.write("real alt number: "+str(len(processed_n))+"\n")
             
     def tag_structural_variants(self):
@@ -888,22 +888,65 @@ class GraphMaker():
             u_node = self.pg_graph.nodes[u]
             v_node = self.pg_graph.nodes[v]
             
-            # Panaconda marks nodes that violate the syntenic context (e.g. contig jumps) with conflict=1
             u_cf = u_node.get("conflict", 0)
             v_cf = v_node.get("conflict", 0)
             
-            # Detect Inversions (Bidirectional edges imply sequence loop-backs)
+            # Initialize flags
+            d["is_inversion"] = False
+            d["is_translocation"] = False
+            
+            # Detect Inversions
             if self.pg_graph.has_edge(v, u):
-                d["sv_type"] = "inversion_breakpoint"
+                d["is_inversion"] = True
                 inversions += 1
-            # Detect Translocations (Edges connected to context violations)
-            elif u_cf == 1 or v_cf == 1:
-                d["sv_type"] = "translocation_breakpoint"
+                
+            # Detect Translocations
+            if u_cf == 1 or v_cf == 1:
+                d["is_translocation"] = True
                 translocations += 1
-            else:
-                d["sv_type"] = "syntenic"
+                
+        # Because undirected inversions create 2 directed edges
+        inversions = inversions // 2
 
-        logging.warning(f"SV Detection: Tagged {inversions//2} inversions and {translocations} translocations.")
+        logging.warning(f"SV Detection: Tagged {inversions} inversions and {translocations} translocations.")
+
+    
+    def annotate_major_replicons(self, min_node_fraction=0.05):
+        """
+        Identifies major replicons by severing translocations and finding 
+        weakly connected components, filtering out noise/fragments.
+        """
+        # 1. Create a temporary graph and sever translocation bridges
+        clean_graph = self.pg_graph.copy()
+        translocation_edges =[(u, v) for u, v, d in clean_graph.edges(data=True) 
+                               if d.get("is_translocation") == True]
+        clean_graph.remove_edges_from(translocation_edges)
+
+        # 2. Find Weakly Connected Components (ignores edge directionality)
+        components = list(nx.weakly_connected_components(clean_graph))
+        
+        # 3. Sort components by size (largest first)
+        components.sort(key=len, reverse=True)
+        
+        # Calculate the threshold for what constitutes a "major" replicon
+        total_nodes = self.pg_graph.number_of_nodes()
+        min_nodes = total_nodes * min_node_fraction
+        
+        # 4. Annotate the original graph
+        replicon_id = 1
+        for comp in components:
+            # If component is large enough, it gets a Replicon ID
+            if len(comp) >= min_nodes:
+                label = f"Replicon_{replicon_id}"
+                replicon_id += 1
+            else:
+                # Small, fragmented assemblies get grouped as noise
+                label = "Fragment"
+                
+            for n in comp:
+                self.pg_graph.nodes[n]["replicon"] = label
+
+        logging.warning(f"Replicon Detection: Found {replicon_id - 1} major replicons.")
 
     def export_gfa(self, gfa_file):
         """
@@ -923,6 +966,8 @@ class GraphMaker():
                 dv = d.get('diversity', 0.0)
                 cf = d.get('conflict', 0)
                 al = d.get('alternate', 0)
+                cnv = d.get('cnv_cluster_id', 0)
+
                 node_len = d.get('length', 1)
 
                 # Make a Bandage-friendly, space-free Segment Name (e.g., "0_PGF_12345")
@@ -930,7 +975,7 @@ class GraphMaker():
                 segment_name = f"{n}_{clean_fam_id}"
                 
                 # Tags: fm = family ID, fn = function (spaces are allowed in Z tags), LN = visual length
-                tags = f"fm:Z:{fam_id}\tfn:Z:{function_desc}\tdv:f:{dv:.4f}\tcf:i:{cf}\tal:i:{al}\tLN:i:{node_len}"
+                tags = f"fm:Z:{fam_id}\tfn:Z:{function_desc}\tdv:f:{dv:.4f}\tcf:i:{cf}\tcv:i:{cnv}\tLN:i:{node_len}"
                 
                 out.write(f"S\t{segment_name}\t*\t{tags}\n")
                 
@@ -948,12 +993,15 @@ class GraphMaker():
                 u_name = f"{u}_{u_fam}"
                 v_name = f"{v}_{v_fam}"
                 
-                sv_tag = ""
-                if "sv_type" in d and d["sv_type"] != "syntenic":
-                    sv_tag = f"\tsv:Z:{d['sv_type']}"
+                # Assign GFA tags for overlapping SVs
+                sv_tags = ""
+                if d.get("is_inversion"):
+                    sv_tags += "\tiv:i:1"
+                if d.get("is_translocation"):
+                    sv_tags += "\ttr:i:1"
                     
                 # Output topology
-                out.write(f"L\t{u_name}\t+\t{v_name}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tag}\n")
+                out.write(f"L\t{u_name}\t+\t{v_name}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tags}\n")
                 
             # 3. Write Walks (Genome Paths)
             for genome_id, contigs in self.replicon_map.items():
@@ -2421,13 +2469,9 @@ class GraphMaker():
             return (node_bundles[-1])
 
 
-        
 
 
-
-
-
-        #transform the kmerNode graph (rf-graph) into a pg-graph
+    #transform the kmerNode graph (rf-graph) into a pg-graph
     #if the minOrg requirment is not met the node is added to the graph but is marked in active.
     #dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
     def bfsExpand(self, minOrg):
@@ -2669,17 +2713,13 @@ def main():
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
     gmaker.tag_structural_variants()
+    gmaker.annotate_major_replicons(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
+
     
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
 
     if pargs.layout:
-        file_out = False
-        if type(pargs.output) == str:
-            file_out = True
-            out_str = pargs.output
-            pargs.output = open(out_str, 'w')
-        
         # FIX: Use BytesIO because write_gexf outputs utf-8 encoded bytes
         gexf_capture = io.BytesIO() 
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
@@ -2699,26 +2739,41 @@ def main():
         #cleaned_gexf = raw_gexf_output.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
         #cleaned_gexf = cleaned_gexf.replace('=&quot;', '=""')  # Restores empty attributes like name=""
         #cleaned_gexf = cleaned_gexf.replace('>&quot;<', '>""<') # Restores empty tags like <tag>""</tag>
-        cleaned_gexf=raw_gexf_output        
-        pargs.output.write(cleaned_gexf)
-        if file_out: pargs.output.close()
-        
+                
     else:
         # If not using layout, intercept NetworkX bytes buffer to ensure clean JSON
         gexf_capture = io.BytesIO()
         nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture)
         
-        raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
-        cleaned_gexf=raw_gexf_str
-        #cleaned_gexf = raw_gexf_str.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
-        #cleaned_gexf = cleaned_gexf.replace('=&quot;', '=""')  # Restores empty attributes like name=""
-        #cleaned_gexf = cleaned_gexf.replace('>&quot;<', '>""<') # Restores empty tags like <tag>""</tag>
-                
-        if type(pargs.output) == str:
-            with open(pargs.output, 'w') as f:
-                f.write(cleaned_gexf)
-        else:
-            pargs.output.write(cleaned_gexf)
+        raw_gexf_output = gexf_capture.getvalue().decode('utf-8')
+
+    # Create the summary JSON blob
+    contig_map = {gen_id: list(contigs.keys()) for gen_id, contigs in gmaker.replicon_map.items()}
+    total_contigs = sum(len(contigs) for contigs in contig_map.values())
+
+    cnv_clusters = set()
+    for n, d in gmaker.pg_graph.nodes(data=True):
+        if d.get("cnv_cluster_id", 0) > 0:
+            cnv_clusters.add(d["cnv_cluster_id"])
+    
+    summary_dict = {
+        "total_genomes": len(gmaker.replicon_map),
+        "total_contigs": total_contigs,
+        "total_features": len(gmaker.feature_index),
+        "total_nodes": gmaker.pg_graph.number_of_nodes(),
+        "cnv_clusters": len(cnv_clusters),
+        "parameters": {"k": pargs.ksize, "min": pargs.min},
+        "contig_map": contig_map
+    }
+    summary_json = json.dumps(summary_dict)
+    summary_xml = f"\n    <summary>{summary_json}</summary>\n  "
+    
+    # Inject directly into the <meta> block (no regex cleaning needed on summary_xml)
+    augmented_gexf = re.sub(r'</meta>', f'{summary_xml}</meta>', raw_gexf_output)  
+
+    with open(pargs.output, 'w') as f:
+        f.write(augmented_gexf)
+
     if pargs.order_contigs != "none":
         unsorted_file = pargs.contig_output+".unsorted"
         gmaker.write_contigs(pargs.contig_output, unsorted_file)
