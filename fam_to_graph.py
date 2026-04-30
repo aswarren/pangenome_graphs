@@ -2766,7 +2766,7 @@ def main():
         "contig_map": contig_map
     }
     summary_json = json.dumps(summary_dict)
-    summary_xml = f"\n    <summary>{summary_json}</summary>\n  "
+    summary_xml = f"    <summary>{summary_json}</summary>\n  "
     
     # Inject directly into the <meta> block (no regex cleaning needed on summary_xml)
     augmented_gexf = re.sub(r'</meta>', f'{summary_xml}</meta>', raw_gexf_output)  
