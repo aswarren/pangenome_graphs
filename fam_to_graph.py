@@ -909,6 +909,8 @@ class GraphMaker():
         inversions = inversions // 2
 
         logging.warning(f"SV Detection: Tagged {inversions} inversions and {translocations} translocations.")
+        return inversions, translocations
+
 
     
     def annotate_major_replicons(self, min_node_fraction=0.05):
@@ -1749,7 +1751,7 @@ class GraphMaker():
 
 
     def get_pg_id(self):
-        return self.num_pg_nodes;
+        return self.num_pg_nodes
 
     def assign_pg_node(self, prev_feature, new_feature, pg_node, conflict=None):
         cur_pg_id=None
@@ -1761,6 +1763,7 @@ class GraphMaker():
         start=self.feature_index[new_feature].start
         end=self.feature_index[new_feature].end
         #if there is already a node for this feature
+
         if self.feature_index[new_feature].pg_assignment != None:
             if (pg_node != None):
                 if pg_node != self.feature_index[new_feature].pg_assignment:
@@ -1790,6 +1793,7 @@ class GraphMaker():
 #                 self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'md5':md5, 'start':start, 'end':end})
                 self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'info':{genome_id:{sequence_id:[{'md5':md5, 'start':start, 'end':end}]}}})
             self.feature_index[new_feature].pg_assignment=cur_pg_id
+        
         
         if conflict != None:
             if conflict != "shift" and not "conflict" in self.pg_graph.nodes[cur_pg_id]:
@@ -2712,7 +2716,7 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
-    gmaker.tag_structural_variants()
+    inversions_count, translocations_count = gmaker.tag_structural_variants()
     gmaker.annotate_major_replicons(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
     
@@ -2762,6 +2766,8 @@ def main():
         "total_features": len(gmaker.feature_index),
         "total_nodes": gmaker.pg_graph.number_of_nodes(),
         "cnv_clusters": len(cnv_clusters),
+        "inversions": inversions_count,
+        "translocations": translocations_count,
         "parameters": {"k": pargs.ksize, "min": pargs.min},
         "contig_map": contig_map
     }
