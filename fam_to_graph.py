@@ -913,11 +913,12 @@ class GraphMaker():
 
 
     
-    def annotate_major_replicons(self, min_node_fraction=0.05):
+    def annotate_major_blocks(self, min_node_fraction=0.05):
         """
-        Identifies major replicons by severing translocations and finding 
+        Identifies major blocks by severing translocations and finding 
         weakly connected components, filtering out noise/fragments.
         """
+        block_ids = set([])
         # 1. Create a temporary graph and sever translocation bridges
         clean_graph = self.pg_graph.copy()
         translocation_edges =[(u, v) for u, v, d in clean_graph.edges(data=True) 
@@ -930,25 +931,26 @@ class GraphMaker():
         # 3. Sort components by size (largest first)
         components.sort(key=len, reverse=True)
         
-        # Calculate the threshold for what constitutes a "major" replicon
+        # Calculate the threshold for what constitutes a "major" block
         total_nodes = self.pg_graph.number_of_nodes()
         min_nodes = total_nodes * min_node_fraction
         
         # 4. Annotate the original graph
-        replicon_id = 1
+        block_id = 1
         for comp in components:
-            # If component is large enough, it gets a Replicon ID
+            # If component is large enough, it gets a Block ID
             if len(comp) >= min_nodes:
-                label = f"Replicon_{replicon_id}"
-                replicon_id += 1
+                label = f"Block_{block_id}"
+                block_id += 1
             else:
                 # Small, fragmented assemblies get grouped as noise
                 label = "Fragment"
-                
+            block_ids.add(label)    
             for n in comp:
-                self.pg_graph.nodes[n]["replicon"] = label
+                self.pg_graph.nodes[n]["block"] = label
 
-        logging.warning(f"Replicon Detection: Found {replicon_id - 1} major replicons.")
+        logging.warning(f"Block Detection: Found {block_id - 1} major blocks.")
+        return block_ids
 
     def export_gfa(self, gfa_file):
         """
@@ -1635,6 +1637,42 @@ class GraphMaker():
                     if x != max_edge[0] or y != max_edge[1]:
                         self.pg_graph.remove_edge(x,y)
 
+    def get_undirected_pg_graph(self):
+        """
+        Safely converts the directed PS-graph to an undirected graph for GEXF export.
+        Merges bidirectional edges (like inversions) and unifies their attributes.
+        """
+        undirected = nx.Graph()
+        undirected.add_nodes_from(self.pg_graph.nodes(data=True))
+        
+        num_genomes = float(len(self.replicon_map.keys()))
+        
+        for u, v, d in self.pg_graph.edges(data=True):
+            if undirected.has_edge(u, v):
+                existing = undirected.edges[u, v]
+                
+                # Merge Genomes
+                gen_set = set(existing.get('genomes', '').split(',')) | set(d.get('genomes', '').split(','))
+                gen_set.discard('')  # Remove empty strings
+                existing['genomes'] = ','.join(gen_set)
+                
+                # Merge Sequences
+                seq_set = set(existing.get('sequences', '').split(',')) | set(d.get('sequences', '').split(','))
+                seq_set.discard('')
+                existing['sequences'] = ','.join(seq_set)
+                
+                # Recalculate true combined weight
+                existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
+                
+                # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
+                existing['is_inversion'] = existing.get('is_inversion', False) or d.get('is_inversion', False)
+                existing['is_translocation'] = existing.get('is_translocation', False) or d.get('is_translocation', False)
+                
+            else:
+                # Add new edge (make a copy of the dictionary to avoid mutating original)
+                undirected.add_edge(u, v, **dict(d))
+                
+        return undirected
 
     def insert_feature(self, cur_pg_id, new_feature):
         #emit_extra=False
@@ -2679,7 +2717,7 @@ def main():
     parser.add_argument("--min", type=int, default=1, required=False, help="minimum required sequences aligned to be in the resulting graph")
     parser.add_argument("--gfa", type=str, help="Output the Pan-Synteny graph in GFA v1.1 format", required=False, default=None)
     parser.add_argument("--embed_info", help="MD5 and coordinates will be embedded at each node", required=False, default=False , action='store_true')
-
+    parser.add_argument("--gexf_directed", action='store_true', help="Keep the GEXF graph directed (by default it is converted to an undirected graph for UI/Layout compatibility)")
     parser.add_argument("feature_files", type=str, nargs="*", default=["-"], help="Files of varying format specifing group, genome, contig, feature, and start in sorted order. stdin also accepted")
 
 
@@ -2717,16 +2755,21 @@ def main():
     gmaker.calcStatistics()
     gmaker.finalizeGraphAttr()
     inversions_count, translocations_count = gmaker.tag_structural_variants()
-    gmaker.annotate_major_replicons(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
+    block_ids = gmaker.annotate_major_blocks(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
     
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
 
+    graph_to_write = gmaker.pg_graph
+    if not pargs.gexf_directed:
+        logging.warning("Converting to undirected graph for GEXF UI compatibility")
+        graph_to_write = gmaker.get_undirected_pg_graph()
+
     if pargs.layout:
         # FIX: Use BytesIO because write_gexf outputs utf-8 encoded bytes
         gexf_capture = io.BytesIO() 
-        nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture) 
+        nx.readwrite.write_gexf(graph_to_write, gexf_capture) 
         # Decode the bytes into a string
         raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
 
@@ -2747,7 +2790,7 @@ def main():
     else:
         # If not using layout, intercept NetworkX bytes buffer to ensure clean JSON
         gexf_capture = io.BytesIO()
-        nx.readwrite.write_gexf(gmaker.pg_graph, gexf_capture)
+        nx.readwrite.write_gexf(graph_to_write, gexf_capture)
         
         raw_gexf_output = gexf_capture.getvalue().decode('utf-8')
 
@@ -2769,6 +2812,7 @@ def main():
         "inversions": inversions_count,
         "translocations": translocations_count,
         "parameters": {"k": pargs.ksize, "min": pargs.min},
+        "block_manifest": list(block_ids),
         "contig_map": contig_map
     }
     summary_json = json.dumps(summary_dict)
