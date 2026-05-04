@@ -1829,7 +1829,10 @@ class GraphMaker():
                 cur_pg_id=self.num_pg_nodes
                 self.num_pg_nodes+=1
 #                 self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'md5':md5, 'start':start, 'end':end})
-                self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'info':{genome_id:{sequence_id:[{'md5':md5, 'start':start, 'end':end}]}}})
+                if embed_info:
+                    self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}, 'info':{genome_id:{sequence_id:[{'md5':md5, 'start':start, 'end':end}]}}})
+                else:
+                    self.pg_graph.add_node(cur_pg_id, label=str(self.feature_index[new_feature].group_num), features={genome_id:{sequence_id:[new_feature]}})
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         
