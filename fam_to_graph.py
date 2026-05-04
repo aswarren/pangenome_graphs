@@ -22,6 +22,7 @@ from subprocess import Popen, PIPE, STDOUT
 import time
 import requests
 import logging
+import urllib 
 
 def pretty_print_POST(req):
     """
@@ -594,13 +595,12 @@ class featureParser():
 
         # Will open all files, or stdin if no arguments passed
         for line in fileinput.input(files=self.feature_files):
-            # Parsers all files for the genome_ids, splitting on standard delimiters
             delim = r'; |, |,|;| |\t'
             parsed = re.split(delim, line.strip())
             
             for l in parsed:
-                clean_id = l.strip().replace('"', '')
-                # Filter out empty strings and headers
+                # FIX 1: Strip single quotes AND double quotes
+                clean_id = l.strip().replace('"', '').replace("'", "")
                 if clean_id and clean_id != "genome_id":
                     genome_ids.append(clean_id)
                     
@@ -616,24 +616,26 @@ class featureParser():
             ]
             genomes = f"and({','.join(selectors)})"   
             
-            # FIX: Use a new variable name to prevent nested limits!
             limit_str = f"limit({limit})"
             
             select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway,aa_sequence_md5)&sort(+genome_id,+accession,+start)"
             base = "https://www.bv-brc.org/api/genome_feature/" 
             query = "&".join([genomes, limit_str, select])
             
+            # --- FIX 2: URL Encode the query to protect the + signs! ---
+            # We keep RQL syntax safe, but + will become %2B
+            encoded_query = urllib.parse.quote(query, safe='&()=,')
+
             # ---------------------------------------------------
             # UNCOMMENT THIS BLOCK TO GET A BROWSER-TESTABLE GET URL
-            import urllib.parse
-            get_url = f"{base}?{urllib.parse.quote(query, safe='&()=+,')}"
-            logging.warning(f"\n[DEBUG] Browser GET URL:\n{get_url}\n")
+            #get_url = f"{base}?{urllib.parse.quote(query, safe='&()=+,')}"
+            #logging.warning(f"\n[DEBUG] Browser GET URL:\n{get_url}\n")
             # ---------------------------------------------------
             
             headers = {"accept": "text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
 
-            # Stream the request
-            r = requests.post(url=base, data=query, headers=headers, stream=True) 
+            # Send the ENCODED query in the POST body
+            r = requests.post(url=base, data=encoded_query, headers=headers, stream=True) 
             if r.encoding is None:
                 r.encoding = "utf-8"
                 
@@ -642,7 +644,7 @@ class featureParser():
                 
             for line in r.iter_lines(decode_unicode=True):
                 yield line
-            
+
 ##CALCULATE DIVERSITY QUOTIENT!!! GENUS/TOTAL GENOMES
 ##CALCULATE NORMALIZED NUMBER WEIGHT of NUMBER OF genomes in edge/ total number of genomes
 
