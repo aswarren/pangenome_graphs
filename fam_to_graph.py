@@ -589,36 +589,57 @@ class featureParser():
     def chunker(self, seq, size):
         return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
-    def genome_id_feature_gen(self, limit=2500000):
-        genome_id_files=self.feature_files
-        genome_ids = []
+    def genome_id_feature_gen(self, limit=100000):
+        genome_ids =[]
 
-        #Will open all files, or stdin if no arguments passed (or if "-" is passed as an argument)
+        # Will open all files, or stdin if no arguments passed
         for line in fileinput.input(files=self.feature_files):
-            #Parses all files for the genome_ids, and will split on commas, or tabs (as well as newlines implcitly by the iterator above)
-            delim ='; |, |,|;| |\t'
-            line = re.split(delim,line.strip())
-            for l in line:
-                genome_ids.append(l)
-            logging.info("genome_ids:"+",".join(genome_ids))
+            # Parsers all files for the genome_ids, splitting on standard delimiters
+            delim = r'; |, |,|;| |\t'
+            parsed = re.split(delim, line.strip())
+            
+            for l in parsed:
+                clean_id = l.strip().replace('"', '')
+                # Filter out empty strings and headers
+                if clean_id and clean_id != "genome_id":
+                    genome_ids.append(clean_id)
+                    
+        logging.info("genome_ids: " + ",".join(genome_ids))
+        
+        # Process in chunks of 10 genomes
         for gids in self.chunker(genome_ids, 10):
-            selectors = ["ne(feature_type,source)","eq(annotation,PATRIC)","in({},({}))".format(self.feature_selector, ','.join(gids))]
-            genomes = "and({})".format(','.join(selectors))   
-            limit = "limit({})".format(limit)
+            gids_str = ",".join(gids)
+            selectors =[
+                "ne(feature_type,source)",
+                "eq(annotation,PATRIC)",
+                f"in({self.feature_selector},({gids_str}))"
+            ]
+            genomes = f"and({','.join(selectors)})"   
+            
+            # FIX: Use a new variable name to prevent nested limits!
+            limit_str = f"limit({limit})"
+            
             select = "select(genome_id,genome_name,accession,annotation,feature_type,patric_id,refseq_locus_tag,alt_locus_tag,uniprotkb_accession,start,end,strand,na_length,gene,product,figfam_id,plfam_id,pgfam_id,go,ec,pathway,aa_sequence_md5)&sort(+genome_id,+accession,+start)"
-            base = "https://www.patricbrc.org/api/genome_feature/"
-            query = "&".join([genomes, limit, select])
-            headers = {"accept":"text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
+            base = "https://www.bv-brc.org/api/genome_feature/" 
+            query = "&".join([genomes, limit_str, select])
+            
+            # ---------------------------------------------------
+            # UNCOMMENT THIS BLOCK TO GET A BROWSER-TESTABLE GET URL
+            import urllib.parse
+            get_url = f"{base}?{urllib.parse.quote(query, safe='&()=+,')}"
+            logging.warning(f"\n[DEBUG] Browser GET URL:\n{get_url}\n")
+            # ---------------------------------------------------
+            
+            headers = {"accept": "text/tsv", "content-type": "application/rqlquery+x-www-form-urlencoded"}
 
-            #Stream the request so that we don't have to load it all into memory
+            # Stream the request
             r = requests.post(url=base, data=query, headers=headers, stream=True) 
-            #r = requests.Request('POST', url=base, headers=headers, data=query)
-            #prepared = r.prepare()
-            #pretty_print_POST(prepared)
             if r.encoding is None:
                 r.encoding = "utf-8"
+                
             if not r.ok:
-                logging.warning("Error in API request \n")
+                logging.warning(f"Error in API request: {r.status_code} {r.reason}\n")
+                
             for line in r.iter_lines(decode_unicode=True):
                 yield line
             
