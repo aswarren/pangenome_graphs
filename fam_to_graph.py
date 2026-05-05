@@ -843,6 +843,26 @@ class GraphMaker():
                 for n in alts:
                     alt_group[n]=grp_id
                 grp_id+=1
+        # Group the actual node IDs by their new cluster ID
+        clusters = {}
+        for node, c_id in alt_group.items():
+            clusters.setdefault(c_id,[]).append(node)
+            
+        macro_conflicts = set()
+        for c_id, nodes in clusters.items():
+            cluster_genomes = {}
+            for node in nodes:
+                feat_dict = self.pg_graph.nodes[node].get("features", {})
+                for gen_id, seq_dict in feat_dict.items():
+                    if gen_id in ["info", "md5", "start", "end"]: continue
+                    # Add all contigs this genome has in this specific node
+                    cluster_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
+            
+            # If ANY genome in this entire CNV cluster spans multiple contigs, 
+            # the entire cluster is a translocation boundary!
+            if any(len(contigs) > 1 for contigs in cluster_genomes.values()):
+                macro_conflicts.update(nodes)
+
         for e in self.pg_graph.edges():
             attr=self.pg_graph.get_edge_data(*e)
             if "genomes" in attr:
@@ -893,8 +913,10 @@ class GraphMaker():
                 d["label"]=list(label_set)[0]
             d["features"]=json.dumps(d["features"])
             #make conflict attribute always present
-            if not "conflict" in d:
-                d["conflict"]= 0
+            if n in macro_conflicts:
+                d["conflict"] = 1
+            elif "conflict" not in d:
+                d["conflict"] = 0
             grp_id = alt_group.get(n, 0)
             d["cnv_cluster_id"]= grp_id
         #sys.stderr.write("real alt number: "+str(len(processed_n))+"\n")
