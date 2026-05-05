@@ -2807,6 +2807,16 @@ def main():
         # In Python 3, Popen with string input requires text=True
         p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True)
         raw_gexf_output, err = p.communicate(input=raw_gexf_str)
+        if err and err.strip():
+            logging.warning("--- Layout Algorithm STDERR ---")
+            logging.warning(err.strip())
+            logging.warning("-------------------------------")
+            
+        if p.returncode != 0:
+            logging.error(f"Layout algorithm failed with return code {p.returncode}")
+            # Optional: Fallback to the un-laid-out graph if Java completely crashed
+            if not raw_gexf_output:
+                raw_gexf_output = raw_gexf_str
         
         # --- FIX: Clean up malformed JSON double-quotes "" created by Gephi Java exporter ---
         #cleaned_gexf = raw_gexf_output.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
