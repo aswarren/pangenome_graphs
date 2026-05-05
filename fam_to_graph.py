@@ -567,7 +567,7 @@ class featureParser():
                     continue
 
                 else:
-                    parts=line.strip().split("\t")
+                    parts =[p.replace('"', '') for p in line.strip().split("\t")]
                     result.group_id=parts[self.ip['group']]
                     result.contig_id=parts[self.ip['contig']]
                     result.genome_id=parts[self.ip['genome']]
