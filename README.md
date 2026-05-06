@@ -34,7 +34,10 @@ pip install networkx requests
 Method 2:
 pip install git+https://github.com/aswarren/pangenome_graphs
 
-To use the --layout feature, download gexf_layout.jar from https://github.com/aswarren/pangenome_layout/releases and place it in the bin directory if running from repo folder structure or set export PANACONDA_LAYOUT_JAR=/path/to/jar
+To use the --layout feature, download gexf_layout.jar from 
+https://github.com/aswarren/pangenome_layout/releases 
+and place it in the bin directory if running from repo folder structure 
+or set export PANACONDA_LAYOUT_JAR=/path/to/jar
 
 Usage
 
