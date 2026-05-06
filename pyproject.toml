@@ -1,0 +1,16 @@
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "panaconda"
+version = "1.0.0"
+description = "Application of pan-synteny graph models to genome content analysis"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "networkx>=2.4",
+    "requests"
+]
+
+[project.scripts]
+panaconda = "fam_to_graph:main"

@@ -2815,7 +2815,29 @@ def main():
         graph_to_write = gmaker.get_undirected_pg_graph()
 
     if pargs.layout:
-        # FIX: Use BytesIO because write_gexf outputs utf-8 encoded bytes
+        # 1. Check if the user provided it via an environment variable (Great for HPC / module systems)
+        layout_jar = os.environ.get('PANACONDA_LAYOUT_JAR')
+        
+        # 2. Check if it sits right next to the script in a flat /bin directory
+        if not layout_jar:
+            flat_bin_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "gexf_layout.jar")
+            if os.path.exists(flat_bin_path):
+                layout_jar = flat_bin_path
+                
+        # 3. Fallback to the legacy submodule path
+        if not layout_jar:
+            layout_jar = os.path.join(os.path.dirname(os.path.realpath(__file__)), "layout", "pangenome_layout", "bin", "gexf_layout.jar")
+
+        if not os.path.exists(layout_jar):
+            logging.error(f"Layout failed: Cannot find gexf_layout.jar at {layout_jar}.")
+            logging.error("Please set the PANACONDA_LAYOUT_JAR environment variable to the correct path.")
+            # Gracefully save the un-laid-out graph instead of crashing
+            raw_gexf_output = raw_gexf_str 
+        else:
+            logging.warning(f"Using layout jar at: {layout_jar}")
+            layout_cmd = ["java", "-jar", layout_jar]
+            # ... execute Popen ...
+
         gexf_capture = io.BytesIO() 
         nx.readwrite.write_gexf(graph_to_write, gexf_capture) 
         # Decode the bytes into a string
@@ -2823,7 +2845,7 @@ def main():
 
         cur_path = os.path.dirname(os.path.realpath(__file__))
         logging.warning("laying out graph")
-        layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
+        #layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
         logging.warning(" ".join(layout_cmd))
         
         # In Python 3, Popen with string input requires text=True

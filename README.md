@@ -23,11 +23,18 @@ By operating at the **"meso-scale"**—using an alphabet of annotated Gene Famil
 
 Panaconda requires **Python 3.7+**. 
 
+Method 1:
+
 Clone the repository and install the required dependencies:
 ```bash
 git clone https://github.com/aswarren/pangenome_graphs.git
 cd pangenome_graphs
 pip install networkx requests
+
+Method 2:
+pip install git+https://github.com/aswarren/pangenome_graphs
+
+To use the --layout feature, download gexf_layout.jar from https://github.com/aswarren/pangenome_layout/releases and place it in the bin directory if running from repo folder structure or set export PANACONDA_LAYOUT_JAR=/path/to/jar
 
 Usage
 
