@@ -830,20 +830,27 @@ class GraphMaker():
         return diversity
         
 
-    def finalizeGraphAttr(self, replaceIDs=False):
-        num_genomes=float(len(self.replicon_map.keys()))
+    def compute_graph_metrics(self):
+        """
+        Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
+        Leaves all features and edges as fast Python dicts and sets.
+        """
+        num_genomes = float(len(self.replicon_map.keys()))
         alt_group = {}
-        processed_n =set([])
-        grp_id =0
+        processed_n = set([])
+        grp_id = 1
+        
+        # 1. Build alt_groups mapping
         for n, alts in self.pg_node_alt.items():
             if n in processed_n:
                 continue
             else:
                 processed_n.update(alts)
-                for n in alts:
-                    alt_group[n]=grp_id
-                grp_id+=1
-        # Group the actual node IDs by their new cluster ID
+                for alt in alts:
+                    alt_group[alt] = grp_id
+                grp_id += 1
+                
+        # 2. Macro-Node (CNV Cluster) Conflict Detection
         clusters = {}
         for node, c_id in alt_group.items():
             clusters.setdefault(c_id,[]).append(node)
@@ -855,79 +862,86 @@ class GraphMaker():
                 feat_dict = self.pg_graph.nodes[node].get("features", {})
                 for gen_id, seq_dict in feat_dict.items():
                     if gen_id in ["info", "md5", "start", "end"]: continue
-                    # Add all contigs this genome has in this specific node
                     cluster_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
             
-            # If ANY genome in this entire CNV cluster spans multiple contigs, 
-            # the entire cluster is a translocation boundary!
             if any(len(contigs) > 1 for contigs in cluster_genomes.values()):
                 macro_conflicts.update(nodes)
 
-        for e in self.pg_graph.edges():
-            attr=self.pg_graph.get_edge_data(*e)
-            if "genomes" in attr:
-                attr["weight"]=len(attr["genomes"])/num_genomes
-            for a in attr:
-                if type(attr[a])==set:
-                    attr[a] = ','.join(attr[a])
-        for n,d in self.pg_graph.nodes(data=True):
-            label_set =set([])
+        # 3. Compute Node Metrics
+        for n, d in self.pg_graph.nodes(data=True):
+            label_set = set([])
             cur_diversity = {}
 
             first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
             f_id = next(iter(first_group.values()))[0]
-            d["label"]=self.feature_index[f_id].group_id
-
+            d["label"] = self.feature_index[f_id].group_id
+            
             total_len = 0
             feat_count = 0
             for g_id, c_dict in d["features"].items():
-                if g_id in["info", "md5", "start", "end"]: # safeguard against old data
-                    continue
+                if g_id in ["info", "md5", "start", "end"]: continue
                 for c_id, f_list in c_dict.items():
                     for f_idx in f_list:
-                        # Direct lookup in the global feature index
                         f_obj = self.feature_index[f_idx]
                         total_len += abs(int(f_obj.end) - int(f_obj.start)) + 1
                         feat_count += 1
             
-            d["length"] = int(total_len / feat_count) if feat_count > 0 else 1
+            d["length"] = int(total_len / feat_count) if feat_count > 0 else 1000
 
             for g in d["features"]:
-                
-                if g in ["md5", "start", "end", "info"]:
-                    continue
+                if g in ["md5", "start", "end", "info"]: continue
                 
                 f_id = next(iter(d["features"][g].values()))[0]
                 self.trackDiversity(f_id, cur_diversity)
                 for s in d["features"][g]:
-                    feature_refs=[]
+                    feature_refs = []
                     for f in d["features"][g][s]:
                         feature_refs.append(self.feature_index[f].feature_ref)
                         if self.label_function:
                             label_set.add(self.feature_index[f].function)
                     d["features"][g][s] = feature_refs
-            diversity=self.calcDiversity(cur_diversity)
-            d["diversity"]=diversity            
+                    
+            d["diversity"] = self.calcDiversity(cur_diversity)            
             if self.label_function:
-                d["family"]=d["label"] 
-                d["label"]=list(label_set)[0]
-            d["features"]=json.dumps(d["features"])
-            #make conflict attribute always present
+                d["family"] = d["label"] 
+                d["label"] = list(label_set)[0]
+                
             if n in macro_conflicts:
                 d["conflict"] = 1
             elif "conflict" not in d:
                 d["conflict"] = 0
-            grp_id = alt_group.get(n, 0)
-            d["cnv_cluster_id"]= grp_id
-        #sys.stderr.write("real alt number: "+str(len(processed_n))+"\n")
+                
+            d["cnv_cluster_id"] = alt_group.get(n, 0)
+            
+        # 4. Compute Edge Weights (Leave them as sets!)
+        for u, v, attr in self.pg_graph.edges(data=True):
+            if "genomes" in attr:
+                attr["weight"] = len(attr["genomes"]) / num_genomes
+
+    def serialize_graph_for_gexf(self):
+        """
+        Converts sets and dicts into JSON/CSV strings for GEXF XML export.
+        MUST run after all graph analytics and GFA exports are complete.
+        """
+        for n, d in self.pg_graph.nodes(data=True):
+            if "features" in d and not isinstance(d["features"], str):
+                d["features"] = json.dumps(d["features"])
+                
+        for u, v, attr in self.pg_graph.edges(data=True):
+            for a in list(attr.keys()):
+                if isinstance(attr[a], set):
+                    attr[a] = ','.join(map(str, attr[a]))
             
     def tag_structural_variants(self):
         """
         Analyzes the generated PS-graph to explicitly tag SVs based on the chosen Context.
         Uses "Path Drop-Out" to precisely identify relative structural variants.
+        Counts contiguous inverted blocks as single inversion events.
         """
-        inverted_edges = 0
         sv_edges = 0
+        
+        # --- NEW: A temporary graph to track contiguous inversion blocks ---
+        inv_graph = nx.Graph() 
         
         for u, v, d in self.pg_graph.edges(data=True):
             d["is_inversion"] = False
@@ -936,55 +950,60 @@ class GraphMaker():
             # 1. Inversions (Bidirectional traversal)
             if self.pg_graph.has_edge(v, u):
                 d["is_inversion"] = True
-                inverted_edges += 1
+                # Add this edge to our inversion tracking graph
+                inv_graph.add_edge(u, v)
                 
             # 2. Context-Aware Path Drop-Out (Translocations / Rearrangements)
             drop_outs = set()
             sv_class = "none"
+
+            u_cf = self.pg_graph.nodes[u].get('conflict', 0)
+            v_cf = self.pg_graph.nodes[v].get('conflict', 0)
             
-            if self.context == "genome":
-                # Intersect Genome IDs
-                u_items = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info'}
-                v_items = set(self.pg_graph.nodes[v].get('features', {}).keys()) - {'info'}
-                edge_items = set(d.get('genomes', '').split(','))
-                
-                shared_items = u_items.intersection(v_items)
-                edge_items.discard('')
-                drop_outs = shared_items - edge_items
-                sv_class = "genomic_rearrangement"
-                
-            elif self.context == "contig":
-                # Intersect Sequence (Contig) IDs
-                u_items, v_items = set(), set()
-                
-                # Dig into the features dictionary to extract the sequence_ids
-                for gen_dict in self.pg_graph.nodes[u].get('features', {}).values():
-                    if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
-                for gen_dict in self.pg_graph.nodes[v].get('features', {}).values():
-                    if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
+            if u_cf == 1 or v_cf == 1:
+                # 2. Context-Aware Path Drop-Out
+                drop_outs = set()
+                sv_class = "none"            
+                if self.context == "genome":
+                    # Intersect Genome IDs
+                    u_items = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info'}
+                    v_items = set(self.pg_graph.nodes[v].get('features', {}).keys()) - {'info'}
+                    edge_items = set(d.get('genomes', set()))
                     
-                edge_items = set(d.get('sequences', '').split(','))
-                
-                shared_items = u_items.intersection(v_items)
-                edge_items.discard('')
-                drop_outs = shared_items - edge_items
-                sv_class = "intra_contig_rearrangement"
-                
-            # Feature context generates no topological drop-out SVs
+                    shared_items = u_items.intersection(v_items)
+                    edge_items.discard('')
+                    drop_outs = shared_items - edge_items
+                    sv_class = "genomic_rearrangement"
+                    
+                elif self.context == "contig":
+                    # Intersect Sequence (Contig) IDs
+                    u_items, v_items = set(), set()
+                    
+                    for gen_dict in self.pg_graph.nodes[u].get('features', {}).values():
+                        if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
+                    for gen_dict in self.pg_graph.nodes[v].get('features', {}).values():
+                        if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
+                        
+                    edge_items = set(d.get('sequences', set()))
+                    
+                    shared_items = u_items.intersection(v_items)
+                    edge_items.discard('')
+                    drop_outs = shared_items - edge_items
+                    sv_class = "intra_contig_rearrangement"
+                    
+                # 3. Apply the SV Flag
+                if drop_outs:
+                    d["is_translocation"] = True 
+                    d["sv_class"] = sv_class
+                    d["sv_entities"] = ",".join(drop_outs)
+                    sv_edges += 1
 
-            # 3. Apply the SV Flag
-            if drop_outs:
-                d["is_translocation"] = True # Keeping the flag name standard for UI compatibility
-                d["sv_class"] = sv_class
-                d["sv_entities"] = ",".join(drop_outs)
-                sv_edges += 1
-                
-        inverted_edges = inverted_edges // 2
+        # If there are no inversions, connected_components will just be 0
+        inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
 
-        logging.warning(f"SV Detection Context [{self.context}]: Tagged {inverted_edges} inverted edges and {sv_edges} path drop-outs.")
+        logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
         
-        return inverted_edges, sv_edges
-
+        return inversion_events, sv_edges
 
     
     def annotate_major_blocks(self, min_node_fraction=0.05):
@@ -1726,14 +1745,12 @@ class GraphMaker():
                 existing = undirected.edges[u, v]
                 
                 # Merge Genomes
-                gen_set = set(existing.get('genomes', '').split(',')) | set(d.get('genomes', '').split(','))
+                gen_set = set(existing.get('genomes', set())) | set(d.get('genomes', set()))
                 gen_set.discard('')  # Remove empty strings
-                existing['genomes'] = ','.join(gen_set)
                 
                 # Merge Sequences
-                seq_set = set(existing.get('sequences', '').split(',')) | set(d.get('sequences', '').split(','))
+                seq_set = set(existing.get('sequences', set())) | set(d.get('sequences', set()))
                 seq_set.discard('')
-                existing['sequences'] = ','.join(seq_set)
                 
                 # Recalculate true combined weight
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
@@ -2830,13 +2847,15 @@ def main():
     gmaker.checkPGGraph()
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
-    gmaker.finalizeGraphAttr()
+    gmaker.compute_graph_metrics()
     inversions_count, translocations_count = gmaker.tag_structural_variants()
     block_ids = gmaker.annotate_major_blocks(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
     
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
+
+    gmaker.serialize_graph_for_gexf()
 
     graph_to_write = gmaker.pg_graph
     if not pargs.gexf_directed:
