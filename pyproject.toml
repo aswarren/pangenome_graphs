@@ -12,5 +12,9 @@ dependencies = [
     "requests"
 ]
 
-[project.scripts]
+[project.scripts
 panaconda = "fam_to_graph:main"
+
+[tool.setuptools]
+py-modules = ["fam_to_graph"]
+package-dir = {"" = "source"}
