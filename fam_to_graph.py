@@ -923,38 +923,67 @@ class GraphMaker():
             
     def tag_structural_variants(self):
         """
-        Analyzes the generated PS-graph to explicitly tag edges 
-        involved in Structural Variants (SVs).
+        Analyzes the generated PS-graph to explicitly tag SVs based on the chosen Context.
+        Uses "Path Drop-Out" to precisely identify relative structural variants.
         """
-        inversions = 0
-        translocations = 0
+        inverted_edges = 0
+        sv_edges = 0
         
         for u, v, d in self.pg_graph.edges(data=True):
-            u_node = self.pg_graph.nodes[u]
-            v_node = self.pg_graph.nodes[v]
-            
-            u_cf = u_node.get("conflict", 0)
-            v_cf = v_node.get("conflict", 0)
-            
-            # Initialize flags
             d["is_inversion"] = False
             d["is_translocation"] = False
             
-            # Detect Inversions
+            # 1. Inversions (Bidirectional traversal)
             if self.pg_graph.has_edge(v, u):
                 d["is_inversion"] = True
-                inversions += 1
+                inverted_edges += 1
                 
-            # Detect Translocations
-            if u_cf == 1 or v_cf == 1:
-                d["is_translocation"] = True
-                translocations += 1
+            # 2. Context-Aware Path Drop-Out (Translocations / Rearrangements)
+            drop_outs = set()
+            sv_class = "none"
+            
+            if self.context == "genome":
+                # Intersect Genome IDs
+                u_items = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info'}
+                v_items = set(self.pg_graph.nodes[v].get('features', {}).keys()) - {'info'}
+                edge_items = set(d.get('genomes', '').split(','))
                 
-        # Because undirected inversions create 2 directed edges
-        inversions = inversions // 2
+                shared_items = u_items.intersection(v_items)
+                edge_items.discard('')
+                drop_outs = shared_items - edge_items
+                sv_class = "genomic_rearrangement"
+                
+            elif self.context == "contig":
+                # Intersect Sequence (Contig) IDs
+                u_items, v_items = set(), set()
+                
+                # Dig into the features dictionary to extract the sequence_ids
+                for gen_dict in self.pg_graph.nodes[u].get('features', {}).values():
+                    if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
+                for gen_dict in self.pg_graph.nodes[v].get('features', {}).values():
+                    if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
+                    
+                edge_items = set(d.get('sequences', '').split(','))
+                
+                shared_items = u_items.intersection(v_items)
+                edge_items.discard('')
+                drop_outs = shared_items - edge_items
+                sv_class = "intra_contig_rearrangement"
+                
+            # Feature context generates no topological drop-out SVs
 
-        logging.warning(f"SV Detection: Tagged {inversions} inversions and {translocations} translocations.")
-        return inversions, translocations
+            # 3. Apply the SV Flag
+            if drop_outs:
+                d["is_translocation"] = True # Keeping the flag name standard for UI compatibility
+                d["sv_class"] = sv_class
+                d["sv_entities"] = ",".join(drop_outs)
+                sv_edges += 1
+                
+        inverted_edges = inverted_edges // 2
+
+        logging.warning(f"SV Detection Context [{self.context}]: Tagged {inverted_edges} inverted edges and {sv_edges} path drop-outs.")
+        
+        return inverted_edges, sv_edges
 
 
     
