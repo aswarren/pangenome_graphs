@@ -1,4 +1,0 @@
-[submodule "viewer/gexf-js"]
-	path = viewer/gexf-js
-	url = https://github.com/aswarren/gexf-js.git
-	branch = patric_links
