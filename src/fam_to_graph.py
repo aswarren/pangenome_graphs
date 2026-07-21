@@ -918,16 +918,19 @@ class GraphMaker():
             if "genomes" in attr:
                 attr["weight"] = len(attr["genomes"]) / num_genomes
 
-    def serialize_graph_for_gexf(self):
+    def serialize_graph_for_gexf(self, target_graph=None):
         """
         Converts sets and dicts into JSON/CSV strings for GEXF XML export.
         MUST run after all graph analytics and GFA exports are complete.
         """
-        for n, d in self.pg_graph.nodes(data=True):
+        if target_graph is None:
+            target_graph = self.pg_graph
+
+        for n, d in target_graph.nodes(data=True):
             if "features" in d and not isinstance(d["features"], str):
                 d["features"] = json.dumps(d["features"])
                 
-        for u, v, attr in self.pg_graph.edges(data=True):
+        for u, v, attr in target_graph.edges(data=True):
             for a in list(attr.keys()):
                 if isinstance(attr[a], set):
                     attr[a] = ','.join(map(str, attr[a]))
@@ -1747,11 +1750,14 @@ class GraphMaker():
                 # Merge Genomes
                 gen_set = set(existing.get('genomes', set())) | set(d.get('genomes', set()))
                 gen_set.discard('')  # Remove empty strings
+                existing['genomes'] = gen_set
+
                 
                 # Merge Sequences
                 seq_set = set(existing.get('sequences', set())) | set(d.get('sequences', set()))
                 seq_set.discard('')
-                
+                existing['sequences'] = seq_set
+                                
                 # Recalculate true combined weight
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
@@ -1761,7 +1767,8 @@ class GraphMaker():
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
-                undirected.add_edge(u, v, **dict(d))
+                attr_dict = {k: set(v) if isinstance(v, set) else v for k, v in d.items()}
+                undirected.add_edge(u, v, **attr_dict)
                 
         return undirected
 
@@ -2855,13 +2862,14 @@ def main():
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
 
-    gmaker.serialize_graph_for_gexf()
+    #gmaker.serialize_graph_for_gexf()
 
     graph_to_write = gmaker.pg_graph
     if not pargs.gexf_directed:
         logging.warning("Converting to undirected graph for GEXF UI compatibility")
         graph_to_write = gmaker.get_undirected_pg_graph()
-
+    gmaker.serialize_graph_for_gexf(graph_to_write)
+    
     if pargs.layout:
         # 1. Check if the user provided it via an environment variable (Great for HPC / module systems)
         layout_jar = os.environ.get('PANACONDA_LAYOUT_JAR')
