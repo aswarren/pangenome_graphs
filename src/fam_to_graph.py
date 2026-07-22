@@ -23,6 +23,7 @@ import time
 import requests
 import logging
 import urllib 
+import collections
 
 def pretty_print_POST(req):
     """
@@ -699,6 +700,7 @@ class GraphMaker():
         self.rf_starting_list=[]
         self.visit_number=0
         self.alt_counter =0
+        self.similarity_matrix = collections.defaultdict(lambda: collections.defaultdict(int))
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         #gives position of the newest feature in the next kmer, the adjustment to the leaving feature to get the rhs of next kmer
         self.projection_table=[[[
@@ -828,7 +830,99 @@ class GraphMaker():
         #taxa=self.getTaxaIndicator(feature_id)
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
-        
+            
+    def flag_bridges(self):
+            """
+            Scans all walks to find stealth bridges (MGE insertions) and scaffolding gaps.
+            Flags the boundary edges of true translocations so block_annotation can sever them.
+            """
+            translocation_count = 0
+            scaffold_count = 0
+
+            # Helper: Checks if a feature is at the absolute end of its contig
+            def is_terminal(feat_id):
+                feat = self.feature_index[feat_id]
+                contig_array = self.replicon_map[feat.genome_id][feat.contig_id]
+                return (contig_array[0] == feat_id) or (contig_array[-1] == feat_id)
+
+            # Helper: Checks if a Genome's presence in a node is terminal
+            def target_is_terminal_in_node(target_genome, pg_node):
+                feat_dict = self.pg_graph.nodes[pg_node].get('features', {})
+                # Get all features for this genome in this node
+                if target_genome in feat_dict:
+                    for c_id, f_list in feat_dict[target_genome].items():
+                        if any(is_terminal(f) for f in f_list):
+                            return True
+                return False
+
+            # Walk all contigs
+            for walker_genome, contigs in self.replicon_map.items():
+                for contig_id, feature_array in contigs.items():
+                    
+                    last_seen = {} # { target_genome: {'pg_node': node, 'walk_idx': idx} }
+
+                    for walk_idx, feature_id in enumerate(feature_array):
+                        current_node = self.feature_index[feature_id].pg_assignment
+                        if current_node is None: 
+                            continue
+                        
+                        current_cnv = self.pg_graph.nodes[current_node].get('cnv_cluster_id', 0)
+                        
+                        # Who else is in this node?
+                        target_genomes = set(self.pg_graph.nodes[current_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+
+                        for target_genome in target_genomes:
+                            if target_genome == walker_genome: 
+                                continue
+
+                            if target_genome in last_seen:
+                                prev = last_seen[target_genome]
+                                gap_length = walk_idx - prev['walk_idx'] - 1
+                                
+                                if gap_length > 0:
+                                    prev_node = prev['pg_node']
+                                    prev_cnv = self.pg_graph.nodes[prev_node].get('cnv_cluster_id', 0)
+
+                                    # 1. Ignore Intra-CNV Stuttering
+                                    if current_cnv == prev_cnv and current_cnv != 0:
+                                        continue
+
+                                    # 2. Evaluate physical continuity (Dangling End Rule)
+                                    prev_is_term = target_is_terminal_in_node(target_genome, prev_node)
+                                    curr_is_term = target_is_terminal_in_node(target_genome, current_node)
+
+                                    # Determine the boundary edges of the bridge
+                                    bridge_features = feature_array[prev['walk_idx']+1 : walk_idx]
+                                    bridge_nodes = [self.feature_index[f].pg_assignment for f in bridge_features if self.feature_index[f].pg_assignment is not None]
+                                    
+                                    edge_in = (prev_node, bridge_nodes[0]) if bridge_nodes else (prev_node, current_node)
+                                    edge_out = (bridge_nodes[-1], current_node) if bridge_nodes else None
+
+                                    if prev_is_term and curr_is_term:
+                                        scaffold_count += 1
+                                        # Optional: Mark as a scaffold bridge (harmless)
+                                        for n in bridge_nodes:
+                                            self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
+                                    else:
+                                        translocation_count += 1
+                                        # Mark the Nodes
+                                        for n in bridge_nodes:
+                                            self.pg_graph.nodes[n]['is_translocation_bridge'] = True
+                                            self.pg_graph.nodes[n]['conflict'] = 1 # Elevate to conflict
+                                        
+                                        # Mark the Boundary Edges! (This allows annotate_major_blocks to snip them)
+                                        if self.pg_graph.has_edge(*edge_in):
+                                            self.pg_graph.edges[edge_in]['is_translocation'] = True
+                                            self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
+                                        if edge_out and self.pg_graph.has_edge(*edge_out):
+                                            self.pg_graph.edges[edge_out]['is_translocation'] = True
+                                            self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
+
+                            # Update memory
+                            last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
+
+            logging.warning(f"Bridge Detection: Tagged {translocation_count} translocations and {scaffold_count} scaffolding gaps.")
+            return translocation_count, scaffold_count
 
     def compute_graph_metrics(self):
         """
@@ -899,7 +993,6 @@ class GraphMaker():
                         feature_refs.append(self.feature_index[f].feature_ref)
                         if self.label_function:
                             label_set.add(self.feature_index[f].function)
-                    d["features"][g][s] = feature_refs
                     
             d["diversity"] = self.calcDiversity(cur_diversity)            
             if self.label_function:
@@ -919,21 +1012,33 @@ class GraphMaker():
                 attr["weight"] = len(attr["genomes"]) / num_genomes
 
     def serialize_graph_for_gexf(self, target_graph=None):
-        """
-        Converts sets and dicts into JSON/CSV strings for GEXF XML export.
-        MUST run after all graph analytics and GFA exports are complete.
-        """
-        if target_graph is None:
-            target_graph = self.pg_graph
-
-        for n, d in target_graph.nodes(data=True):
-            if "features" in d and not isinstance(d["features"], str):
-                d["features"] = json.dumps(d["features"])
+            """
+            Translates internal feature integers to external string references,
+            and converts sets/dicts into JSON/CSV strings for GEXF XML export.
+            MUST run after all graph analytics and GFA exports are complete.
+            """
+            if target_graph is None:
+                target_graph = self.pg_graph
                 
-        for u, v, attr in target_graph.edges(data=True):
-            for a in list(attr.keys()):
-                if isinstance(attr[a], set):
-                    attr[a] = ','.join(map(str, attr[a]))
+            for n, d in target_graph.nodes(data=True):
+                if "features" in d and not isinstance(d["features"], str):
+                    formatted_features = {}
+                    for g_id, c_dict in d["features"].items():
+                        if g_id in ["info", "md5", "start", "end"]:
+                            formatted_features[g_id] = c_dict
+                            continue
+                        
+                        formatted_features[g_id] = {}
+                        for c_id, f_list in c_dict.items():
+                            # Translate internal integer ID to external string reference
+                            formatted_features[g_id][c_id] = [self.feature_index[f].feature_ref for f in f_list]
+                            
+                    d["features"] = json.dumps(formatted_features)
+                    
+            for u, v, attr in target_graph.edges(data=True):
+                for a in list(attr.keys()):
+                    if isinstance(attr[a], set):
+                        attr[a] = ','.join(map(str, attr[a]))
             
     def tag_structural_variants(self):
         """
@@ -1709,12 +1814,24 @@ class GraphMaker():
 
 
     def construct_pg_edge(self, prev_pg_id, cur_pg_id, genome_id, sequence_id):
-        edge_data=self.pg_graph.get_edge_data(prev_pg_id, cur_pg_id, default=None)
-        if edge_data != None:
-            edge_data["genomes"].add(genome_id)
-            edge_data["sequences"].add(sequence_id)
-        else:
-            self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes=set([genome_id]), sequences=set([sequence_id]))
+            # Determine the unit based on Context
+            context_key = genome_id if self.context == "genome" else sequence_id
+            
+            edge_data = self.pg_graph.get_edge_data(prev_pg_id, cur_pg_id, default=None)
+            
+            if edge_data is not None:
+                # Build the NxN Similarity Matrix for the Context Unit
+                existing_entities = edge_data["genomes"] if self.context == "genome" else edge_data["sequences"]
+                
+                for existing_key in existing_entities:
+                    if existing_key != context_key: # Skip self-loops
+                        self.similarity_matrix[context_key][existing_key] += 1
+                        self.similarity_matrix[existing_key][context_key] += 1
+                
+                edge_data["genomes"].add(genome_id)
+                edge_data["sequences"].add(sequence_id)
+            else:
+                self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes={genome_id}, sequences={sequence_id})
 
     #what you need to do here is relate both sides of a conflict to a pg-edge
     def break_edges(self):
@@ -2856,13 +2973,15 @@ def main():
     gmaker.calcStatistics()
     gmaker.compute_graph_metrics()
     inversions_count, translocations_count = gmaker.tag_structural_variants()
+    bridge_translocations, scaffolds = gmaker.flag_bridges()
+
+    all_translocations = translocations_count + bridge_translocations
+
     block_ids = gmaker.annotate_major_blocks(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
     
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
-
-    #gmaker.serialize_graph_for_gexf()
 
     graph_to_write = gmaker.pg_graph
     if not pargs.gexf_directed:
