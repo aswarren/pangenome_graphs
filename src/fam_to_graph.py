@@ -919,11 +919,21 @@ class GraphMaker():
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
         # ---------------------------------------------------------
-        # PASS 2: RESOLUTION (EDGE-LEVEL SHIELDING)
+        # PASS 2: RESOLUTION (EDGE-LEVEL & BIDIRECTIONAL SHIELDING)
         # ---------------------------------------------------------
         translocation_count = 0
         scaffold_count = 0
         bridge_event_id = 1
+        recognized_bridges = {}
+
+        # Helper for direction-agnostic edge support
+        def get_bidirectional_support(n1, n2):
+            gens = set()
+            if self.pg_graph.has_edge(n1, n2):
+                gens.update(self.pg_graph.edges[n1, n2].get('genomes', set()))
+            if self.pg_graph.has_edge(n2, n1):
+                gens.update(self.pg_graph.edges[n2, n1].get('genomes', set()))
+            return len(gens)
 
         for path_edges, data in discovered_paths.items():
             u = data['u']
@@ -937,12 +947,23 @@ class GraphMaker():
             shared_uw_support = len(u_gens.intersection(w_gens))
             shield_threshold = shared_uw_support / 2.0
 
+            # 1. Path-Level Shielding
+            walker_support = float('inf')
+            for e in path_edges:
+                support = get_bidirectional_support(e[0], e[1])
+                if support < walker_support:
+                    walker_support = support
+            if walker_support == float('inf'): walker_support = 1
+
+            if walker_support > shield_threshold:
+                continue
+
             if is_scaffold:
                 scaffold_count += 1
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
-                # We only want to flag the specific parts of the path that are actually rare (the dirt road)
+                 # 2. Edge-Level Shielding
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
@@ -954,30 +975,36 @@ class GraphMaker():
 
                 true_bridge_edges = []
                 for e in path_edges:
-                    if self.pg_graph.has_edge(*e):
-                        e_gens = self.pg_graph.edges[e].get('genomes', set())
-                        if len(e_gens) <= shield_threshold:
-                            true_bridge_edges.append(e)
-                            self.pg_graph.edges[e]['is_translocation'] = True
-                            self.pg_graph.edges[e]['bridge_event_id'] = bridge_event_id
+                    support = get_bidirectional_support(e[0], e[1])
+                    if support <= shield_threshold:
+                        true_bridge_edges.append(e)
+                        
+                        # Safely tag whatever directional edges actually exist!
+                        for direction in [(e[0], e[1]), (e[1], e[0])]:
+                            if self.pg_graph.has_edge(*direction):
+                                self.pg_graph.edges[direction]['is_translocation'] = True
+                                self.pg_graph.edges[direction]['bridge_event_id'] = bridge_event_id
 
                 if true_bridge_edges:
                     translocation_count += 1
                     
                     # Entry is the FIRST edge that branched off the highway
                     edge_in = true_bridge_edges[0]
-                    self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
+                    for direction in [(edge_in[0], edge_in[1]), (edge_in[1], edge_in[0])]:
+                        if self.pg_graph.has_edge(*direction):
+                            self.pg_graph.edges[direction]['sv_class'] = "stealth_bridge_entry"
                     
                     # Exit is the LAST edge before merging back onto the highway
                     if len(true_bridge_edges) > 1:
                         edge_out = true_bridge_edges[-1]
-                        self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
+                        for direction in [(edge_out[0], edge_out[1]), (edge_out[1], edge_out[0])]:
+                            if self.pg_graph.has_edge(*direction):
+                                self.pg_graph.edges[direction]['sv_class'] = "stealth_bridge_exit"
                     
-                    bridge_event_id += 1
+                bridge_event_id += 1
 
         logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
         return translocation_count, scaffold_count
-
 
     def compute_graph_metrics(self):
         """
