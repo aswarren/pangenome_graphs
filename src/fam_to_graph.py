@@ -834,13 +834,10 @@ class GraphMaker():
     def flag_bridges(self):
         """
         Scans all walks to find stealth bridges (MGE insertions) and scaffolding gaps.
-        Uses Cardinality Shielding to ensure the "highway" (core backbone) isn't 
-        accidentally flagged as a bridge relative to a low-frequency path.
+        Pass 1 (Discovery): Logs every unique topological jump.
+        Pass 2 (Resolution): Uses Cardinality Shielding to ensure the core backbone 
+                             is never accidentally flagged by a rare accessory path.
         """
-        scaffold_count = 0
-        recognized_bridges = {}  # Maps a tuple of edges to a unique bridge_event_id
-        next_bridge_id = 1
-
         # Helper: Checks if a feature is at the absolute end of its contig
         def is_terminal(feat_id):
             feat = self.feature_index[feat_id]
@@ -856,7 +853,11 @@ class GraphMaker():
                         return True
             return False
 
-        # Walk all contigs
+        discovered_paths = {}
+
+        # ---------------------------------------------------------
+        # PASS 1: DISCOVERY
+        # ---------------------------------------------------------
         for walker_genome, contigs in self.replicon_map.items():
             for contig_id, feature_array in contigs.items():
                 
@@ -878,6 +879,7 @@ class GraphMaker():
                             prev = last_seen[target_genome]
                             gap_length = walk_idx - prev['walk_idx'] - 1
                             
+                            # Target dropped out and re-entered! We have a topological jump.
                             if gap_length > 0:
                                 prev_node = prev['pg_node']
                                 prev_cnv = self.pg_graph.nodes[prev_node].get('cnv_cluster_id', 0)
@@ -897,70 +899,83 @@ class GraphMaker():
                                 path_sequence = [prev_node] + bridge_nodes + [current_node]
                                 path_edges = tuple((path_sequence[i], path_sequence[i+1]) for i in range(len(path_sequence)-1))
 
-                                # ---------------------------------------------------------
-                                # CARDINALITY SHIELDING (Breaking the Symmetry)
-                                # ---------------------------------------------------------
-                                # How much support does the Walker's path have?
-                                walker_support = float('inf')
-                                for e in path_edges:
-                                    if self.pg_graph.has_edge(*e):
-                                        edge_gens = self.pg_graph.edges[e].get('genomes', set())
-                                        if len(edge_gens) < walker_support:
-                                            walker_support = len(edge_gens)
-                                if walker_support == float('inf'): walker_support = 1
+                                # Log the unique path
+                                if path_edges not in discovered_paths:
+                                    discovered_paths[path_edges] = {
+                                        'u': prev_node,
+                                        'w': current_node,
+                                        'bridge_nodes': set(bridge_nodes),
+                                        'is_scaffold': True,
+                                        'walkers': set()
+                                    }
+                                
+                                discovered_paths[path_edges]['walkers'].add(walker_genome)
+                                
+                                # If ANY target genome says this broke their architecture, it is NOT a scaffold!
+                                if not (prev_is_term and curr_is_term):
+                                    discovered_paths[path_edges]['is_scaffold'] = False
 
-                                # How much shared support do the Anchor nodes have overall?
-                                u_gens = set(self.pg_graph.nodes[prev_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
-                                v_gens = set(self.pg_graph.nodes[current_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
-                                shared_uv_support = len(u_gens.intersection(v_gens))
-
-                                # If the Walker's path contains MORE than half of the shared genomes, 
-                                # it is the Highway. The Target is the dirt road. Shield the Highway!
-                                if walker_support > (shared_uv_support / 2.0):
-                                    continue
-                                # ---------------------------------------------------------
-
-                                if prev_is_term and curr_is_term:
-                                    scaffold_count += 1
-                                    for n in bridge_nodes:
-                                        self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
-                                else:
-                                    # Group identical bridges under a single Event ID
-                                    if path_edges not in recognized_bridges:
-                                        recognized_bridges[path_edges] = next_bridge_id
-                                        next_bridge_id += 1
-                                        
-                                        b_id = recognized_bridges[path_edges]
-                                        
-                                        # Mark the Nodes
-                                        for n in bridge_nodes:
-                                            self.pg_graph.nodes[n]['is_translocation_bridge'] = True
-                                            self.pg_graph.nodes[n]['conflict'] = 1 # Elevate to conflict
-                                            self.pg_graph.nodes[n]['bridge_event_id'] = b_id
-                                        
-                                        # Mark the Boundary Edges!
-                                        edge_in = path_edges[0]
-                                        edge_out = path_edges[-1] if len(path_edges) > 1 else None
-
-                                        if self.pg_graph.has_edge(*edge_in):
-                                            self.pg_graph.edges[edge_in]['is_translocation'] = True
-                                            self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
-                                            self.pg_graph.edges[edge_in]['bridge_event_id'] = b_id
-                                        if edge_out and self.pg_graph.has_edge(*edge_out):
-                                            self.pg_graph.edges[edge_out]['is_translocation'] = True
-                                            self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
-                                            self.pg_graph.edges[edge_out]['bridge_event_id'] = b_id
-
-                        # Update memory
+                        # Update memory to current sighting
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
-        # The true count of distinct structural bridges
-        unique_bridge_events = len(recognized_bridges)
-        logging.warning(f"Bridge Detection: Tagged {unique_bridge_events} unique bridge events and {scaffold_count} scaffolding gaps.")
-        return unique_bridge_events, scaffold_count
-    
+        # ---------------------------------------------------------
+        # PASS 2: RESOLUTION (CARDINALITY SHIELDING)
+        # ---------------------------------------------------------
+        translocation_count = 0
+        scaffold_count = 0
+        bridge_event_id = 1
 
-    
+        for path_edges, data in discovered_paths.items():
+            u = data['u']
+            w = data['w']
+            bridge_nodes = data['bridge_nodes']
+            is_scaffold = data['is_scaffold']
+            
+            # The exact number of unique genomes that took THIS specific path
+            walker_support = len(data['walkers'])
+            
+            # The shared support of the boundary nodes (how big is the "Highway" overall?)
+            u_gens = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+            w_gens = set(self.pg_graph.nodes[w].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+            shared_uw_support = len(u_gens.intersection(w_gens))
+
+            # If the Walker's path contains MORE than half of the shared genomes, 
+            # it is the Highway. The Target is the dirt road. Shield the Highway!
+            if walker_support > (shared_uw_support / 2.0):
+                continue
+                
+            # Resolution: Apply the flags
+            if is_scaffold:
+                scaffold_count += 1
+                for n in bridge_nodes:
+                    self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
+            else:
+                translocation_count += 1
+                for n in bridge_nodes:
+                    self.pg_graph.nodes[n]['is_translocation_bridge'] = True
+                    self.pg_graph.nodes[n]['conflict'] = 1 # Elevate to conflict
+                    self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
+                
+                # Mark the Boundary Edges
+                edge_in = path_edges[0] if path_edges else None
+                edge_out = path_edges[-1] if len(path_edges) > 1 else None
+
+                if edge_in and self.pg_graph.has_edge(*edge_in):
+                    self.pg_graph.edges[edge_in]['is_translocation'] = True
+                    self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
+                    self.pg_graph.edges[edge_in]['bridge_event_id'] = bridge_event_id
+                
+                if edge_out and self.pg_graph.has_edge(*edge_out):
+                    self.pg_graph.edges[edge_out]['is_translocation'] = True
+                    self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
+                    self.pg_graph.edges[edge_out]['bridge_event_id'] = bridge_event_id
+                    
+                bridge_event_id += 1
+
+        logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
+        return translocation_count, scaffold_count
+
+
     def compute_graph_metrics(self):
         """
         Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
