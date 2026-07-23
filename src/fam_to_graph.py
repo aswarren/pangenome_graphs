@@ -919,7 +919,7 @@ class GraphMaker():
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
         # ---------------------------------------------------------
-        # PASS 2: RESOLUTION (CARDINALITY SHIELDING)
+        # PASS 2: RESOLUTION (EDGE-LEVEL SHIELDING)
         # ---------------------------------------------------------
         translocation_count = 0
         scaffold_count = 0
@@ -931,46 +931,49 @@ class GraphMaker():
             bridge_nodes = data['bridge_nodes']
             is_scaffold = data['is_scaffold']
             
-            # The exact number of unique genomes that took THIS specific path
-            walker_support = len(data['walkers'])
-            
-            # The shared support of the boundary nodes (how big is the "Highway" overall?)
+            # The shared support of the boundary nodes
             u_gens = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             w_gens = set(self.pg_graph.nodes[w].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             shared_uw_support = len(u_gens.intersection(w_gens))
+            shield_threshold = shared_uw_support / 2.0
 
-            # If the Walker's path contains MORE than half of the shared genomes, 
-            # it is the Highway. The Target is the dirt road. Shield the Highway!
-            if walker_support > (shared_uw_support / 2.0):
-                continue
-                
-            # Resolution: Apply the flags
             if is_scaffold:
                 scaffold_count += 1
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
-                translocation_count += 1
+                # We only want to flag the specific parts of the path that are actually rare (the dirt road)
+                true_bridge_nodes = []
                 for n in bridge_nodes:
-                    self.pg_graph.nodes[n]['is_translocation_bridge'] = True
-                    self.pg_graph.nodes[n]['conflict'] = 1 # Elevate to conflict
-                    self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
-                
-                # Mark the Boundary Edges
-                edge_in = path_edges[0] if path_edges else None
-                edge_out = path_edges[-1] if len(path_edges) > 1 else None
+                    n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+                    if len(n_gens) <= shield_threshold:
+                        true_bridge_nodes.append(n)
+                        self.pg_graph.nodes[n]['is_translocation_bridge'] = True
+                        self.pg_graph.nodes[n]['conflict'] = 1 
+                        self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
 
-                if edge_in and self.pg_graph.has_edge(*edge_in):
-                    self.pg_graph.edges[edge_in]['is_translocation'] = True
-                    self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
-                    self.pg_graph.edges[edge_in]['bridge_event_id'] = bridge_event_id
-                
-                if edge_out and self.pg_graph.has_edge(*edge_out):
-                    self.pg_graph.edges[edge_out]['is_translocation'] = True
-                    self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
-                    self.pg_graph.edges[edge_out]['bridge_event_id'] = bridge_event_id
+                true_bridge_edges = []
+                for e in path_edges:
+                    if self.pg_graph.has_edge(*e):
+                        e_gens = self.pg_graph.edges[e].get('genomes', set())
+                        if len(e_gens) <= shield_threshold:
+                            true_bridge_edges.append(e)
+                            self.pg_graph.edges[e]['is_translocation'] = True
+                            self.pg_graph.edges[e]['bridge_event_id'] = bridge_event_id
+
+                if true_bridge_edges:
+                    translocation_count += 1
                     
-                bridge_event_id += 1
+                    # Entry is the FIRST edge that branched off the highway
+                    edge_in = true_bridge_edges[0]
+                    self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
+                    
+                    # Exit is the LAST edge before merging back onto the highway
+                    if len(true_bridge_edges) > 1:
+                        edge_out = true_bridge_edges[-1]
+                        self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
+                    
+                    bridge_event_id += 1
 
         logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
         return translocation_count, scaffold_count
