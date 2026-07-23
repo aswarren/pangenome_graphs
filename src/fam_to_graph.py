@@ -833,18 +833,15 @@ class GraphMaker():
     
     def flag_bridges(self):
         """
-        Scans all walks to find stealth bridges (MGE insertions) and scaffolding gaps.
-        Pass 1 (Discovery): Logs every unique topological jump.
-        Pass 2 (Resolution): Uses Cardinality Shielding to ensure the core backbone 
-                             is never accidentally flagged by a rare accessory path.
+        Scans all walks to find stealth bridges and scaffolding gaps.
+        Pass 1: Logs unique topological jumps, including direct-edge translocations.
+        Pass 2: Uses Relative Dominance Shielding to protect fractured highways.
         """
-        # Helper: Checks if a feature is at the absolute end of its contig
         def is_terminal(feat_id):
             feat = self.feature_index[feat_id]
             contig_array = self.replicon_map[feat.genome_id][feat.contig_id]
             return (contig_array[0] == feat_id) or (contig_array[-1] == feat_id)
 
-        # Helper: Checks if a Genome's presence in a node is terminal
         def target_is_terminal_in_node(target_genome, pg_node):
             feat_dict = self.pg_graph.nodes[pg_node].get('features', {})
             if target_genome in feat_dict:
@@ -861,7 +858,7 @@ class GraphMaker():
         for walker_genome, contigs in self.replicon_map.items():
             for contig_id, feature_array in contigs.items():
                 
-                last_seen = {} # { target_genome: {'pg_node': node, 'walk_idx': idx} }
+                last_seen = {} 
 
                 for walk_idx, feature_id in enumerate(feature_array):
                     current_node = self.feature_index[feature_id].pg_assignment
@@ -878,28 +875,36 @@ class GraphMaker():
                         if target_genome in last_seen:
                             prev = last_seen[target_genome]
                             gap_length = walk_idx - prev['walk_idx'] - 1
+                            prev_node = prev['pg_node']
                             
-                            # Target dropped out and re-entered! We have a topological jump.
-                            if gap_length > 0:
-                                prev_node = prev['pg_node']
+                            # Check for Direct Edge Drop-outs
+                            is_direct_dropout = False
+                            if gap_length == 0:
+                                edge_traversed = False
+                                for dir_e in [(prev_node, current_node), (current_node, prev_node)]:
+                                    if self.pg_graph.has_edge(*dir_e):
+                                        if target_genome in self.pg_graph.edges[dir_e].get('genomes', set()):
+                                            edge_traversed = True
+                                            break
+                                if not edge_traversed:
+                                    is_direct_dropout = True
+                            
+                            # Target dropped out!
+                            if gap_length > 0 or is_direct_dropout:
                                 prev_cnv = self.pg_graph.nodes[prev_node].get('cnv_cluster_id', 0)
 
-                                # 1. Ignore Intra-CNV Stuttering
                                 if current_cnv == prev_cnv and current_cnv != 0:
                                     continue
 
-                                # 2. Evaluate physical continuity (Dangling End Rule)
                                 prev_is_term = target_is_terminal_in_node(target_genome, prev_node)
                                 curr_is_term = target_is_terminal_in_node(target_genome, current_node)
 
-                                # Determine the exact path taken
                                 bridge_features = feature_array[prev['walk_idx']+1 : walk_idx]
                                 bridge_nodes = [self.feature_index[f].pg_assignment for f in bridge_features if self.feature_index[f].pg_assignment is not None]
                                 
                                 path_sequence = [prev_node] + bridge_nodes + [current_node]
                                 path_edges = tuple((path_sequence[i], path_sequence[i+1]) for i in range(len(path_sequence)-1))
 
-                                # Log the unique path
                                 if path_edges not in discovered_paths:
                                     discovered_paths[path_edges] = {
                                         'u': prev_node,
@@ -911,22 +916,24 @@ class GraphMaker():
                                 
                                 discovered_paths[path_edges]['walkers'].add(walker_genome)
                                 
-                                # If ANY target genome says this broke their architecture, it is NOT a scaffold!
                                 if not (prev_is_term and curr_is_term):
                                     discovered_paths[path_edges]['is_scaffold'] = False
 
-                        # Update memory to current sighting
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
         # ---------------------------------------------------------
-        # PASS 2: RESOLUTION (EDGE-LEVEL & BIDIRECTIONAL SHIELDING)
+        # PASS 2: RESOLUTION (DOMINANCE SHIELDING)
         # ---------------------------------------------------------
         translocation_count = 0
         scaffold_count = 0
         bridge_event_id = 1
-        recognized_bridges = {}
 
-        # Helper for direction-agnostic edge support
+        # Pre-calculate the maximum support for every (U, W) pair to find the dominant highway
+        max_supports = {}
+        for data in discovered_paths.values():
+            u_w = (data['u'], data['w'])
+            max_supports[u_w] = max(max_supports.get(u_w, 0), len(data['walkers']))
+
         def get_bidirectional_support(n1, n2):
             gens = set()
             if self.pg_graph.has_edge(n1, n2):
@@ -940,22 +947,19 @@ class GraphMaker():
             w = data['w']
             bridge_nodes = data['bridge_nodes']
             is_scaffold = data['is_scaffold']
+            walker_support = len(data['walkers'])
             
-            # The shared support of the boundary nodes
             u_gens = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             w_gens = set(self.pg_graph.nodes[w].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             shared_uw_support = len(u_gens.intersection(w_gens))
+            
             shield_threshold = shared_uw_support / 2.0
 
-            # 1. Path-Level Shielding
-            walker_support = float('inf')
-            for e in path_edges:
-                support = get_bidirectional_support(e[0], e[1])
-                if support < walker_support:
-                    walker_support = support
-            if walker_support == float('inf'): walker_support = 1
+            # Shield if it's the Absolute Majority OR the Dominant Path in a hotspot
+            is_majority = walker_support > shield_threshold
+            is_dominant = (walker_support == max_supports[(u, w)]) and (walker_support > 1)
 
-            if walker_support > shield_threshold:
+            if is_majority or is_dominant:
                 continue
 
             if is_scaffold:
@@ -963,7 +967,6 @@ class GraphMaker():
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
-                 # 2. Edge-Level Shielding
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
@@ -979,7 +982,6 @@ class GraphMaker():
                     if support <= shield_threshold:
                         true_bridge_edges.append(e)
                         
-                        # Safely tag whatever directional edges actually exist!
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
                                 self.pg_graph.edges[direction]['is_translocation'] = True
@@ -987,25 +989,21 @@ class GraphMaker():
 
                 if true_bridge_edges:
                     translocation_count += 1
-                    
-                    # Entry is the FIRST edge that branched off the highway
                     edge_in = true_bridge_edges[0]
                     for direction in [(edge_in[0], edge_in[1]), (edge_in[1], edge_in[0])]:
                         if self.pg_graph.has_edge(*direction):
                             self.pg_graph.edges[direction]['sv_class'] = "stealth_bridge_entry"
                     
-                    # Exit is the LAST edge before merging back onto the highway
                     if len(true_bridge_edges) > 1:
                         edge_out = true_bridge_edges[-1]
                         for direction in [(edge_out[0], edge_out[1]), (edge_out[1], edge_out[0])]:
                             if self.pg_graph.has_edge(*direction):
                                 self.pg_graph.edges[direction]['sv_class'] = "stealth_bridge_exit"
-                    
+                
                 bridge_event_id += 1
 
         logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
         return translocation_count, scaffold_count
-
     def compute_graph_metrics(self):
         """
         Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
