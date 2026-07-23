@@ -910,6 +910,7 @@ class GraphMaker():
                                         'u': prev_node,
                                         'w': current_node,
                                         'bridge_nodes': set(bridge_nodes),
+                                        'path_edges': path_edges,
                                         'is_scaffold': True,
                                         'walkers': set()
                                     }
@@ -921,18 +922,35 @@ class GraphMaker():
 
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
-        # ---------------------------------------------------------
+# ---------------------------------------------------------
         # PASS 2: RESOLUTION (DOMINANCE SHIELDING)
         # ---------------------------------------------------------
         translocation_count = 0
         scaffold_count = 0
         bridge_event_id = 1
 
-        # Pre-calculate the maximum support for every (U, W) pair to find the dominant highway
+        # Helper to normalize paths so Forward and Reverse are treated as the same Highway
+        def normalize_path(path_tuple):
+            # If the path starts with a higher node ID, reverse the whole tuple of edges
+            if path_tuple and path_tuple[0][0] > path_tuple[-1][-1]:
+                return tuple((e[1], e[0]) for e in reversed(path_tuple))
+            return path_tuple
+
+        # Pre-calculate the maximum combined (Fwd+Rev) support for every (U, W) bubble
         max_supports = {}
+        path_supports = {} 
+        
         for data in discovered_paths.values():
-            u_w = (data['u'], data['w'])
-            max_supports[u_w] = max(max_supports.get(u_w, 0), len(data['walkers']))
+            u, w = data['u'], data['w']
+            norm_uw = tuple(sorted([u, w]))
+            norm_path = normalize_path(data['path_edges'])
+            
+            # Accumulate combined walkers for the normalized path
+            path_supports[norm_path] = path_supports.get(norm_path, 0) + len(data['walkers'])
+            
+            # Track the maximum path support for this bubble
+            if path_supports[norm_path] > max_supports.get(norm_uw, 0):
+                max_supports[norm_uw] = path_supports[norm_path]
 
         def get_bidirectional_support(n1, n2):
             gens = set()
@@ -947,7 +965,12 @@ class GraphMaker():
             w = data['w']
             bridge_nodes = data['bridge_nodes']
             is_scaffold = data['is_scaffold']
-            walker_support = len(data['walkers'])
+            
+            norm_uw = tuple(sorted([u, w]))
+            norm_path = normalize_path(path_edges)
+            
+            # The TRUE walker support is the combined Fwd/Rev walkers for this path
+            walker_support = path_supports[norm_path]
             
             u_gens = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             w_gens = set(self.pg_graph.nodes[w].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
@@ -957,7 +980,7 @@ class GraphMaker():
 
             # Shield if it's the Absolute Majority OR the Dominant Path in a hotspot
             is_majority = walker_support > shield_threshold
-            is_dominant = (walker_support == max_supports[(u, w)]) and (walker_support > 1)
+            is_dominant = (walker_support == max_supports[norm_uw]) and (walker_support > 1)
 
             if is_majority or is_dominant:
                 continue
@@ -1004,6 +1027,8 @@ class GraphMaker():
 
         logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
         return translocation_count, scaffold_count
+    
+    
     def compute_graph_metrics(self):
         """
         Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
