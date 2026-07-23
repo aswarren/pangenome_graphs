@@ -1849,49 +1849,6 @@ class GraphMaker():
                 num_features+=len(self.pg_graph.nodes[node_id]['features'][g][c])
         return num_features
 
-    def merge_pg_node(self, node_id1, node_id2):
-        logging.info("merging "+str(node_id1)+" "+str(node_id2))
-        conflict=False
-        insert_level=None
-        if node_id1 < node_id2:
-            keep=node_id1
-            remove=node_id2
-        else:
-            keep=node_id2
-            remove=node_id1
-        for g in self.pg_graph.nodes[remove]['features']:
-            if not g in self.pg_graph.nodes[keep]['features']:
-                self.pg_graph.nodes[keep]['features'][g]=self.pg_graph.nodes[remove]['features'][g]
-                insert_level="genome"
-            else:
-                for c in self.pg_graph.nodes[remove]['features'][g]:
-                    if not c in self.pg_graph.nodes[keep]['features'][g]:
-                        self.pg_graph.nodes[keep]['features'][g][c] = self.pg_graph.nodes[remove]['features'][g][c]
-                        insert_level="contig"
-                    else:
-                        insert_level="feature"
-                        merge_set=set(self.pg_graph.nodes[keep]['features'][g][c])
-                        for f in self.pg_graph.nodes[remove]['features'][g][c]:
-                            if not f in merge_set:
-                                merge_set.add(f)
-                        self.pg_graph.nodes[keep]['features'][g][c]=list(merge_set)
-            if self.context != "feature" and insert_level != self.context:
-                conflict=True
-        for g in self.pg_graph.nodes[remove]['features']:
-            for c in self.pg_graph.nodes[remove]['features'][g]:
-                for f in self.pg_graph.nodes[remove]['features'][g][c]:
-                    self.feature_index[f].pg_assignment=keep
-        for e in self.pg_graph.edges(remove, data=True):
-            if self.pg_graph.has_edge(keep, e[1]):
-                cur_edge_data=self.pg_graph.get_edge_data(keep,e[1])
-                for k in e[-1]:#edge dictionary
-                    cur_edge_data[k].update(e[-1][k])
-            else:
-                attr_dict=e[-1]
-                self.pg_graph.add_edge(keep, e[1], **attr_dict)
-        self.pg_graph.remove_node(remove)
-        return (keep, conflict)
-
 
     def construct_pg_edge(self, prev_pg_id, cur_pg_id, genome_id, sequence_id):
             # Determine the unit based on Context
@@ -1913,22 +1870,7 @@ class GraphMaker():
             else:
                 self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes={genome_id}, sequences={sequence_id})
 
-    #what you need to do here is relate both sides of a conflict to a pg-edge
-    def break_edges(self):
-        for pg in self.no_edge:
-            max_edge = None
-            max_num = 0
-            edge_list = []
-            for x, y, d in self.pg_graph.edges(pg, data=True):
-                edge_list.append((x,y))
-                num_seq=len(d["sequences"])
-                if  num_seq > max_num:
-                    max_num = num_seq
-                    max_edge = (x, y)
-            if max_edge != None and len(edge_list)>1:
-                for x, y in edge_list:
-                    if x != max_edge[0] or y != max_edge[1]:
-                        self.pg_graph.remove_edge(x,y)
+
 
     def get_undirected_pg_graph(self):
         """
@@ -3163,38 +3105,6 @@ def main():
         unsorted_file = pargs.contig_output+".unsorted"
         gmaker.write_contigs(pargs.contig_output, unsorted_file)
 
-
-def old_main(init_args):
-    if(len(init_args)<5):
-        sys.stderr.write("Usage: fam_to_graph.py feature_table family_table summary_table output_folder k-size minOrg\n")
-        sys.exit()
-    k_size=int(init_args[4])
-    minOrg=int(init_args[5])
-    if len(init_args)>=7:
-        ignore_fams=init_args[6].replace(' ','').split(',')
-    #ignore_fams=set(['FIG00638284','FIG01306568'])
-    fstorage=Storage(init_args[0], init_args[1], init_args[2], k_size, ignore_fams=set(['FIG00638284','FIG01306568']))
-    fstorage.bfsExpand(minOrg)
-    out_basename=os.path.splitext(os.path.basename(init_args[0]))[0] #get basename of the file to name output
-    out_folder=os.path.expanduser(init_args[3])
-    out_file=os.path.join(out_folder,out_basename)
-    pgraph=pFamGraph(fstorage,minOrg=minOrg)
-    find_rearrangements(pgraph, fstorage, out_file+"_rearrangements.txt")
-    pgraph.labelGraph(fstorage,minOrg=minOrg) #label/weight nodes and edges. also remove anything under minOrg
-    csize=pgraph.order()
-    create_indices(fstorage, pgraph, csize, out_file+".gff.gz")
-    remove_attributes(pgraph, from_edges=["replicons"], from_nodes=["locations","organisms"])
-    toGML(pgraph, out_file+".graphml")
-    gexf_capture=StringIO()#lazy instead of patching NetworkX to include meta attribute. capture, mod xml.
-    readwrite.write_gexf(pgraph, gexf_capture)
-    modGexf(gexf_capture, out_file+".gexf", k_size, minOrg, fstorage, pgraph)
-    result_handle=open(out_file+".xgmml", 'w')
-    pgraph.toXGMML(result_handle)
-    result_handle.close()
-    stats(pgraph)
-    #result_handle=open(out_file+".json", 'w')
-    #pgraph.toJSON(result_handle)
-    #result_handle.close()
     
 if __name__ == "__main__":
     start_time = time.time()
