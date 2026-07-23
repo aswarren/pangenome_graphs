@@ -830,100 +830,137 @@ class GraphMaker():
         #taxa=self.getTaxaIndicator(feature_id)
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
-            
+    
     def flag_bridges(self):
-            """
-            Scans all walks to find stealth bridges (MGE insertions) and scaffolding gaps.
-            Flags the boundary edges of true translocations so block_annotation can sever them.
-            """
-            translocation_count = 0
-            scaffold_count = 0
+        """
+        Scans all walks to find stealth bridges (MGE insertions) and scaffolding gaps.
+        Uses Cardinality Shielding to ensure the "highway" (core backbone) isn't 
+        accidentally flagged as a bridge relative to a low-frequency path.
+        """
+        scaffold_count = 0
+        recognized_bridges = {}  # Maps a tuple of edges to a unique bridge_event_id
+        next_bridge_id = 1
 
-            # Helper: Checks if a feature is at the absolute end of its contig
-            def is_terminal(feat_id):
-                feat = self.feature_index[feat_id]
-                contig_array = self.replicon_map[feat.genome_id][feat.contig_id]
-                return (contig_array[0] == feat_id) or (contig_array[-1] == feat_id)
+        # Helper: Checks if a feature is at the absolute end of its contig
+        def is_terminal(feat_id):
+            feat = self.feature_index[feat_id]
+            contig_array = self.replicon_map[feat.genome_id][feat.contig_id]
+            return (contig_array[0] == feat_id) or (contig_array[-1] == feat_id)
 
-            # Helper: Checks if a Genome's presence in a node is terminal
-            def target_is_terminal_in_node(target_genome, pg_node):
-                feat_dict = self.pg_graph.nodes[pg_node].get('features', {})
-                # Get all features for this genome in this node
-                if target_genome in feat_dict:
-                    for c_id, f_list in feat_dict[target_genome].items():
-                        if any(is_terminal(f) for f in f_list):
-                            return True
-                return False
+        # Helper: Checks if a Genome's presence in a node is terminal
+        def target_is_terminal_in_node(target_genome, pg_node):
+            feat_dict = self.pg_graph.nodes[pg_node].get('features', {})
+            if target_genome in feat_dict:
+                for c_id, f_list in feat_dict[target_genome].items():
+                    if any(is_terminal(f) for f in f_list):
+                        return True
+            return False
 
-            # Walk all contigs
-            for walker_genome, contigs in self.replicon_map.items():
-                for contig_id, feature_array in contigs.items():
+        # Walk all contigs
+        for walker_genome, contigs in self.replicon_map.items():
+            for contig_id, feature_array in contigs.items():
+                
+                last_seen = {} # { target_genome: {'pg_node': node, 'walk_idx': idx} }
+
+                for walk_idx, feature_id in enumerate(feature_array):
+                    current_node = self.feature_index[feature_id].pg_assignment
+                    if current_node is None: 
+                        continue
                     
-                    last_seen = {} # { target_genome: {'pg_node': node, 'walk_idx': idx} }
+                    current_cnv = self.pg_graph.nodes[current_node].get('cnv_cluster_id', 0)
+                    target_genomes = set(self.pg_graph.nodes[current_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
 
-                    for walk_idx, feature_id in enumerate(feature_array):
-                        current_node = self.feature_index[feature_id].pg_assignment
-                        if current_node is None: 
+                    for target_genome in target_genomes:
+                        if target_genome == walker_genome: 
                             continue
-                        
-                        current_cnv = self.pg_graph.nodes[current_node].get('cnv_cluster_id', 0)
-                        
-                        # Who else is in this node?
-                        target_genomes = set(self.pg_graph.nodes[current_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
 
-                        for target_genome in target_genomes:
-                            if target_genome == walker_genome: 
-                                continue
+                        if target_genome in last_seen:
+                            prev = last_seen[target_genome]
+                            gap_length = walk_idx - prev['walk_idx'] - 1
+                            
+                            if gap_length > 0:
+                                prev_node = prev['pg_node']
+                                prev_cnv = self.pg_graph.nodes[prev_node].get('cnv_cluster_id', 0)
 
-                            if target_genome in last_seen:
-                                prev = last_seen[target_genome]
-                                gap_length = walk_idx - prev['walk_idx'] - 1
+                                # 1. Ignore Intra-CNV Stuttering
+                                if current_cnv == prev_cnv and current_cnv != 0:
+                                    continue
+
+                                # 2. Evaluate physical continuity (Dangling End Rule)
+                                prev_is_term = target_is_terminal_in_node(target_genome, prev_node)
+                                curr_is_term = target_is_terminal_in_node(target_genome, current_node)
+
+                                # Determine the exact path taken
+                                bridge_features = feature_array[prev['walk_idx']+1 : walk_idx]
+                                bridge_nodes = [self.feature_index[f].pg_assignment for f in bridge_features if self.feature_index[f].pg_assignment is not None]
                                 
-                                if gap_length > 0:
-                                    prev_node = prev['pg_node']
-                                    prev_cnv = self.pg_graph.nodes[prev_node].get('cnv_cluster_id', 0)
+                                path_sequence = [prev_node] + bridge_nodes + [current_node]
+                                path_edges = tuple((path_sequence[i], path_sequence[i+1]) for i in range(len(path_sequence)-1))
 
-                                    # 1. Ignore Intra-CNV Stuttering
-                                    if current_cnv == prev_cnv and current_cnv != 0:
-                                        continue
+                                # ---------------------------------------------------------
+                                # CARDINALITY SHIELDING (Breaking the Symmetry)
+                                # ---------------------------------------------------------
+                                # How much support does the Walker's path have?
+                                walker_support = float('inf')
+                                for e in path_edges:
+                                    if self.pg_graph.has_edge(*e):
+                                        edge_gens = self.pg_graph.edges[e].get('genomes', set())
+                                        if len(edge_gens) < walker_support:
+                                            walker_support = len(edge_gens)
+                                if walker_support == float('inf'): walker_support = 1
 
-                                    # 2. Evaluate physical continuity (Dangling End Rule)
-                                    prev_is_term = target_is_terminal_in_node(target_genome, prev_node)
-                                    curr_is_term = target_is_terminal_in_node(target_genome, current_node)
+                                # How much shared support do the Anchor nodes have overall?
+                                u_gens = set(self.pg_graph.nodes[prev_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+                                v_gens = set(self.pg_graph.nodes[current_node].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+                                shared_uv_support = len(u_gens.intersection(v_gens))
 
-                                    # Determine the boundary edges of the bridge
-                                    bridge_features = feature_array[prev['walk_idx']+1 : walk_idx]
-                                    bridge_nodes = [self.feature_index[f].pg_assignment for f in bridge_features if self.feature_index[f].pg_assignment is not None]
-                                    
-                                    edge_in = (prev_node, bridge_nodes[0]) if bridge_nodes else (prev_node, current_node)
-                                    edge_out = (bridge_nodes[-1], current_node) if bridge_nodes else None
+                                # If the Walker's path contains MORE than half of the shared genomes, 
+                                # it is the Highway. The Target is the dirt road. Shield the Highway!
+                                if walker_support > (shared_uv_support / 2.0):
+                                    continue
+                                # ---------------------------------------------------------
 
-                                    if prev_is_term and curr_is_term:
-                                        scaffold_count += 1
-                                        # Optional: Mark as a scaffold bridge (harmless)
-                                        for n in bridge_nodes:
-                                            self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
-                                    else:
-                                        translocation_count += 1
+                                if prev_is_term and curr_is_term:
+                                    scaffold_count += 1
+                                    for n in bridge_nodes:
+                                        self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
+                                else:
+                                    # Group identical bridges under a single Event ID
+                                    if path_edges not in recognized_bridges:
+                                        recognized_bridges[path_edges] = next_bridge_id
+                                        next_bridge_id += 1
+                                        
+                                        b_id = recognized_bridges[path_edges]
+                                        
                                         # Mark the Nodes
                                         for n in bridge_nodes:
                                             self.pg_graph.nodes[n]['is_translocation_bridge'] = True
                                             self.pg_graph.nodes[n]['conflict'] = 1 # Elevate to conflict
+                                            self.pg_graph.nodes[n]['bridge_event_id'] = b_id
                                         
-                                        # Mark the Boundary Edges! (This allows annotate_major_blocks to snip them)
+                                        # Mark the Boundary Edges!
+                                        edge_in = path_edges[0]
+                                        edge_out = path_edges[-1] if len(path_edges) > 1 else None
+
                                         if self.pg_graph.has_edge(*edge_in):
                                             self.pg_graph.edges[edge_in]['is_translocation'] = True
                                             self.pg_graph.edges[edge_in]['sv_class'] = "stealth_bridge_entry"
+                                            self.pg_graph.edges[edge_in]['bridge_event_id'] = b_id
                                         if edge_out and self.pg_graph.has_edge(*edge_out):
                                             self.pg_graph.edges[edge_out]['is_translocation'] = True
                                             self.pg_graph.edges[edge_out]['sv_class'] = "stealth_bridge_exit"
+                                            self.pg_graph.edges[edge_out]['bridge_event_id'] = b_id
 
-                            # Update memory
-                            last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
+                        # Update memory
+                        last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
-            logging.warning(f"Bridge Detection: Tagged {translocation_count} translocations and {scaffold_count} scaffolding gaps.")
-            return translocation_count, scaffold_count
+        # The true count of distinct structural bridges
+        unique_bridge_events = len(recognized_bridges)
+        logging.warning(f"Bridge Detection: Tagged {unique_bridge_events} unique bridge events and {scaffold_count} scaffolding gaps.")
+        return unique_bridge_events, scaffold_count
+    
 
+    
     def compute_graph_metrics(self):
         """
         Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
