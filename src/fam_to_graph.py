@@ -1136,44 +1136,52 @@ class GraphMaker():
                     if isinstance(attr[a], set):
                         attr[a] = ','.join(map(str, attr[a]))
             
+    
+    
     def tag_structural_variants(self):
         """
         Analyzes the generated PS-graph to explicitly tag SVs based on the chosen Context.
-        Uses "Path Drop-Out" to precisely identify relative structural variants.
-        Counts contiguous inverted blocks as single inversion events.
+        Uses "Path Drop-Out" and "Dangling End" rules to precisely identify SVs while
+        protecting against fragmented assemblies.
         """
         sv_edges = 0
-        
-        # --- NEW: A temporary graph to track contiguous inversion blocks ---
         inv_graph = nx.Graph() 
+        
+        # --- NEW: Bring in the Terminal Check Helpers ---
+        def is_terminal(feat_id):
+            feat = self.feature_index[feat_id]
+            contig_array = self.replicon_map[feat.genome_id][feat.contig_id]
+            return (contig_array[0] == feat_id) or (contig_array[-1] == feat_id)
+
+        def target_is_terminal_in_node(target_genome, pg_node):
+            feat_dict = self.pg_graph.nodes[pg_node].get('features', {})
+            if target_genome in feat_dict:
+                for c_id, f_list in feat_dict[target_genome].items():
+                    if any(is_terminal(f) for f in f_list):
+                        return True
+            return False
+        # ------------------------------------------------
         
         for u, v, d in self.pg_graph.edges(data=True):
             d["is_inversion"] = False
             d["is_translocation"] = False
             
-            # 1. Inversions (Bidirectional traversal)
+            # 1. Inversions
             if self.pg_graph.has_edge(v, u):
                 d["is_inversion"] = True
-                # Add this edge to our inversion tracking graph
                 inv_graph.add_edge(u, v)
-                
-            # 2. Context-Aware Path Drop-Out (Translocations / Rearrangements)
-            drop_outs = set()
-            sv_class = "none"
 
             u_cf = self.pg_graph.nodes[u].get('conflict', 0)
             v_cf = self.pg_graph.nodes[v].get('conflict', 0)
             
-            # ... Inside tag_structural_variants ...
             if u_cf == 1 or v_cf == 1:
                 # 2. Context-Aware Path Drop-Out
                 drop_outs = set()
-                sv_class = "none"
+                base_sv_class = "none"
                 
                 u_feat = self.pg_graph.nodes[u].get('features', {})
                 v_feat = self.pg_graph.nodes[v].get('features', {})
                 
-                # Check if this junction involves a CNV cluster
                 u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
                 v_cnv = self.pg_graph.nodes[v].get('cnv_cluster_id', 0)
                 is_cnv_junction = (u_cnv != 0) or (v_cnv != 0)
@@ -1185,13 +1193,8 @@ class GraphMaker():
                     
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
+                    base_sv_class = "genomic_rearrangement"
                     
-                    # STRATIFICATION: CNV Detour vs Direct Translocation
-                    if is_cnv_junction:
-                        sv_class = "cnv_path"
-                    else:
-                        sv_class = "genomic_rearrangement"
-                        
                 elif self.context == "contig":
                     u_items, v_items = set(), set()
                     
@@ -1204,30 +1207,44 @@ class GraphMaker():
                     
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
+                    base_sv_class = "intra_contig_rearrangement"
                     
-                    # STRATIFICATION: CNV Path vs Intra-Contig Jump
-                    if is_cnv_junction:
-                        sv_class = "cnv_path"
-                    else:
-                        sv_class = "intra_contig_rearrangement"
-                        
-                # 3. Apply the SV Flag
+                # 3. Apply the SV Flag with Dangling End Protection
                 if drop_outs:
-                    # ONLY flag as a severe translocation if it isn't just a CNV path
-                    if sv_class != "cnv_path":
-                        d["is_translocation"] = True 
+                    true_rearrangements = set()
+                    assembly_gaps = set()
                     
-                    d["sv_class"] = sv_class
-                    d["sv_entities"] = ",".join(drop_outs)
-                    sv_edges += 1
+                    # Sort dropouts into true variants vs. missing sequencing data
+                    for drop_gen in drop_outs:
+                        u_term = target_is_terminal_in_node(drop_gen, u)
+                        v_term = target_is_terminal_in_node(drop_gen, v)
+                        
+                        if u_term and v_term:
+                            assembly_gaps.add(drop_gen)
+                        else:
+                            true_rearrangements.add(drop_gen)
+                    
+                    # Apply final tags
+                    if true_rearrangements:
+                        if is_cnv_junction:
+                            d["sv_class"] = "cnv_detour"
+                        else:
+                            d["is_translocation"] = True 
+                            d["sv_class"] = base_sv_class
+                        d["sv_entities"] = ",".join(true_rearrangements)
+                        sv_edges += 1
+                        
+                    elif assembly_gaps:
+                        # Only fragments dropped out. No true biological rearrangement occurred!
+                        d["sv_class"] = "assembly_gap"
+                        d["sv_entities"] = ",".join(assembly_gaps)
+                        # Notice: is_translocation remains False so the core graph stays intact!
 
-        # If there are no inversions, connected_components will just be 0
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
 
         logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
         
         return inversion_events, sv_edges
-
     
     def annotate_major_blocks(self, min_node_fraction=0.05):
         """
