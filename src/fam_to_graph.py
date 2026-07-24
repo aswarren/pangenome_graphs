@@ -851,6 +851,28 @@ class GraphMaker():
             return False
 
         discovered_paths = {}
+        
+        #Extract Biconnected Components
+        # NetworkX natively treats the DiGraph as undirected for this.
+        # It returns a generator of sets of nodes: [{1, 2, 3}, {3, 4}, ...]
+        UG = self.pg_graph.to_undirected()
+        bccs = list(nx.biconnected_components(UG))
+
+        #  Build the Node -> Set(Bubble IDs) mapping (WITH SIZE FILTER)
+        node_to_bccs = collections.defaultdict(set)
+        max_bubble_size = 200  # Adjust this based on your dataset, 200 is very generous for a single locus
+        
+        for bubble_id, node_set in enumerate(bccs):
+            # If the cycle contains more nodes than the threshold, it is a giant 
+            # structural variant loop, NOT a local superbubble. Ignore it!
+            if len(node_set) <= max_bubble_size:
+                for node in node_set:
+                    node_to_bccs[node].add(bubble_id)
+
+        # Lookup Helper Function
+        def in_same_bubble(node_u, node_w):
+            return bool(node_to_bccs[node_u] & node_to_bccs[node_w])
+        
 
         # ---------------------------------------------------------
         # PASS 1: DISCOVERY
@@ -976,7 +998,11 @@ class GraphMaker():
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
-                # Node-Level Check: Only flag nodes unique to the dirt road
+                # If U and W are in the same biconnected component, this path forms a closed 
+                # topological loop (a local detour/hotspot). It is NOT a translocation.
+                if in_same_bubble(u, w):
+                    continue
+                # Node-Level Check: Only flag nodes unique to the bridge
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
