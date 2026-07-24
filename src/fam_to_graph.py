@@ -922,21 +922,20 @@ class GraphMaker():
 
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
-# ---------------------------------------------------------
+        # ---------------------------------------------------------
         # PASS 2: RESOLUTION (DOMINANCE SHIELDING)
         # ---------------------------------------------------------
         translocation_count = 0
         scaffold_count = 0
         bridge_event_id = 1
 
-        # Helper to normalize paths so Forward and Reverse are treated as the same Highway
         def normalize_path(path_tuple):
-            # If the path starts with a higher node ID, reverse the whole tuple of edges
+            # Normalize directional paths so Forward and Reverse count as the same Highway
             if path_tuple and path_tuple[0][0] > path_tuple[-1][-1]:
                 return tuple((e[1], e[0]) for e in reversed(path_tuple))
             return path_tuple
 
-        # Pre-calculate the maximum combined (Fwd+Rev) support for every (U, W) bubble
+        # 1. Pre-calculate the maximum combined (Fwd+Rev) support for every (U, W) bubble
         max_supports = {}
         path_supports = {} 
         
@@ -945,13 +944,12 @@ class GraphMaker():
             norm_uw = tuple(sorted([u, w]))
             norm_path = normalize_path(data['path_edges'])
             
-            # Accumulate combined walkers for the normalized path
             path_supports[norm_path] = path_supports.get(norm_path, 0) + len(data['walkers'])
             
-            # Track the maximum path support for this bubble
             if path_supports[norm_path] > max_supports.get(norm_uw, 0):
                 max_supports[norm_uw] = path_supports[norm_path]
 
+        # Helper for direction-agnostic edge support
         def get_bidirectional_support(n1, n2):
             gens = set()
             if self.pg_graph.has_edge(n1, n2):
@@ -960,6 +958,7 @@ class GraphMaker():
                 gens.update(self.pg_graph.edges[n2, n1].get('genomes', set()))
             return len(gens)
 
+        # 2. Resolve the Bridges
         for path_edges, data in discovered_paths.items():
             u = data['u']
             w = data['w']
@@ -967,29 +966,17 @@ class GraphMaker():
             is_scaffold = data['is_scaffold']
             
             norm_uw = tuple(sorted([u, w]))
-            norm_path = normalize_path(path_edges)
+            dominant_support = max_supports.get(norm_uw, 1)
             
-            # The TRUE walker support is the combined Fwd/Rev walkers for this path
-            walker_support = path_supports[norm_path]
-            
-            u_gens = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
-            w_gens = set(self.pg_graph.nodes[w].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
-            shared_uw_support = len(u_gens.intersection(w_gens))
-            
-            shield_threshold = shared_uw_support / 2.0
-
-            # Shield if it's the Absolute Majority OR the Dominant Path in a hotspot
-            is_majority = walker_support > shield_threshold
-            is_dominant = (walker_support == max_supports[norm_uw]) and (walker_support > 1)
-
-            if is_majority or is_dominant:
-                continue
+            # The threshold is strictly less than the dominant path, unless the dominant path is just 1
+            shield_threshold = dominant_support - 1 if dominant_support > 1 else 1
 
             if is_scaffold:
                 scaffold_count += 1
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
+                # Node-Level Check: Only flag nodes unique to the dirt road
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
@@ -999,17 +986,20 @@ class GraphMaker():
                         self.pg_graph.nodes[n]['conflict'] = 1 
                         self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
 
+                # Edge-Level Check: Only flag edges unique to the dirt road
                 true_bridge_edges = []
                 for e in path_edges:
                     support = get_bidirectional_support(e[0], e[1])
                     if support <= shield_threshold:
                         true_bridge_edges.append(e)
                         
+                        # Apply tags safely to whatever directional edges exist
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
                                 self.pg_graph.edges[direction]['is_translocation'] = True
                                 self.pg_graph.edges[direction]['bridge_event_id'] = bridge_event_id
 
+                # Handle Entry and Exit classes
                 if true_bridge_edges:
                     translocation_count += 1
                     edge_in = true_bridge_edges[0]
@@ -1023,12 +1013,13 @@ class GraphMaker():
                             if self.pg_graph.has_edge(*direction):
                                 self.pg_graph.edges[direction]['sv_class'] = "stealth_bridge_exit"
                 
-                bridge_event_id += 1
+                # Increment the event ID only if we actually found unprotected elements
+                if true_bridge_nodes or true_bridge_edges:
+                    bridge_event_id += 1
 
         logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
-        return translocation_count, scaffold_count
-    
-    
+        return translocation_count, scaffold_count    
+
     def compute_graph_metrics(self):
         """
         Calculates node metrics (length, diversity, labels, CNV clusters, and Macro-Conflicts).
