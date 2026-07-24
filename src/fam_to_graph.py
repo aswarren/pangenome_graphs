@@ -1164,40 +1164,59 @@ class GraphMaker():
             u_cf = self.pg_graph.nodes[u].get('conflict', 0)
             v_cf = self.pg_graph.nodes[v].get('conflict', 0)
             
+            # ... Inside tag_structural_variants ...
             if u_cf == 1 or v_cf == 1:
                 # 2. Context-Aware Path Drop-Out
                 drop_outs = set()
-                sv_class = "none"            
+                sv_class = "none"
+                
+                u_feat = self.pg_graph.nodes[u].get('features', {})
+                v_feat = self.pg_graph.nodes[v].get('features', {})
+                
+                # Check if this junction involves a CNV cluster
+                u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
+                v_cnv = self.pg_graph.nodes[v].get('cnv_cluster_id', 0)
+                is_cnv_junction = (u_cnv != 0) or (v_cnv != 0)
+                
                 if self.context == "genome":
-                    # Intersect Genome IDs
-                    u_items = set(self.pg_graph.nodes[u].get('features', {}).keys()) - {'info'}
-                    v_items = set(self.pg_graph.nodes[v].get('features', {}).keys()) - {'info'}
+                    u_items = set(u_feat.keys()) - {'info', 'md5', 'start', 'end'}
+                    v_items = set(v_feat.keys()) - {'info', 'md5', 'start', 'end'}
                     edge_items = set(d.get('genomes', set()))
                     
                     shared_items = u_items.intersection(v_items)
-                    edge_items.discard('')
                     drop_outs = shared_items - edge_items
-                    sv_class = "genomic_rearrangement"
                     
+                    # STRATIFICATION: CNV Detour vs Direct Translocation
+                    if is_cnv_junction:
+                        sv_class = "cnv_path"
+                    else:
+                        sv_class = "genomic_rearrangement"
+                        
                 elif self.context == "contig":
-                    # Intersect Sequence (Contig) IDs
                     u_items, v_items = set(), set()
                     
-                    for gen_dict in self.pg_graph.nodes[u].get('features', {}).values():
+                    for gen_dict in u_feat.values():
                         if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
-                    for gen_dict in self.pg_graph.nodes[v].get('features', {}).values():
+                    for gen_dict in v_feat.values():
                         if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
                         
                     edge_items = set(d.get('sequences', set()))
                     
                     shared_items = u_items.intersection(v_items)
-                    edge_items.discard('')
                     drop_outs = shared_items - edge_items
-                    sv_class = "intra_contig_rearrangement"
                     
+                    # STRATIFICATION: CNV Path vs Intra-Contig Jump
+                    if is_cnv_junction:
+                        sv_class = "cnv_path"
+                    else:
+                        sv_class = "intra_contig_rearrangement"
+                        
                 # 3. Apply the SV Flag
                 if drop_outs:
-                    d["is_translocation"] = True 
+                    # ONLY flag as a severe translocation if it isn't just a CNV path
+                    if sv_class != "cnv_path":
+                        d["is_translocation"] = True 
+                    
                     d["sv_class"] = sv_class
                     d["sv_entities"] = ",".join(drop_outs)
                     sv_edges += 1
