@@ -1174,7 +1174,7 @@ class GraphMaker():
             u_cf = self.pg_graph.nodes[u].get('conflict', 0)
             v_cf = self.pg_graph.nodes[v].get('conflict', 0)
             
-            if u_cf in [1, 3, 4] or v_cf in [1, 3, 4]: 
+            if u_cf in [1, 3, 4] or v_cf in [1, 3, 4]:
                 drop_outs = set()
                 base_sv_class = "none"
                 
@@ -1189,6 +1189,8 @@ class GraphMaker():
                     u_items = set(u_feat.keys()) - {'info', 'md5', 'start', 'end'}
                     v_items = set(v_feat.keys()) - {'info', 'md5', 'start', 'end'}
                     edge_items = set(d.get('genomes', set()))
+                    if self.pg_graph.has_edge(v, u):
+                        edge_items.update(self.pg_graph.edges[v, u].get('genomes', set()))
                     
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
@@ -1201,8 +1203,12 @@ class GraphMaker():
                         if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
                     for gen_dict in v_feat.values():
                         if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
-                        
-                    edge_items = set(d.get('sequences', set()))
+
+                    edge_items = set(d.get('sequences', set()))   
+                    if self.pg_graph.has_edge(v, u):
+                        edge_items = set(d.get('sequences', set()))
+                        edge_items.update(self.pg_graph.edges[v, u].get('sequences', set()))
+
                     
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
