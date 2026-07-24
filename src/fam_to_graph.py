@@ -983,7 +983,7 @@ class GraphMaker():
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
                         self.pg_graph.nodes[n]['is_translocation_bridge'] = True
-                        self.pg_graph.nodes[n]['conflict'] = 1 
+                        self.pg_graph.nodes[n]['conflict'] = 4 
                         self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
 
                 # Edge-Level Check: Only flag edges unique to the dirt road
@@ -1096,7 +1096,7 @@ class GraphMaker():
                 d["label"] = list(label_set)[0]
                 
             if n in macro_conflicts:
-                d["conflict"] = 1
+                d["conflict"] = 3
             elif "conflict" not in d:
                 d["conflict"] = 0
                 
@@ -1174,8 +1174,7 @@ class GraphMaker():
             u_cf = self.pg_graph.nodes[u].get('conflict', 0)
             v_cf = self.pg_graph.nodes[v].get('conflict', 0)
             
-            if u_cf == 1 or v_cf == 1:
-                # 2. Context-Aware Path Drop-Out
+            if u_cf in [1, 3, 4] or v_cf in [1, 3, 4]: 
                 drop_outs = set()
                 base_sv_class = "none"
                 
