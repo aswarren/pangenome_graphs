@@ -833,114 +833,109 @@ class GraphMaker():
     
     def detect_and_annotate_superbubbles(self):
         """
-        Temporarily converts the graph to a DAG by pruning back-edges (preferring to keep heavy edges).
-        Runs dominator/post-dominator superbubble detection, and annotates the original graph.
+        High-performance superbubble detection using SCC Condensation to guarantee a DAG.
+        Annotates nodes and edges with 'superbubble_id'.
         """
-        logging.warning("Detecting Superbubbles via Dominator Trees...")
+        logging.warning("Detecting Superbubbles via SCC Condensation...")
+        
+        # 1. Condense SCCs → get a true DAG
+        CG = nx.condensation(self.pg_graph)
+        scc_map = CG.graph['mapping']
+        scc_to_nodes = {}
+        for n, cid in scc_map.items():
+            scc_to_nodes.setdefault(cid, set()).add(n)
 
-        # 1. Create a temporary DAG
-        DAG = self.pg_graph.copy()
-        DAG.remove_edges_from(list(nx.selfloop_edges(DAG)))
+        # --- DIAGNOSTIC LOGGING ---
+        orig_nodes = self.pg_graph.number_of_nodes()
+        dag_nodes = CG.number_of_nodes()
+        scc_sizes = sorted([len(v) for v in scc_to_nodes.values()], reverse=True)
+        
+        logging.warning(f"[DEBUG] Original Nodes: {orig_nodes} | Condensed DAG Nodes: {dag_nodes}")
+        if scc_sizes:
+            logging.warning(f"[DEBUG] Largest SCCs (node counts): {scc_sizes[:5]}")
+        # --------------------------
 
-        visited = set()
-        recursion_stack = set()
-        back_edges = []
+        # 2. Identify candidate entry/exit nodes
+        # Relaxed per the reviewer's suggestion: just use all nodes to ensure we don't miss edge cases
+        candidates = list(CG.nodes)
 
-        # Helper: Sort successors by weight so we explore the Core Highway first!
-        def get_sorted_successors(n):
-            succs = list(DAG.successors(n))
-            succs.sort(key=lambda x: DAG.edges[n, x].get('weight', 0), reverse=True)
-            return succs
-
-        # Iterative DFS to find and break back-edges (prevents Python recursion limits)
-        for start_node in sorted(DAG.nodes(), key=lambda n: DAG.in_degree(n)):
-            if start_node in visited: continue
-            
-            stack = [(start_node, iter(get_sorted_successors(start_node)))]
-            recursion_stack.add(start_node)
-            visited.add(start_node)
-            
-            while stack:
-                node, children = stack[-1]
-                try:
-                    child = next(children)
-                    if child in recursion_stack:
-                        back_edges.append((node, child)) # Cycle detected!
-                    elif child not in visited:
-                        visited.add(child)
-                        recursion_stack.add(child)
-                        stack.append((child, iter(get_sorted_successors(child))))
-                except StopIteration:
-                    stack.pop()
-                    recursion_stack.remove(node)
-
-        DAG.remove_edges_from(back_edges)
-        logging.info(f"Removed {len(back_edges)} back-edges to create DAG.")
-
-        # 2. Run the Superbubble Algorithm on the DAG
-        sources = [n for n in DAG.nodes if DAG.in_degree(n) == 0]
-        sinks   = [n for n in DAG.nodes if DAG.out_degree(n) == 0]
-
-        # --- Dominators ---
+        # 3. Compute dominators
+        sources = [n for n in CG.nodes if CG.in_degree(n) == 0]
         root_dom = "__dom_root__"
-        DAG.add_node(root_dom)
-        for s in sources: DAG.add_edge(root_dom, s)
-        dom = nx.immediate_dominators(DAG, root_dom)
-        dom_sets = {v: set() for v in DAG.nodes}
-        for v in DAG.nodes:
-            cur = v
-            while cur != root_dom and cur in dom:
-                dom_sets[v].add(cur)
-                cur = dom[cur]
-        DAG.remove_node(root_dom)
+        CG.add_node(root_dom)
+        for s in sources: CG.add_edge(root_dom, s)
 
-        # --- Post-Dominators ---
-        RG = DAG.reverse(copy=True)
+        idom = nx.immediate_dominators(CG, root_dom)
+        
+        # Cleaner dominator loop (Per the evaluation)
+        dom_sets = {v: set() for v in CG.nodes}
+        for v in CG.nodes:
+            cur = v
+            while cur != root_dom and cur in idom:
+                dom_sets[v].add(cur)
+                cur = idom[cur]
+        CG.remove_node(root_dom)
+
+        # 4. Compute post-dominators
+        RG = CG.reverse(copy=True)
+        sinks = [n for n in CG.nodes if CG.out_degree(n) == 0]
         root_post = "__postdom_root__"
         RG.add_node(root_post)
         for t in sinks: RG.add_edge(root_post, t)
+
         idom_post = nx.immediate_dominators(RG, root_post)
-        postdom_sets = {v: set() for v in DAG.nodes}
-        for v in DAG.nodes:
+        
+        # Cleaner post-dominator loop
+        postdom_sets = {v: set() for v in CG.nodes}
+        for v in CG.nodes:
             cur = v
             while cur != root_post and cur in idom_post:
                 postdom_sets[v].add(cur)
                 cur = idom_post[cur]
+        RG.remove_node(root_post)
 
-        # --- Find Bubbles ---
+        # 5. Superbubble detection
         bubbles = []
-        for s in DAG.nodes:
-            dominated = {v for v in DAG.nodes if s in dom_sets[v]}
-            exits = [t for t in DAG.nodes if s in postdom_sets[t] and t != s]
+        for s in candidates:
+            dominated = {v for v in CG.nodes if s in dom_sets.get(v, set())}
+            exits = [t for t in candidates if s in postdom_sets.get(t, set()) and t != s]
+
+            reachable_from_s = nx.descendants(CG, s) | {s}
 
             for t in exits:
-                region = set()
-                for v in dominated:
-                    if nx.has_path(DAG, s, v) and nx.has_path(DAG, v, t):
-                        region.add(v)
+                reachable_to_t = nx.ancestors(CG, t) | {t}
+                region = dominated & reachable_from_s & reachable_to_t
 
-                if s in region and t in region:
+                if s in region and t in region and len(region) > 2:
+                    # Note on len(region) > 2: This means at least one internal SCC exists.
                     internal = region - {s, t}
-                    if internal:
-                        bubbles.append({"entry": s, "exit": t, "nodes": internal})
+                    original_nodes = set()
+                    for cid in region:
+                        original_nodes |= scc_to_nodes[cid]
 
-        # 3. Annotate the Original Graph
+                    bubbles.append({
+                        "entry": s, "exit": t,
+                        "nodes": original_nodes - scc_to_nodes[s] - scc_to_nodes[t]
+                    })
+
+        # 6. Annotate Graph
         for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault('superbubble_id', set())
-            
+            self.pg_graph.nodes[n].setdefault("superbubble_id", set())
         for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault('superbubble_id', set())
+            d.setdefault("superbubble_id", set())
 
         for bid, bubble in enumerate(bubbles, 1):
-            bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]}
-            for n in bubble_nodes:
-                self.pg_graph.nodes[n]['superbubble_id'].add(bid)
+            bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]} # Pre-calculate set for fast edge lookups
+            for n in bubble["nodes"]: # Only tag internals for nodes
+                self.pg_graph.nodes[n]["superbubble_id"].add(bid)
+                
             for u, v, d in self.pg_graph.edges(data=True):
                 if u in bubble_nodes and v in bubble_nodes:
-                    d['superbubble_id'].add(bid)
+                    d["superbubble_id"].add(bid)
 
         logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} superbubbles.")
-    
+
+
     def flag_bridges(self):
         """
         Scans all walks to find stealth bridges and scaffolding gaps.
@@ -1250,6 +1245,10 @@ class GraphMaker():
                             formatted_features[g_id][c_id] = [self.feature_index[f].feature_ref for f in f_list]
                             
                     d["features"] = json.dumps(formatted_features)
+                
+                for key, val in list(d.items()):
+                    if isinstance(val, set):
+                        d[key] = ','.join(map(str, val))
                     
             for u, v, attr in target_graph.edges(data=True):
                 for a in list(attr.keys()):
