@@ -1277,6 +1277,123 @@ class GraphMaker():
         
         return inversion_events, sv_edges
     
+    def annotate_major_blocks_tfs(self, min_node_fraction=0.05):
+        """
+        Identifies major blocks using a Stack-Based Consensus Walk.
+        Threads through Paralog Hubs by tracking physical sequence (contig) momentum.
+        Assigns Block IDs to edges, and aggregates them on nodes.
+        """
+        # We walk the undirected graph to allow bidirectional replicon tracing
+        undirected_pg = self.get_undirected_pg_graph()
+        
+        # Sort edges by weight (descending) so we seed the heaviest Highways first
+        edges_sorted = sorted(undirected_pg.edges(data=True), key=lambda x: x[2].get('weight', 0), reverse=True)
+        
+        # Track unvisited edges (using sorted tuple keys to avoid directionality issues)
+        unvisited_edges = {(min(u, v), max(u, v)): d for u, v, d in edges_sorted}
+        
+        block_id = 1
+        block_manifest = []
+        
+        # Initialize default edge and node blocks on the Directed Graph
+        for u, v in self.pg_graph.edges():
+            self.pg_graph.edges[u, v]['block'] = "Fragment"
+        for n in self.pg_graph.nodes():
+            self.pg_graph.nodes[n]['block'] = set()
+            
+        total_nodes = self.pg_graph.number_of_nodes()
+        min_nodes_req = total_nodes * min_node_fraction
+        
+        while unvisited_edges:
+            # 1. Pop the heaviest unvisited edge to seed a new Block
+            seed_edge, seed_data = next(iter(unvisited_edges.items()))
+            del unvisited_edges[seed_edge]
+            
+            # RULE 2: Never seed on a known translocation or stealth bridge
+            if seed_data.get('is_translocation', False):
+                continue
+                
+            current_block = f"Block_{block_id}"
+            current_nodes = set([seed_edge[0], seed_edge[1]])
+            current_edges = [seed_edge]
+            
+            momentum_key = 'genomes' if self.context == 'feature' else 'sequences'
+            momentum_set = set(seed_data.get(momentum_key, set()))
+            
+            stack = [(seed_edge[0], momentum_set), (seed_edge[1], momentum_set)]
+            
+            # 2. TFS Stack Traversal
+            while stack:
+                curr_node, momentum = stack.pop()
+                
+                # Check the conflict status of the current node
+                curr_conflict = self.pg_graph.nodes[curr_node].get('conflict', 0)
+                
+                for nxt in undirected_pg.neighbors(curr_node):
+                    edge_tuple = (min(curr_node, nxt), max(curr_node, nxt))
+                    
+                    if edge_tuple in unvisited_edges:
+                        nxt_data = unvisited_edges[edge_tuple]
+                        
+                        # RULE 2: Never follow a translocation or stealth bridge
+                        if nxt_data.get('is_translocation', False):
+                            continue
+                            
+                        # Rule A: Check Momentum Overlap
+                        edge_threads = set(nxt_data.get(momentum_key, set()))
+                        overlap = momentum.intersection(edge_threads)
+                        
+                        # If there is physical continuity (overlap > 0), thread through!
+                        if len(overlap) > 0:
+                            del unvisited_edges[edge_tuple]
+                            current_edges.append(edge_tuple)
+                            current_nodes.add(nxt)
+                            
+                            # RULE 1: MOMENTUM LOCK at Conflict Nodes (1, 3, 4)
+                            # Do not pick up new threads at a known evolutionary junction!
+                            if curr_conflict in [1, 3, 4]:
+                                new_momentum = momentum
+                            else:
+                                # Normal accumulation on safe backbone nodes
+                                new_momentum = momentum.union(edge_threads)
+                                
+                            stack.append((nxt, new_momentum))
+            
+            # 3. Evaluate Block Size
+            if len(current_nodes) >= min_nodes_req:
+                final_block_label = current_block
+                block_manifest.append(current_block)
+                block_id += 1
+            else:
+                final_block_label = "Fragment"
+                if "Fragment" not in block_manifest:
+                    block_manifest.append("Fragment")
+                    
+            # 4. Apply Labels to the DIRECTED graph
+            for u, v in current_edges:
+                # Apply to both possible directions in the directed graph
+                if self.pg_graph.has_edge(u, v):
+                    self.pg_graph.edges[u, v]['block'] = final_block_label
+                if self.pg_graph.has_edge(v, u):
+                    self.pg_graph.edges[v, u]['block'] = final_block_label
+                    
+            # Nodes accumulate the blocks of their incident edges
+            for n in current_nodes:
+                if final_block_label != "Fragment":
+                    self.pg_graph.nodes[n]['block'].add(final_block_label)
+
+        # 5. Clean up node 'block' attributes for GEXF export
+        for n, d in self.pg_graph.nodes(data=True):
+            blocks = d.get('block', set())
+            if not blocks:
+                d['block'] = "Fragment"
+            else:
+                # e.g., "Block_1,Block_2" for Paralog Hubs!
+                d['block'] = ",".join(sorted(list(blocks)))
+
+        logging.warning(f"Block Detection (TFS Momentum): Found {block_id - 1} major blocks.")
+        return block_manifest
+    
     def annotate_major_blocks(self, min_node_fraction=0.05):
         """
         Identifies major blocks by severing translocations and finding 
@@ -3082,7 +3199,7 @@ def main():
 
     all_translocations = translocations_count + bridge_translocations
 
-    block_ids = gmaker.annotate_major_blocks(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
+    block_ids = gmaker.annotate_major_blocks_tfs(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
     
     if pargs.gfa:
