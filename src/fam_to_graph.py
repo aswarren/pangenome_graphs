@@ -831,6 +831,116 @@ class GraphMaker():
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
     
+    def detect_and_annotate_superbubbles(self):
+        """
+        Temporarily converts the graph to a DAG by pruning back-edges (preferring to keep heavy edges).
+        Runs dominator/post-dominator superbubble detection, and annotates the original graph.
+        """
+        logging.warning("Detecting Superbubbles via Dominator Trees...")
+
+        # 1. Create a temporary DAG
+        DAG = self.pg_graph.copy()
+        DAG.remove_edges_from(list(nx.selfloop_edges(DAG)))
+
+        visited = set()
+        recursion_stack = set()
+        back_edges = []
+
+        # Helper: Sort successors by weight so we explore the Core Highway first!
+        def get_sorted_successors(n):
+            succs = list(DAG.successors(n))
+            succs.sort(key=lambda x: DAG.edges[n, x].get('weight', 0), reverse=True)
+            return succs
+
+        # Iterative DFS to find and break back-edges (prevents Python recursion limits)
+        for start_node in sorted(DAG.nodes(), key=lambda n: DAG.in_degree(n)):
+            if start_node in visited: continue
+            
+            stack = [(start_node, iter(get_sorted_successors(start_node)))]
+            recursion_stack.add(start_node)
+            visited.add(start_node)
+            
+            while stack:
+                node, children = stack[-1]
+                try:
+                    child = next(children)
+                    if child in recursion_stack:
+                        back_edges.append((node, child)) # Cycle detected!
+                    elif child not in visited:
+                        visited.add(child)
+                        recursion_stack.add(child)
+                        stack.append((child, iter(get_sorted_successors(child))))
+                except StopIteration:
+                    stack.pop()
+                    recursion_stack.remove(node)
+
+        DAG.remove_edges_from(back_edges)
+        logging.info(f"Removed {len(back_edges)} back-edges to create DAG.")
+
+        # 2. Run the Superbubble Algorithm on the DAG
+        sources = [n for n in DAG.nodes if DAG.in_degree(n) == 0]
+        sinks   = [n for n in DAG.nodes if DAG.out_degree(n) == 0]
+
+        # --- Dominators ---
+        root_dom = "__dom_root__"
+        DAG.add_node(root_dom)
+        for s in sources: DAG.add_edge(root_dom, s)
+        dom = nx.immediate_dominators(DAG, root_dom)
+        dom_sets = {v: set() for v in DAG.nodes}
+        for v in DAG.nodes:
+            cur = v
+            while cur != root_dom and cur in dom:
+                dom_sets[v].add(cur)
+                cur = dom[cur]
+        DAG.remove_node(root_dom)
+
+        # --- Post-Dominators ---
+        RG = DAG.reverse(copy=True)
+        root_post = "__postdom_root__"
+        RG.add_node(root_post)
+        for t in sinks: RG.add_edge(root_post, t)
+        idom_post = nx.immediate_dominators(RG, root_post)
+        postdom_sets = {v: set() for v in DAG.nodes}
+        for v in DAG.nodes:
+            cur = v
+            while cur != root_post and cur in idom_post:
+                postdom_sets[v].add(cur)
+                cur = idom_post[cur]
+
+        # --- Find Bubbles ---
+        bubbles = []
+        for s in DAG.nodes:
+            dominated = {v for v in DAG.nodes if s in dom_sets[v]}
+            exits = [t for t in DAG.nodes if s in postdom_sets[t] and t != s]
+
+            for t in exits:
+                region = set()
+                for v in dominated:
+                    if nx.has_path(DAG, s, v) and nx.has_path(DAG, v, t):
+                        region.add(v)
+
+                if s in region and t in region:
+                    internal = region - {s, t}
+                    if internal:
+                        bubbles.append({"entry": s, "exit": t, "nodes": internal})
+
+        # 3. Annotate the Original Graph
+        for n in self.pg_graph.nodes:
+            self.pg_graph.nodes[n].setdefault('superbubble_id', set())
+            
+        for u, v, d in self.pg_graph.edges(data=True):
+            d.setdefault('superbubble_id', set())
+
+        for bid, bubble in enumerate(bubbles, 1):
+            bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]}
+            for n in bubble_nodes:
+                self.pg_graph.nodes[n]['superbubble_id'].add(bid)
+            for u, v, d in self.pg_graph.edges(data=True):
+                if u in bubble_nodes and v in bubble_nodes:
+                    d['superbubble_id'].add(bid)
+
+        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} superbubbles.")
+    
     def flag_bridges(self):
         """
         Scans all walks to find stealth bridges and scaffolding gaps.
@@ -851,27 +961,6 @@ class GraphMaker():
             return False
 
         discovered_paths = {}
-        
-        #Extract Biconnected Components
-        # NetworkX natively treats the DiGraph as undirected for this.
-        # It returns a generator of sets of nodes: [{1, 2, 3}, {3, 4}, ...]
-        UG = self.pg_graph.to_undirected()
-        bccs = list(nx.biconnected_components(UG))
-
-        #  Build the Node -> Set(Bubble IDs) mapping (WITH SIZE FILTER)
-        node_to_bccs = collections.defaultdict(set)
-        max_bubble_size = 200  # Adjust this based on your dataset, 200 is very generous for a single locus
-        
-        for bubble_id, node_set in enumerate(bccs):
-            # If the cycle contains more nodes than the threshold, it is a giant 
-            # structural variant loop, NOT a local superbubble. Ignore it!
-            if len(node_set) <= max_bubble_size:
-                for node in node_set:
-                    node_to_bccs[node].add(bubble_id)
-
-        # Lookup Helper Function
-        def in_same_bubble(node_u, node_w):
-            return bool(node_to_bccs[node_u] & node_to_bccs[node_w])
         
 
         # ---------------------------------------------------------
@@ -998,10 +1087,15 @@ class GraphMaker():
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
-                # If U and W are in the same biconnected component, this path forms a closed 
+                #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
+                u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
+                w_bubbles = self.pg_graph.nodes[w].get('superbubble_id', set())
+                
+                # If U and W share a superbubble ID, this path forms a closed
                 # topological loop (a local detour/hotspot). It is NOT a translocation.
-                if in_same_bubble(u, w):
+                if bool(u_bubbles & w_bubbles):
                     continue
+
                 # Node-Level Check: Only flag nodes unique to the bridge
                 true_bridge_nodes = []
                 for n in bridge_nodes:
@@ -3194,6 +3288,8 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.compute_graph_metrics()
+    gmaker.detect_and_annotate_superbubbles()
+
     inversions_count, translocations_count = gmaker.tag_structural_variants()
     bridge_translocations, scaffolds = gmaker.flag_bridges()
 
