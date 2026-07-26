@@ -840,12 +840,17 @@ class GraphMaker():
         and only spawning hunts in unvisited territory.
         """
         logging.warning("Detecting Superbubbles via TFS Bounded Hunts...")
+        UG = self.get_undirected_pg_graph()
         
         def get_node_genomes(n):
             return set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
             
         def get_edge_genomes(u, v):
-            return set(self.pg_graph.edges[u, v].get('genomes', set()))
+            # Query the undirected graph for pooled bidirectional genomes
+            if UG.has_edge(u, v):
+                return set(UG.edges[u, v].get('genomes', set()))
+            return set()
+                
 
         class HuntState:
             def __init__(self, origin, fingerprint, budget):
@@ -922,7 +927,7 @@ class GraphMaker():
                             cv.returned_hunts.append(hunt) # Budget exhausted or resolved
                             
                     # 2. Check for Divergence 
-                    successors = list(self.pg_graph.successors(cv.node))
+                    successors = list(UG.neighbors(cv.node))
                     succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
                     succ_weights.sort(key=lambda x: x[1], reverse=True)
                     
@@ -978,14 +983,17 @@ class GraphMaker():
                             hunts_to_pass_up.append(h)
                             
                     if my_hunts:
-                        max_score = max(h.best_score for h in my_hunts)
-                        # Only log if it actually reconverged with the highway
-                        if max_score > 0: 
-                            # Aggregate ALL tied paths!
-                            winning_paths = [h.best_path for h in my_hunts if h.best_score == max_score]
+                        successful_paths = []
+                        for h in my_hunts:
+                            # A hunt is successful if it found the highway!
+                            # We use the same 50% threshold we used for early resolution:
+                            if h.best_score > 0 and h.best_score >= (len(h.fingerprint) * 0.5):
+                                successful_paths.append(h.best_path)
+                                
+                        if successful_paths:
                             completed_bubbles.append({
                                 'origin': cv.node,
-                                'winning_paths': winning_paths
+                                'winning_paths': successful_paths
                             })
                             
                     cv.returned_hunts = hunts_to_pass_up
@@ -1001,11 +1009,15 @@ class GraphMaker():
             for path in bubble['winning_paths']:
                 for n in path:
                     self.pg_graph.nodes[n]['superbubble_id'].add(bid)
+                    self.pg_graph.nodes[n]['is_superbubble'] = True
+
                 full_path = [origin] + path
                 for i in range(len(full_path)-1):
                     u, v = full_path[i], full_path[i+1]
                     if self.pg_graph.has_edge(u, v):
                         self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
+                        self.pg_graph.edges[u, v]['is_superbubble'] = True
+
 
         logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")      
 
