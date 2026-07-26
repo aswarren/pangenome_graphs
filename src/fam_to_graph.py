@@ -909,22 +909,26 @@ class GraphMaker():
                         intersect = len(node_gens.intersection(hunt.fingerprint))
                         hunt.current_path.append(cv.node)
                         
+                        # STRICTLY GREATER THAN: Freezes the path at the exact node of max convergence,
+                        # preventing the "runaway tail" down the core highway.
                         if intersect > hunt.best_score:
                             hunt.best_score = intersect
                             hunt.best_path = list(hunt.current_path)
                             
                         hunt.budget -= 1
                         
-                        # Pruning: Continue if budget > 0 AND we haven't visited this node with a better budget for this hunt
-                        if hunt.budget > 0:
+                        # We only early-resolve if we hit 100%. Otherwise, keep hunting for a better score!
+                        is_100_percent = (intersect == len(hunt.fingerprint))
+                        
+                        if hunt.budget > 0 and not is_100_percent:
                             memo_key = (cv.node, hunt.origin)
                             if hunt.budget > hunt_memo.get(memo_key, -1):
                                 hunt_memo[memo_key] = hunt.budget
                                 active_hunts_to_pass.append(hunt)
                             else:
-                                cv.returned_hunts.append(hunt) # Pruned by memo
+                                cv.returned_hunts.append(hunt) 
                         else:
-                            cv.returned_hunts.append(hunt) # Budget exhausted or resolved
+                            cv.returned_hunts.append(hunt)
                             
                     # 2. Check for Divergence 
                     successors = list(UG.neighbors(cv.node))
@@ -983,18 +987,30 @@ class GraphMaker():
                             hunts_to_pass_up.append(h)
                             
                     if my_hunts:
-                        successful_paths = []
-                        for h in my_hunts:
-                            # A hunt is successful if it found the highway!
-                            # We use the same 50% threshold we used for early resolution:
-                            if h.best_score > 0 and h.best_score >= (len(h.fingerprint) * 0.5):
-                                successful_paths.append(h.best_path)
-                                
-                        if successful_paths:
-                            completed_bubbles.append({
-                                'origin': cv.node,
-                                'winning_paths': successful_paths
-                            })
+                        # 1. What was the absolute best convergence any scout found?
+                        max_score = max(h.best_score for h in my_hunts)
+                        
+                        # Basic noise filter (prevents a 1-genome stray paralog from drawing a bubble
+                        # if no scout found a better connection).
+                        if max_score > 1 or max_score == len(my_hunts[0].fingerprint):
+                            
+                            # 2. Gather all paths that tied for this maximum convergence
+                            winning_hunts = [h for h in my_hunts if h.best_score == max_score]
+                            
+                            # 3. The Forensic Check: Group them by their agreed Exit Node
+                            # (The exit node is the last node in their best_path)
+                            exit_groups = {}
+                            for h in winning_hunts:
+                                if h.best_path:
+                                    exit_node = h.best_path[-1]
+                                    exit_groups.setdefault(exit_node, []).append(h.best_path)
+                            
+                            # We annotate the bubble(s) formed by the consensus exits
+                            for exit_node, paths in exit_groups.items():
+                                completed_bubbles.append({
+                                    'origin': cv.node,
+                                    'winning_paths': paths
+                                })
                             
                     cv.returned_hunts = hunts_to_pass_up
 
