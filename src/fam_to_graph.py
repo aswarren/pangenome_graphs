@@ -834,9 +834,10 @@ class GraphMaker():
     def detect_and_annotate_superbubbles(self):
         """
         TFS Superbubble Search.
-        "Homebase" explores the graph, carrying "Hunts" (minority threads) as passengers.
-        Hunts use a budget to find the maximum reconvergence with the Highway fingerprint.
-        Tail-end recursion aggregates tied winners and annotates the superbubbles.
+        "Homebase" explores the graph using TFS (weight-prioritized DFS), 
+        carrying "Hunts" (minority threads) as passengers.
+        Prevents combinatorial explosion by stopping hunts upon reconvergence 
+        and only spawning hunts in unvisited territory.
         """
         logging.warning("Detecting Superbubbles via TFS Bounded Hunts...")
         
@@ -889,18 +890,20 @@ class GraphMaker():
                 
                 if not cv.visited:
                     cv.visited = True
-                    visited_global.add(cv.node)
+                    
+                    # USER FIX: Check if we are treading on previously mapped territory
+                    is_new_territory = cv.node not in visited_global
+                    if is_new_territory:
+                        visited_global.add(cv.node)
                     
                     active_hunts_to_pass = []
+                    node_gens = get_node_genomes(cv.node)
                     
                     # 1. Evaluate Incoming Hunts (The Passengers)
                     for hunt in cv.incoming_hunts:
-                        node_gens = get_node_genomes(cv.node)
                         intersect = len(node_gens.intersection(hunt.fingerprint))
-                        
                         hunt.current_path.append(cv.node)
                         
-                        # "Declare success at the point where the most highway genomes were found"
                         if intersect > hunt.best_score:
                             hunt.best_score = intersect
                             hunt.best_path = list(hunt.current_path)
@@ -914,36 +917,44 @@ class GraphMaker():
                                 hunt_memo[memo_key] = hunt.budget
                                 active_hunts_to_pass.append(hunt)
                             else:
-                                cv.returned_hunts.append(hunt) # Pruned. Return early.
+                                cv.returned_hunts.append(hunt) # Pruned by memo
                         else:
-                            cv.returned_hunts.append(hunt) # Budget exhausted. Return early.
+                            cv.returned_hunts.append(hunt) # Budget exhausted or resolved
                             
-                    # 2. Check for Divergence (Spawn New Hunts)
+                    # 2. Check for Divergence 
                     successors = list(self.pg_graph.successors(cv.node))
                     succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
                     succ_weights.sort(key=lambda x: x[1], reverse=True)
                     
                     # 3. Prepare Children
-                    # Re-push CV so it catches the tail-end recursion
-                    stack.append(cv)
+                    stack.append(cv) # Re-push for bottom-up tail-end recursion
                     
-                    # Push children in reverse order so the Heaviest (Highway) is popped and walked FIRST
                     for succ, weight in reversed(succ_weights):
-                        if succ in cv.dfs_path: # Prevent infinite cycles in the DFS path
+                        if succ in cv.dfs_path: 
                             continue
                             
                         hunts_for_child = [h.clone() for h in active_hunts_to_pass]
                         
-                        # If there is a divergence, the minority paths get a new Hunt!
-                        if len(successors) > 1:
+                        # USER FIX: ONLY spawn new hunts if we are in unvisited territory!
+                        if is_new_territory and len(successors) > 1:
                             heaviest_succ_id = succ_weights[0][0]
-                            if succ != heaviest_succ_id:
-                                # This is a minority dirt road. Spawn a Hunt to find the Highway again.
-                                highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
-                                new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
-                                hunts_for_child.append(new_hunt)
+                            highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
+                            
+                            if len(highway_fingerprint) > 0:
+                                # --- NEW: Subset Checking ---
+                                # Is this new divergence just a fracture inside an existing hunt?
+                                is_subset = False
+                                for active_hunt in active_hunts_to_pass:
+                                    # If the new target is a subset of what we are already looking for,
+                                    # there is no point in spawning a nested hunt.
+                                    if highway_fingerprint.issubset(active_hunt.fingerprint):
+                                        is_subset = True
+                                        break
                                 
-                        # Only push child if it's globally unvisited OR if we have Hunts to carry through it
+                                if not is_subset:
+                                    new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
+                                    hunts_for_child.append(new_hunt)
+                                
                         if succ not in visited_global or hunts_for_child:
                             child_dfs_path = set(cv.dfs_path)
                             child_dfs_path.add(succ)
@@ -955,7 +966,6 @@ class GraphMaker():
                     # ---------------------------------------------------------
                     # BOTTOM-UP / TAIL-END RECURSION
                     # ---------------------------------------------------------
-                    # Gather returned hunts from completed children
                     for child in cv.children:
                         cv.returned_hunts.extend(child.returned_hunts)
                         
@@ -967,18 +977,17 @@ class GraphMaker():
                         else:
                             hunts_to_pass_up.append(h)
                             
-                    # Resolve Hunts originating at this exact node
                     if my_hunts:
                         max_score = max(h.best_score for h in my_hunts)
-                        if max_score > 0:
-                            # Aggregate ALL ties for the max score (Multi-path bubbles!)
+                        # Only log if it actually reconverged with the highway
+                        if max_score > 0: 
+                            # Aggregate ALL tied paths!
                             winning_paths = [h.best_path for h in my_hunts if h.best_score == max_score]
                             completed_bubbles.append({
                                 'origin': cv.node,
                                 'winning_paths': winning_paths
                             })
                             
-                    # Pass unresolved hunts up the stack to their true parents
                     cv.returned_hunts = hunts_to_pass_up
 
         # 4. Annotate Graph
@@ -990,19 +999,15 @@ class GraphMaker():
         for bid, bubble in enumerate(completed_bubbles, 1):
             origin = bubble['origin']
             for path in bubble['winning_paths']:
-                # Tag internal/exit nodes
                 for n in path:
                     self.pg_graph.nodes[n]['superbubble_id'].add(bid)
-                # Tag edges (origin -> path[0] -> ... -> path[-1])
                 full_path = [origin] + path
                 for i in range(len(full_path)-1):
                     u, v = full_path[i], full_path[i+1]
                     if self.pg_graph.has_edge(u, v):
                         self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
 
-        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")
-
-        
+        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")      
 
     def detect_and_annotate_superbubbles_scc(self):
         """
