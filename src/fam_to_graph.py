@@ -830,8 +830,181 @@ class GraphMaker():
         #taxa=self.getTaxaIndicator(feature_id)
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
-    
+
     def detect_and_annotate_superbubbles(self):
+        """
+        TFS Superbubble Search.
+        "Homebase" explores the graph, carrying "Hunts" (minority threads) as passengers.
+        Hunts use a budget to find the maximum reconvergence with the Highway fingerprint.
+        Tail-end recursion aggregates tied winners and annotates the superbubbles.
+        """
+        logging.warning("Detecting Superbubbles via TFS Bounded Hunts...")
+        
+        def get_node_genomes(n):
+            return set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+            
+        def get_edge_genomes(u, v):
+            return set(self.pg_graph.edges[u, v].get('genomes', set()))
+
+        class HuntState:
+            def __init__(self, origin, fingerprint, budget):
+                self.origin = origin
+                self.fingerprint = fingerprint
+                self.budget = budget
+                self.best_score = 0
+                self.current_path = []
+                self.best_path = []
+                
+            def clone(self):
+                new_hunt = HuntState(self.origin, self.fingerprint, self.budget)
+                new_hunt.best_score = self.best_score
+                new_hunt.current_path = list(self.current_path)
+                new_hunt.best_path = list(self.best_path)
+                return new_hunt
+
+        class VisitPack:
+            def __init__(self, node, incoming_hunts, dfs_path):
+                self.node = node
+                self.incoming_hunts = incoming_hunts
+                self.dfs_path = dfs_path
+                self.visited = False
+                self.children = []
+                self.returned_hunts = []
+
+        visited_global = set()
+        hunt_memo = {} # (node, hunt_origin) -> max_budget_seen
+        completed_bubbles = []
+        
+        # Sort nodes by weight to prioritize starting the Homebase on the Core Highways
+        sorted_nodes = sorted(self.pg_graph.nodes(), key=lambda n: len(get_node_genomes(n)), reverse=True)
+                              
+        for start_node in sorted_nodes:
+            if start_node in visited_global:
+                continue
+                
+            stack = [VisitPack(start_node, [], set([start_node]))]
+            
+            while stack:
+                cv = stack.pop()
+                
+                if not cv.visited:
+                    cv.visited = True
+                    visited_global.add(cv.node)
+                    
+                    active_hunts_to_pass = []
+                    
+                    # 1. Evaluate Incoming Hunts (The Passengers)
+                    for hunt in cv.incoming_hunts:
+                        node_gens = get_node_genomes(cv.node)
+                        intersect = len(node_gens.intersection(hunt.fingerprint))
+                        
+                        hunt.current_path.append(cv.node)
+                        
+                        # "Declare success at the point where the most highway genomes were found"
+                        if intersect > hunt.best_score:
+                            hunt.best_score = intersect
+                            hunt.best_path = list(hunt.current_path)
+                            
+                        hunt.budget -= 1
+                        
+                        # Pruning: Continue if budget > 0 AND we haven't visited this node with a better budget for this hunt
+                        if hunt.budget > 0:
+                            memo_key = (cv.node, hunt.origin)
+                            if hunt.budget > hunt_memo.get(memo_key, -1):
+                                hunt_memo[memo_key] = hunt.budget
+                                active_hunts_to_pass.append(hunt)
+                            else:
+                                cv.returned_hunts.append(hunt) # Pruned. Return early.
+                        else:
+                            cv.returned_hunts.append(hunt) # Budget exhausted. Return early.
+                            
+                    # 2. Check for Divergence (Spawn New Hunts)
+                    successors = list(self.pg_graph.successors(cv.node))
+                    succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
+                    succ_weights.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # 3. Prepare Children
+                    # Re-push CV so it catches the tail-end recursion
+                    stack.append(cv)
+                    
+                    # Push children in reverse order so the Heaviest (Highway) is popped and walked FIRST
+                    for succ, weight in reversed(succ_weights):
+                        if succ in cv.dfs_path: # Prevent infinite cycles in the DFS path
+                            continue
+                            
+                        hunts_for_child = [h.clone() for h in active_hunts_to_pass]
+                        
+                        # If there is a divergence, the minority paths get a new Hunt!
+                        if len(successors) > 1:
+                            heaviest_succ_id = succ_weights[0][0]
+                            if succ != heaviest_succ_id:
+                                # This is a minority dirt road. Spawn a Hunt to find the Highway again.
+                                highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
+                                new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
+                                hunts_for_child.append(new_hunt)
+                                
+                        # Only push child if it's globally unvisited OR if we have Hunts to carry through it
+                        if succ not in visited_global or hunts_for_child:
+                            child_dfs_path = set(cv.dfs_path)
+                            child_dfs_path.add(succ)
+                            child_pack = VisitPack(succ, hunts_for_child, child_dfs_path)
+                            cv.children.append(child_pack)
+                            stack.append(child_pack)
+                            
+                else:
+                    # ---------------------------------------------------------
+                    # BOTTOM-UP / TAIL-END RECURSION
+                    # ---------------------------------------------------------
+                    # Gather returned hunts from completed children
+                    for child in cv.children:
+                        cv.returned_hunts.extend(child.returned_hunts)
+                        
+                    hunts_to_pass_up = []
+                    my_hunts = []
+                    for h in cv.returned_hunts:
+                        if h.origin == cv.node:
+                            my_hunts.append(h)
+                        else:
+                            hunts_to_pass_up.append(h)
+                            
+                    # Resolve Hunts originating at this exact node
+                    if my_hunts:
+                        max_score = max(h.best_score for h in my_hunts)
+                        if max_score > 0:
+                            # Aggregate ALL ties for the max score (Multi-path bubbles!)
+                            winning_paths = [h.best_path for h in my_hunts if h.best_score == max_score]
+                            completed_bubbles.append({
+                                'origin': cv.node,
+                                'winning_paths': winning_paths
+                            })
+                            
+                    # Pass unresolved hunts up the stack to their true parents
+                    cv.returned_hunts = hunts_to_pass_up
+
+        # 4. Annotate Graph
+        for n in self.pg_graph.nodes:
+            self.pg_graph.nodes[n].setdefault('superbubble_id', set())
+        for u, v, d in self.pg_graph.edges(data=True):
+            d.setdefault('superbubble_id', set())
+            
+        for bid, bubble in enumerate(completed_bubbles, 1):
+            origin = bubble['origin']
+            for path in bubble['winning_paths']:
+                # Tag internal/exit nodes
+                for n in path:
+                    self.pg_graph.nodes[n]['superbubble_id'].add(bid)
+                # Tag edges (origin -> path[0] -> ... -> path[-1])
+                full_path = [origin] + path
+                for i in range(len(full_path)-1):
+                    u, v = full_path[i], full_path[i+1]
+                    if self.pg_graph.has_edge(u, v):
+                        self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
+
+        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")
+
+        
+
+    def detect_and_annotate_superbubbles_scc(self):
         """
         High-performance superbubble detection using SCC Condensation to guarantee a DAG.
         Annotates nodes and edges with 'superbubble_id'.
