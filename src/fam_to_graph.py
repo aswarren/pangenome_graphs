@@ -935,26 +935,33 @@ class GraphMaker():
                     succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
                     succ_weights.sort(key=lambda x: x[1], reverse=True)
                     
+                    # Filter out the parent so we only count TRUE forward branches
                     valid_succ_weights = [(s, w) for s, w in succ_weights if s not in cv.dfs_path]
                     
-                    stack.append(cv) 
+                    stack.append(cv) # Re-push for bottom-up tail-end recursion
                     
-                    # Total genomes leaving this junction
-                    total_out_genomes = set()
-                    for s, w in valid_succ_weights:
-                        total_out_genomes.update(get_edge_genomes(cv.node, s))
-
                     for succ, weight in reversed(valid_succ_weights):
+                        if succ in cv.dfs_path: 
+                            continue
+                            
                         hunts_for_child = [h.clone() for h in active_hunts_to_pass]
                         
+                        # USE valid_succ_weights HERE to prevent straight-line spawning!
                         if is_new_territory and len(valid_succ_weights) > 1:
-                            # CROSS-FINGERPRINTING: Look for everyone who went down the OTHER branches!
-                            my_edge_genomes = get_edge_genomes(cv.node, succ)
-                            target_fingerprint = total_out_genomes - my_edge_genomes
-                            
-                            if len(target_fingerprint) > 0:
-                                new_hunt = HuntState(origin=cv.node, fingerprint=target_fingerprint, budget=100)
-                                hunts_for_child.append(new_hunt)
+                            heaviest_succ_id = valid_succ_weights[0][0]
+                            highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
+                                                        
+                            # ONLY spawn down the minor path, we'll look down the highway later
+                            if succ != heaviest_succ_id and len(highway_fingerprint) > 0:
+                                # Subset Checking
+                                is_subset = False
+                                for active_hunt in active_hunts_to_pass:
+                                    if highway_fingerprint.issubset(active_hunt.fingerprint):
+                                        is_subset = True
+                                        break
+                                if not is_subset:
+                                    new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
+                                    hunts_for_child.append(new_hunt)
                                 
                         if succ not in visited_global or hunts_for_child:
                             child_dfs_path = set(cv.dfs_path)
@@ -1001,36 +1008,38 @@ class GraphMaker():
                             
                             # We annotate the bubble(s) formed by the consensus exits
                             for exit_node, paths in exit_groups.items():
+                                
+                                # --- NEW: HIGHWAY BACKFILL ---
+                                # Trace the Core Highway from the Origin to the agreed Exit Node
+                                highway_path = []
+                                curr = cv.node
+                                target_fingerprint = winning_hunts[0].fingerprint
+                                
+                                # Greedily walk the heaviest edges that match the core fingerprint
+                                # Limit to budget to prevent infinite loops in broken hubs
+                                for _ in range(100):
+                                    if curr == exit_node:
+                                        break
+                                        
+                                    succs = [s for s in UG.neighbors(curr) if s != cv.node and s not in highway_path]
+                                    if not succs: 
+                                        break
+                                        
+                                    # Pick the successor that carries the most of the highway fingerprint
+                                    best_succ = max(succs, key=lambda s: len(get_edge_genomes(curr, s).intersection(target_fingerprint)))
+                                    highway_path.append(best_succ)
+                                    curr = best_succ
+                                    
+                                # If the backfill successfully reached the exit, add it to the bubble!
+                                if highway_path and highway_path[-1] == exit_node:
+                                    paths.append(highway_path)
+                                # -----------------------------
+
                                 completed_bubbles.append({
                                     'origin': cv.node,
                                     'winning_paths': paths
                                 })
-                            
-                    cv.returned_hunts = hunts_to_pass_up
 
-                    #find nested bubbles and remove them. if a bubble is completely contained within another bubble, remove it
-                    bubble_node_sets = []
-                    for b in completed_bubbles:
-                        nodes = {b['origin']}
-                        for p in b['winning_paths']:
-                            nodes.update(p)
-                        bubble_node_sets.append((b, nodes))
-                        
-                    # Sort by size descending, so we evaluate the largest bubbles first
-                    bubble_node_sets.sort(key=lambda x: len(x[1]), reverse=True)
-                    
-                    final_bubbles = []
-                    for i, (bubble, nset) in enumerate(bubble_node_sets):
-                        is_subsumed = False
-                        for j in range(i): # Check against larger, already-accepted bubbles
-                            if nset.issubset(bubble_node_sets[j][1]):
-                                is_subsumed = True
-                                break
-                        if not is_subsumed:
-                            final_bubbles.append(bubble)
-                            
-                    completed_bubbles = final_bubbles
-                    
         # 4. Annotate Graph
         for n in self.pg_graph.nodes:
             self.pg_graph.nodes[n].setdefault('superbubble_id', set())
