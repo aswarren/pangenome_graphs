@@ -857,6 +857,7 @@ class GraphMaker():
                 self.origin = origin
                 self.fingerprint = fingerprint
                 self.budget = budget
+                self.best_fraction = 0.0
                 self.best_score = 0
                 self.current_path = []
                 self.best_path = []
@@ -935,35 +936,35 @@ class GraphMaker():
                     succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
                     succ_weights.sort(key=lambda x: x[1], reverse=True)
                     
+                    # --- FIX 1: Filter out the parent to find TRUE forward branches ---
+                    valid_succ_weights = [(s, w) for s, w in succ_weights if s not in cv.dfs_path]
+                    
                     # 3. Prepare Children
                     stack.append(cv) # Re-push for bottom-up tail-end recursion
                     
-                    for succ, weight in reversed(succ_weights):
-                        if succ in cv.dfs_path: 
-                            continue
-                            
+                    for succ, weight in reversed(valid_succ_weights):
                         hunts_for_child = [h.clone() for h in active_hunts_to_pass]
                         
-                        # USER FIX: ONLY spawn new hunts if we are in unvisited territory!
-                        if is_new_territory and len(successors) > 1:
-                            heaviest_succ_id = succ_weights[0][0]
-                            highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
+                        # ONLY spawn new hunts if we are in unvisited territory AND it actually splits!
+                        if is_new_territory and len(valid_succ_weights) > 1:
+                            heaviest_succ_id = valid_succ_weights[0][0]
                             
-                            if len(highway_fingerprint) > 0:
-                                # --- NEW: Subset Checking ---
-                                # Is this new divergence just a fracture inside an existing hunt?
-                                is_subset = False
-                                for active_hunt in active_hunts_to_pass:
-                                    # If the new target is a subset of what we are already looking for,
-                                    # there is no point in spawning a nested hunt.
-                                    if highway_fingerprint.issubset(active_hunt.fingerprint):
-                                        is_subset = True
-                                        break
+                            # --- FIX 2: ONLY spawn a hunt if this branch is the minority Dirt Road! ---
+                            if succ != heaviest_succ_id:
+                                highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
                                 
-                                if not is_subset:
-                                    new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
-                                    hunts_for_child.append(new_hunt)
-                                
+                                if len(highway_fingerprint) > 0:
+                                    # Subset Checking 
+                                    is_subset = False
+                                    for active_hunt in active_hunts_to_pass:
+                                        if highway_fingerprint.issubset(active_hunt.fingerprint):
+                                            is_subset = True
+                                            break
+                                    
+                                    if not is_subset:
+                                        new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
+                                        hunts_for_child.append(new_hunt)
+                                        
                         if succ not in visited_global or hunts_for_child:
                             child_dfs_path = set(cv.dfs_path)
                             child_dfs_path.add(succ)
@@ -992,6 +993,8 @@ class GraphMaker():
                         
                         # Basic noise filter (prevents a 1-genome stray paralog from drawing a bubble
                         # if no scout found a better connection).
+                        #if max_score > 0 and max_score >= (highway_size * 0.5):
+
                         if max_score > 1 or max_score == len(my_hunts[0].fingerprint):
                             
                             # 2. Gather all paths that tied for this maximum convergence
