@@ -1008,6 +1008,29 @@ class GraphMaker():
                             
                     cv.returned_hunts = hunts_to_pass_up
 
+                    #find nested bubbles and remove them. if a bubble is completely contained within another bubble, remove it
+                    bubble_node_sets = []
+                    for b in completed_bubbles:
+                        nodes = {b['origin']}
+                        for p in b['winning_paths']:
+                            nodes.update(p)
+                        bubble_node_sets.append((b, nodes))
+                        
+                    # Sort by size descending, so we evaluate the largest bubbles first
+                    bubble_node_sets.sort(key=lambda x: len(x[1]), reverse=True)
+                    
+                    final_bubbles = []
+                    for i, (bubble, nset) in enumerate(bubble_node_sets):
+                        is_subsumed = False
+                        for j in range(i): # Check against larger, already-accepted bubbles
+                            if nset.issubset(bubble_node_sets[j][1]):
+                                is_subsumed = True
+                                break
+                        if not is_subsumed:
+                            final_bubbles.append(bubble)
+                            
+                    completed_bubbles = final_bubbles
+                    
         # 4. Annotate Graph
         for n in self.pg_graph.nodes:
             self.pg_graph.nodes[n].setdefault('superbubble_id', set())
