@@ -1043,25 +1043,32 @@ class GraphMaker():
         # 4. Annotate Graph
         for n in self.pg_graph.nodes:
             self.pg_graph.nodes[n].setdefault('superbubble_id', set())
+            self.pg_graph.nodes[n]['is_superbubble'] = False
         for u, v, d in self.pg_graph.edges(data=True):
             d.setdefault('superbubble_id', set())
+            d['is_superbubble'] = False
             
         for bid, bubble in enumerate(completed_bubbles, 1):
             origin = bubble['origin']
             for path in bubble['winning_paths']:
-                for n in path:
+                
+                # ONLY tag internal nodes! Exclude the Exit Node (path[-1])
+                for n in path[:-1]:
                     self.pg_graph.nodes[n]['superbubble_id'].add(bid)
                     self.pg_graph.nodes[n]['is_superbubble'] = True
 
                 full_path = [origin] + path
                 for i in range(len(full_path)-1):
                     u, v = full_path[i], full_path[i+1]
+                    # Tag both directions for undirected UI compatibility
                     if self.pg_graph.has_edge(u, v):
                         self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
                         self.pg_graph.edges[u, v]['is_superbubble'] = True
+                    if self.pg_graph.has_edge(v, u):
+                        self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
+                        self.pg_graph.edges[v, u]['is_superbubble'] = True
 
-
-        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")      
+        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")    
 
     def detect_and_annotate_superbubbles_scc(self):
         """
