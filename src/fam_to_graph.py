@@ -905,21 +905,20 @@ class GraphMaker():
                     active_hunts_to_pass = []
                     node_gens = get_node_genomes(cv.node)
                     
-                    # 1. Evaluate Incoming Hunts (The Passengers)
+                    # 1. Evaluate Incoming Hunts
                     for hunt in cv.incoming_hunts:
                         intersect = len(node_gens.intersection(hunt.fingerprint))
+                        fraction = intersect / len(hunt.fingerprint) if hunt.fingerprint else 0
                         hunt.current_path.append(cv.node)
                         
-                        # STRICTLY GREATER THAN: Freezes the path at the exact node of max convergence,
-                        # preventing the "runaway tail" down the core highway.
-                        if intersect > hunt.best_score:
-                            hunt.best_score = intersect
+                        # STRICTLY GREATER THAN: Freezes at the exact reconvergence node
+                        if fraction > hunt.best_fraction:
+                            hunt.best_fraction = fraction
                             hunt.best_path = list(hunt.current_path)
                             
                         hunt.budget -= 1
                         
-                        # We only early-resolve if we hit 100%. Otherwise, keep hunting for a better score!
-                        is_100_percent = (intersect == len(hunt.fingerprint))
+                        is_100_percent = (fraction == 1.0)
                         
                         if hunt.budget > 0 and not is_100_percent:
                             memo_key = (cv.node, hunt.origin)
@@ -936,35 +935,27 @@ class GraphMaker():
                     succ_weights = [(succ, len(get_edge_genomes(cv.node, succ))) for succ in successors]
                     succ_weights.sort(key=lambda x: x[1], reverse=True)
                     
-                    # --- FIX 1: Filter out the parent to find TRUE forward branches ---
                     valid_succ_weights = [(s, w) for s, w in succ_weights if s not in cv.dfs_path]
                     
-                    # 3. Prepare Children
-                    stack.append(cv) # Re-push for bottom-up tail-end recursion
+                    stack.append(cv) 
                     
+                    # Total genomes leaving this junction
+                    total_out_genomes = set()
+                    for s, w in valid_succ_weights:
+                        total_out_genomes.update(get_edge_genomes(cv.node, s))
+
                     for succ, weight in reversed(valid_succ_weights):
                         hunts_for_child = [h.clone() for h in active_hunts_to_pass]
                         
-                        # ONLY spawn new hunts if we are in unvisited territory AND it actually splits!
                         if is_new_territory and len(valid_succ_weights) > 1:
-                            heaviest_succ_id = valid_succ_weights[0][0]
+                            # CROSS-FINGERPRINTING: Look for everyone who went down the OTHER branches!
+                            my_edge_genomes = get_edge_genomes(cv.node, succ)
+                            target_fingerprint = total_out_genomes - my_edge_genomes
                             
-                            # --- FIX 2: ONLY spawn a hunt if this branch is the minority Dirt Road! ---
-                            if succ != heaviest_succ_id:
-                                highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
+                            if len(target_fingerprint) > 0:
+                                new_hunt = HuntState(origin=cv.node, fingerprint=target_fingerprint, budget=100)
+                                hunts_for_child.append(new_hunt)
                                 
-                                if len(highway_fingerprint) > 0:
-                                    # Subset Checking 
-                                    is_subset = False
-                                    for active_hunt in active_hunts_to_pass:
-                                        if highway_fingerprint.issubset(active_hunt.fingerprint):
-                                            is_subset = True
-                                            break
-                                    
-                                    if not is_subset:
-                                        new_hunt = HuntState(origin=cv.node, fingerprint=highway_fingerprint, budget=100)
-                                        hunts_for_child.append(new_hunt)
-                                        
                         if succ not in visited_global or hunts_for_child:
                             child_dfs_path = set(cv.dfs_path)
                             child_dfs_path.add(succ)
@@ -989,16 +980,16 @@ class GraphMaker():
                             
                     if my_hunts:
                         # 1. What was the absolute best convergence any scout found?
-                        max_score = max(h.best_score for h in my_hunts)
+                        max_fraction = max(h.best_fraction for h in my_hunts)
                         
                         # Basic noise filter (prevents a 1-genome stray paralog from drawing a bubble
                         # if no scout found a better connection).
                         #if max_score > 0 and max_score >= (highway_size * 0.5):
 
-                        if max_score > 1 or max_score == len(my_hunts[0].fingerprint):
+                        if max_fraction >= 0.5:
                             
                             # 2. Gather all paths that tied for this maximum convergence
-                            winning_hunts = [h for h in my_hunts if h.best_score == max_score]
+                            winning_hunts = [h for h in my_hunts if h.best_fraction == max_fraction]
                             
                             # 3. The Forensic Check: Group them by their agreed Exit Node
                             # (The exit node is the last node in their best_path)
