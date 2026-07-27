@@ -1315,6 +1315,11 @@ class GraphMaker():
             
             # The threshold is strictly less than the dominant path, unless the dominant path is just 1
             shield_threshold = dominant_support - 1 if dominant_support > 1 else 1
+            
+            # If there are no internal nodes between U and W, it is a direct jump (e.g., local deletion).
+            # It is handled by tag_structural_variants. Do not flag it here as an MGE bridge!
+            if not bridge_nodes:
+                continue
 
             if is_scaffold:
                 scaffold_count += 1
