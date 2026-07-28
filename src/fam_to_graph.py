@@ -842,6 +842,14 @@ class GraphMaker():
         logging.warning("Detecting Superbubbles via TFS Bounded Hunts...")
         UG = self.get_undirected_pg_graph()
         
+        def get_node_genomes(n):
+            return set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
+            
+        def get_edge_genomes(u, v):
+            if UG.has_edge(u, v):
+                return set(UG.edges[u, v].get('genomes', set()))
+            return set()
+
         feat_to_idx = [0] * len(self.feature_index)
         for contigs in self.replicon_map.values():
             for f_arr in contigs.values():
@@ -849,7 +857,8 @@ class GraphMaker():
                     feat_to_idx[f_id] = idx
 
         def get_projected_highway_nodes(cv_node, highway_genomes, budget=100):
-            target_nodes = set()
+            import collections
+            target_nodes = collections.defaultdict(set)
             feat_dict = self.pg_graph.nodes[cv_node].get('features', {})
             for g in highway_genomes:
                 if g in feat_dict:
@@ -857,35 +866,34 @@ class GraphMaker():
                         f_arr = self.replicon_map[g][c_id]
                         for f_id in f_list:
                             start_idx = feat_to_idx[f_id]
-                            # Slice the physical array to grab the next 100 nodes!
+                            
+                            # --- FIX: Project Forward AND Backward to handle Inversions! ---
+                            # Project Forward
                             for i in range(start_idx + 1, min(len(f_arr), start_idx + budget + 1)):
                                 nxt_pg = self.feature_index[f_arr[i]].pg_assignment
                                 if nxt_pg is not None:
-                                    target_nodes.add(nxt_pg)
+                                    target_nodes[nxt_pg].add(g)
+                            # Project Backward
+                            for i in range(start_idx - 1, max(-1, start_idx - budget - 1), -1):
+                                nxt_pg = self.feature_index[f_arr[i]].pg_assignment
+                                if nxt_pg is not None:
+                                    target_nodes[nxt_pg].add(g)
+                            # ---------------------------------------------------------------
             return target_nodes        
-        def get_node_genomes(n):
-            return set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
-            
-        def get_edge_genomes(u, v):
-            # Query the undirected graph for pooled bidirectional genomes
-            if UG.has_edge(u, v):
-                return set(UG.edges[u, v].get('genomes', set()))
-            return set()
-                
 
         class HuntState:
             def __init__(self, origin, highway_genomes, target_nodes, budget):
                 self.origin = origin
-                self.highway_genomes = highway_genomes  # Used for subset checks and backfill
-                self.target_nodes = target_nodes        # Used for immediate intersection stops!
+                self.highway_genomes = highway_genomes
+                self.target_nodes = target_nodes
                 self.budget = budget
-                self.is_resolved = False
+                self.best_score = 0
                 self.current_path = []
                 self.best_path = []
                 
             def clone(self):
                 new_hunt = HuntState(self.origin, self.highway_genomes, self.target_nodes, self.budget)
-                new_hunt.is_resolved = self.is_resolved
+                new_hunt.best_score = self.best_score
                 new_hunt.current_path = list(self.current_path)
                 new_hunt.best_path = list(self.best_path)
                 return new_hunt
@@ -931,13 +939,22 @@ class GraphMaker():
                         hunt.current_path.append(cv.node)
                         hunt.budget -= 1
                         
-                        # THE EXACT INTERSECTION STOP:
+                        # --- NEW: Check the Projected Target Mass ---
+                        intersect_score = 0
                         if cv.node in hunt.target_nodes:
-                            hunt.is_resolved = True
-                            hunt.best_path = list(hunt.current_path)
-                            cv.returned_hunts.append(hunt) # Kick it off the bus!
+                            intersect_score = len(hunt.target_nodes[cv.node])
+                            
+                            # STRICTLY GREATER THAN: Freezes the path at the FIRST node 
+                            # of maximum convergence, ignoring the rest of the highway tail.
+                            if intersect_score > hunt.best_score:
+                                hunt.best_score = intersect_score
+                                hunt.best_path = list(hunt.current_path)
+                                
+                        # We only early-resolve if we hit exactly 100%. 
+                        # Otherwise, keep exploring the budget to find the bulk merge!
+                        is_100_percent = (intersect_score == len(hunt.highway_genomes))
                         
-                        elif hunt.budget > 0:
+                        if hunt.budget > 0 and not is_100_percent:
                             memo_key = (cv.node, hunt.origin)
                             if hunt.budget > hunt_memo.get(memo_key, -1):
                                 hunt_memo[memo_key] = hunt.budget
@@ -945,7 +962,7 @@ class GraphMaker():
                             else:
                                 cv.returned_hunts.append(hunt) # Pruned
                         else:
-                            cv.returned_hunts.append(hunt) # Budget exhausted
+                            cv.returned_hunts.append(hunt) # Budget exhausted or 100% resolved
                             
                     # 2. Check for Divergence 
                     successors = list(UG.neighbors(cv.node))
@@ -959,26 +976,35 @@ class GraphMaker():
                     for succ, weight in reversed(valid_succ_weights):
                         hunts_for_child = [h.clone() for h in active_hunts_to_pass]
                         
+                        # USER FIX: ONLY spawn new hunts if we are in unvisited territory!
                         if is_new_territory and len(valid_succ_weights) > 1:
                             heaviest_succ_id = valid_succ_weights[0][0]
                             
-                            # ONLY spawn down the minority dirt roads!
+                            # --- CRITICAL FIX: ONLY SPAWN SCOUTS DOWN THE DIRT ROAD! ---
+                            # Do not let the Highway hunt for itself, or it creates 1-hop fake bubbles!
                             if succ != heaviest_succ_id:
-                                highway_genomes = get_edge_genomes(cv.node, heaviest_succ_id)
+                                highway_fingerprint = get_edge_genomes(cv.node, heaviest_succ_id)
                                 
-                                if len(highway_genomes) > 0:
+                                if len(highway_fingerprint) > 0:
+                                    # Subset Checking 
                                     is_subset = False
                                     for active_hunt in active_hunts_to_pass:
-                                        if highway_genomes.issubset(active_hunt.highway_genomes):
+                                        if highway_fingerprint.issubset(active_hunt.highway_genomes):
                                             is_subset = True
                                             break
                                     
                                     if not is_subset:
-                                        # Project the exact nodes the highway will visit!
-                                        target_nodes = get_projected_highway_nodes(cv.node, highway_genomes, 100)
-                                        if target_nodes:
-                                            new_hunt = HuntState(origin=cv.node, highway_genomes=highway_genomes, target_nodes=target_nodes, budget=100)
-                                            hunts_for_child.append(new_hunt)
+                                        target_nodes = get_projected_highway_nodes(cv.node, highway_fingerprint, 100)
+                                        new_hunt = HuntState(origin=cv.node, highway_genomes=highway_fingerprint, target_nodes=target_nodes, budget=100)
+                                        hunts_for_child.append(new_hunt)
+                            # -------------------------------------------------------------
+                                        
+                        if succ not in visited_global or hunts_for_child:
+                            child_dfs_path = set(cv.dfs_path)
+                            child_dfs_path.add(succ)
+                            child_pack = VisitPack(succ, hunts_for_child, child_dfs_path)
+                            cv.children.append(child_pack)
+                            stack.append(child_pack)
                 #vastly simplified            
                 else:
                     # ---------------------------------------------------------
@@ -996,17 +1022,25 @@ class GraphMaker():
                             hunts_to_pass_up.append(h)
                             
                     if my_hunts:
-                        # 1. Grab all successfully resolved hunts
-                        winning_hunts = [h for h in my_hunts if h.is_resolved]
+                         # 1. Grab all hunts that successfully found at least 50% of the highway
+                        winning_hunts = []
+                        for h in my_hunts:
+                            highway_size = len(h.highway_genomes)
+                            if h.best_score > 0 and h.best_score >= (highway_size * 0.5):
+                                winning_hunts.append(h)
                         
                         if winning_hunts:
-                            # 2. Group them by their agreed Exit Node
+                            # 2. What was the absolute best convergence any scout found?
+                            max_score = max(h.best_score for h in winning_hunts)
+                            best_hunts = [h for h in winning_hunts if h.best_score == max_score]
+                            
+                            # 3. Group them by their agreed Exit Node
                             exit_groups = {}
-                            for h in winning_hunts:
+                            for h in best_hunts:
                                 exit_node = h.best_path[-1]
                                 exit_groups.setdefault(exit_node, []).append(h.best_path)
                             
-                            # 3. Highway Backfill and Bubble Annotation
+                            # 4. Highway Backfill and Bubble Annotation
                             for exit_node, paths in exit_groups.items():
                                 highway_path = []
                                 curr = cv.node
@@ -1033,7 +1067,7 @@ class GraphMaker():
                             
                     cv.returned_hunts = hunts_to_pass_up
 
-        # 4. Annotate Graph
+        # 5. Annotate Graph
         for n in self.pg_graph.nodes:
             self.pg_graph.nodes[n].setdefault('superbubble_id', set())
             self.pg_graph.nodes[n]['is_superbubble'] = False
