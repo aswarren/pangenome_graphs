@@ -1315,7 +1315,7 @@ class GraphMaker():
             
             # The threshold is strictly less than the dominant path, unless the dominant path is just 1
             shield_threshold = dominant_support - 1 if dominant_support > 1 else 1
-            
+
             # If there are no internal nodes between U and W, it is a direct jump (e.g., local deletion).
             # It is handled by tag_structural_variants. Do not flag it here as an MGE bridge!
             if not bridge_nodes:
@@ -1508,7 +1508,9 @@ class GraphMaker():
         protecting against fragmented assemblies.
         """
         sv_edges = 0
-        inv_graph = nx.Graph() 
+        inv_graph = nx.Graph()
+        UG = self.get_undirected_pg_graph()  # Needed for tracing precise CNV detours
+
         
         # --- NEW: Bring in the Terminal Check Helpers ---
         def is_terminal(feat_id):
@@ -1525,11 +1527,15 @@ class GraphMaker():
             return False
         # ------------------------------------------------
         
+        def get_edge_genomes(n1, n2):
+            if UG.has_edge(n1, n2):
+                return set(UG.edges[n1, n2].get('genomes', set()))
+            return set()
+            
         for u, v, d in self.pg_graph.edges(data=True):
             d["is_inversion"] = False
             d["is_translocation"] = False
             
-            # 1. Inversions
             if self.pg_graph.has_edge(v, u):
                 d["is_inversion"] = True
                 inv_graph.add_edge(u, v)
@@ -1546,72 +1552,101 @@ class GraphMaker():
                 
                 u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
                 v_cnv = self.pg_graph.nodes[v].get('cnv_cluster_id', 0)
-                is_cnv_junction = (u_cnv != 0) or (v_cnv != 0)
                 
                 if self.context == "genome":
                     u_items = set(u_feat.keys()) - {'info', 'md5', 'start', 'end'}
                     v_items = set(v_feat.keys()) - {'info', 'md5', 'start', 'end'}
+                    
+                    # Pool bidirectional support to prevent inversions from flagging as dropouts
                     edge_items = set(d.get('genomes', set()))
                     if self.pg_graph.has_edge(v, u):
                         edge_items.update(self.pg_graph.edges[v, u].get('genomes', set()))
-                    
+                        
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
                     base_sv_class = "genomic_rearrangement"
                     
                 elif self.context == "contig":
                     u_items, v_items = set(), set()
-                    
                     for gen_dict in u_feat.values():
                         if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
                     for gen_dict in v_feat.values():
                         if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
-
-                    edge_items = set(d.get('sequences', set()))   
+                        
+                    edge_items = set(d.get('sequences', set()))
                     if self.pg_graph.has_edge(v, u):
-                        edge_items = set(d.get('sequences', set()))
                         edge_items.update(self.pg_graph.edges[v, u].get('sequences', set()))
-
-                    
+                        
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
                     base_sv_class = "intra_contig_rearrangement"
                     
-                # 3. Apply the SV Flag with Dangling End Protection
                 if drop_outs:
+                    
+                    # If this edge carries the majority of the shared genomes, it is the Highway.
+                    # Do not impugn
+                    edge_support = len(edge_items)
+                    shared_support = len(shared_items)
+                    
+                    if edge_support > (shared_support / 2.0):
+                        continue
+
                     true_rearrangements = set()
+                    cnv_detours = set()
                     assembly_gaps = set()
                     
-                    # Sort dropouts into true variants vs. missing sequencing data
                     for drop_gen in drop_outs:
                         u_term = target_is_terminal_in_node(drop_gen, u)
                         v_term = target_is_terminal_in_node(drop_gen, v)
                         
                         if u_term and v_term:
                             assembly_gaps.add(drop_gen)
+                            continue
+                            
+                        # --- NEW: PRECISE CNV DETOUR LOGIC ---
+                        is_detour = False
+                        
+                        # Case 1: The edge itself connects two copies of the same CNV
+                        if u_cnv != 0 and u_cnv == v_cnv:
+                            is_detour = True
+                            
+                        # Case 2: The genome exited U and went into a different copy of V
+                        if not is_detour and v_cnv != 0:
+                            for neighbor in UG.neighbors(u):
+                                if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == v_cnv:
+                                    if drop_gen in get_edge_genomes(u, neighbor):
+                                        is_detour = True
+                                        break
+                                        
+                        # Case 3: The genome entered V from a different copy of U
+                        if not is_detour and u_cnv != 0:
+                            for neighbor in UG.neighbors(v):
+                                if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == u_cnv:
+                                    if drop_gen in get_edge_genomes(v, neighbor):
+                                        is_detour = True
+                                        break
+                        # -------------------------------------
+                        
+                        if is_detour:
+                            cnv_detours.add(drop_gen)
                         else:
                             true_rearrangements.add(drop_gen)
-                    
-                    # Apply final tags
+                            
+                    # Apply final tags based on precisely parsed dropouts
                     if true_rearrangements:
-                        if is_cnv_junction:
-                            d["sv_class"] = "cnv_detour"
-                        else:
-                            d["is_translocation"] = True 
-                            d["sv_class"] = base_sv_class
+                        d["is_translocation"] = True 
+                        d["sv_class"] = base_sv_class
                         d["sv_entities"] = ",".join(true_rearrangements)
                         sv_edges += 1
-                        
+                    elif cnv_detours:
+                        d["sv_class"] = "cnv_detour"
+                        d["sv_entities"] = ",".join(cnv_detours)
                     elif assembly_gaps:
-                        # Only fragments dropped out. No true biological rearrangement occurred!
                         d["sv_class"] = "assembly_gap"
                         d["sv_entities"] = ",".join(assembly_gaps)
-                        # Notice: is_translocation remains False so the core graph stays intact!
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
-
         logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
-        
         return inversion_events, sv_edges
     
     def annotate_major_blocks_tfs(self, min_node_fraction=0.05):
