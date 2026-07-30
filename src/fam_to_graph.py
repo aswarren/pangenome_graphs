@@ -831,7 +831,7 @@ class GraphMaker():
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
 
-    def detect_and_annotate_superbubbles(self):
+    def detect_and_annotate_superbubbles(self, max_depth=50):
         """
         TFS Superbubble Search.
         "Homebase" explores the graph using TFS (weight-prioritized DFS), 
@@ -856,7 +856,7 @@ class GraphMaker():
                 for idx, f_id in enumerate(f_arr):
                     feat_to_idx[f_id] = idx
 
-        def get_projected_highway_nodes(cv_node, highway_genomes, budget=100):
+        def get_projected_highway_nodes(cv_node, highway_genomes, budget=max_depth):
             import collections
             target_nodes = collections.defaultdict(set)
             feat_dict = self.pg_graph.nodes[cv_node].get('features', {})
@@ -994,8 +994,8 @@ class GraphMaker():
                                             break
                                     
                                     if not is_subset:
-                                        target_nodes = get_projected_highway_nodes(cv.node, highway_fingerprint, 100)
-                                        new_hunt = HuntState(origin=cv.node, highway_genomes=highway_fingerprint, target_nodes=target_nodes, budget=100)
+                                        target_nodes = get_projected_highway_nodes(cv.node, highway_fingerprint, max_depth)
+                                        new_hunt = HuntState(origin=cv.node, highway_genomes=highway_fingerprint, target_nodes=target_nodes, budget=max_depth)
                                         hunts_for_child.append(new_hunt)
                             # -------------------------------------------------------------
                                         
@@ -1047,7 +1047,7 @@ class GraphMaker():
                                 highway_genomes = winning_hunts[0].highway_genomes
                                 
                                 # Trace the heaviest edges matching the highway genomes
-                                for _ in range(100):
+                                for _ in range(max_depth):
                                     if curr == exit_node:
                                         break
                                     succs = [s for s in UG.neighbors(curr) if s != cv.node and s not in highway_path]
