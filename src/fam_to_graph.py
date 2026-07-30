@@ -831,7 +831,7 @@ class GraphMaker():
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
 
-    def detect_and_annotate_superbubbles(self, max_depth=50):
+    def detect_and_annotate_hotspots(self, max_depth=50):
         """
         TFS Superbubble Search.
         "Homebase" explores the graph using TFS (weight-prioritized DFS), 
@@ -839,7 +839,7 @@ class GraphMaker():
         Prevents combinatorial explosion by stopping hunts upon reconvergence 
         and only spawning hunts in unvisited territory.
         """
-        logging.warning("Detecting Superbubbles via TFS Bounded Hunts...")
+        logging.warning("Detecting hotspots via TFS Bounded Hunts...")
         UG = self.get_undirected_pg_graph()
         
         def get_node_genomes(n):
@@ -1069,11 +1069,11 @@ class GraphMaker():
 
         # 5. Annotate Graph
         for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault('superbubble_id', set())
-            self.pg_graph.nodes[n]['is_superbubble'] = False
+            self.pg_graph.nodes[n].setdefault('hotspot_id', set())
+            self.pg_graph.nodes[n]['variation_hotspot'] = False
         for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault('superbubble_id', set())
-            d['is_superbubble'] = False
+            d.setdefault('hotspot_id', set())
+            d['variation_hotspot'] = False
             
         for bid, bubble in enumerate(completed_bubbles, 1):
             origin = bubble['origin']
@@ -1081,28 +1081,28 @@ class GraphMaker():
                 
                 # ONLY tag internal nodes! Exclude the Exit Node (path[-1])
                 for n in path[:-1]:
-                    self.pg_graph.nodes[n]['superbubble_id'].add(bid)
-                    self.pg_graph.nodes[n]['is_superbubble'] = True
+                    self.pg_graph.nodes[n]['hotspot_id'].add(bid)
+                    self.pg_graph.nodes[n]['variation_hotspot'] = True
 
                 full_path = [origin] + path
                 for i in range(len(full_path)-1):
                     u, v = full_path[i], full_path[i+1]
                     # Tag both directions for undirected UI compatibility
                     if self.pg_graph.has_edge(u, v):
-                        self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
-                        self.pg_graph.edges[u, v]['is_superbubble'] = True
+                        self.pg_graph.edges[u, v]['hotspot_id'].add(bid)
+                        self.pg_graph.edges[u, v]['variation_hotspot'] = True
                     if self.pg_graph.has_edge(v, u):
-                        self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
-                        self.pg_graph.edges[v, u]['is_superbubble'] = True
+                        self.pg_graph.edges[v, u]['hotspot_id'].add(bid)
+                        self.pg_graph.edges[v, u]['variation_hotspot'] = True
 
-        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")    
+        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} hotspots.")    
 
-    def detect_and_annotate_superbubbles_scc(self):
+    def detect_and_annotate_hotspots_scc(self):
         """
         High-performance superbubble detection using SCC Condensation to guarantee a DAG.
-        Annotates nodes and edges with 'superbubble_id'.
+        Annotates nodes and edges with 'hotspot_id'.
         """
-        logging.warning("Detecting Superbubbles via SCC Condensation...")
+        logging.warning("Detecting hotspots via SCC Condensation...")
         
         # 1. Condense SCCs → get a true DAG
         CG = nx.condensation(self.pg_graph)
@@ -1186,20 +1186,20 @@ class GraphMaker():
 
         # 6. Annotate Graph
         for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault("superbubble_id", set())
+            self.pg_graph.nodes[n].setdefault("hotspot_id", set())
         for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault("superbubble_id", set())
+            d.setdefault("hotspot_id", set())
 
         for bid, bubble in enumerate(bubbles, 1):
             bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]} # Pre-calculate set for fast edge lookups
             for n in bubble["nodes"]: # Only tag internals for nodes
-                self.pg_graph.nodes[n]["superbubble_id"].add(bid)
+                self.pg_graph.nodes[n]["hotspot_id"].add(bid)
                 
             for u, v, d in self.pg_graph.edges(data=True):
                 if u in bubble_nodes and v in bubble_nodes:
-                    d["superbubble_id"].add(bid)
+                    d["hotspot_id"].add(bid)
 
-        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} superbubbles.")
+        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} hotspots.")
 
 
     def flag_bridges(self):
@@ -1354,8 +1354,8 @@ class GraphMaker():
                     self.pg_graph.nodes[n]['is_scaffold_bridge'] = True
             else:
                 #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
-                u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
-                w_bubbles = self.pg_graph.nodes[w].get('superbubble_id', set())
+                u_bubbles = self.pg_graph.nodes[u].get('hotspot_id', set())
+                w_bubbles = self.pg_graph.nodes[w].get('hotspot_id', set())
                 
                 # If U and W share a superbubble ID, this path forms a closed
                 # topological loop (a local detour/hotspot). It is NOT a translocation.
@@ -1368,9 +1368,8 @@ class GraphMaker():
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
-                        self.pg_graph.nodes[n]['is_translocation_bridge'] = True
-                        self.pg_graph.nodes[n]['conflict'] = 4 
-                        self.pg_graph.nodes[n]['bridge_event_id'] = bridge_event_id
+                        self.pg_graph.nodes[n]['is_alternative_path'] = True
+                        self.pg_graph.nodes[n]['node_class'] = "alternative_path"
 
                 # Edge-Level Check: Only flag edges unique to the dirt road
                 true_bridge_edges = []
@@ -1382,7 +1381,7 @@ class GraphMaker():
                         # Apply tags safely to whatever directional edges exist
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                self.pg_graph.edges[direction]['is_translocation'] = True
+                                self.pg_graph.edges[direction]['junction_type'] = "alt_path_junction"
                                 self.pg_graph.edges[direction]['bridge_event_id'] = bridge_event_id
 
                 # Handle Entry and Exit classes
@@ -1482,9 +1481,7 @@ class GraphMaker():
                 d["label"] = list(label_set)[0]
                 
             if n in macro_conflicts:
-                d["conflict"] = 3
-            elif "conflict" not in d:
-                d["conflict"] = 0
+                d["node_class"] = "repeat_ambiguity_fragmentation"
                 
             d["cnv_cluster_id"] = alt_group.get(n, 0)
             
@@ -1560,17 +1557,18 @@ class GraphMaker():
             return set()
             
         for u, v, d in self.pg_graph.edges(data=True):
-            d["is_inversion"] = False
-            d["is_translocation"] = False
+            d["inverted_block"] = False
             
             if self.pg_graph.has_edge(v, u):
-                d["is_inversion"] = True
+                d["inverted_block"] = True
                 inv_graph.add_edge(u, v)
 
-            u_cf = self.pg_graph.nodes[u].get('conflict', 0)
-            v_cf = self.pg_graph.nodes[v].get('conflict', 0)
+            u_cf = self.pg_graph.nodes[u].get('node_class', 'Stable_Syntenic')
+            v_cf = self.pg_graph.nodes[v].get('node_class', 'Stable_Syntenic')
             
-            if u_cf in [1, 3, 4] or v_cf in [1, 3, 4]:
+            target_classes = ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]
+            
+            if u_cf in target_classes or v_cf in target_classes:
                 drop_outs = set()
                 base_sv_class = "none"
                 
@@ -1661,12 +1659,19 @@ class GraphMaker():
                             
                     # Apply final tags based on precisely parsed dropouts
                     if true_rearrangements:
-                        d["is_translocation"] = True 
-                        d["sv_class"] = base_sv_class
+                        if "alternative_path" in (u_cf, v_cf):
+                            d["junction_type"] = "alt_path_junction"
+                        elif "synteny_breakpoint" in (u_cf, v_cf):
+                            d["junction_type"] = "breakpoint_junction"
+                        elif "repeat_ambiguity_fragmentation" in (u_cf, v_cf):
+                            d["junction_type"] = "repeat_fragmentation_junction"
+                        else:
+                            d["junction_type"] = base_sv_class
+                            
                         d["sv_entities"] = ",".join(true_rearrangements)
                         sv_edges += 1
                     elif cnv_detours:
-                        d["sv_class"] = "cnv_detour"
+                        d["sv_class"] = "repeat_ambiguity_detour"
                         d["sv_entities"] = ",".join(cnv_detours)
                     elif assembly_gaps:
                         d["sv_class"] = "assembly_gap"
@@ -1709,7 +1714,7 @@ class GraphMaker():
             del unvisited_edges[seed_edge]
             
             # RULE 2: Never seed on a known translocation or stealth bridge
-            if seed_data.get('is_translocation', False):
+            if "junction_type" in seed_data:
                 continue
                 
             current_block = f"Block_{block_id}"
@@ -1734,8 +1739,8 @@ class GraphMaker():
                     if edge_tuple in unvisited_edges:
                         nxt_data = unvisited_edges[edge_tuple]
                         
-                        # RULE 2: Never follow a translocation or stealth bridge
-                        if nxt_data.get('is_translocation', False):
+                        # RULE 2: Never follow a ['alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction'] or any rearrangement edge!
+                        if nxt_data.get('junction_type') is not None:
                             continue
                             
                         # Rule A: Check Momentum Overlap
@@ -1848,7 +1853,8 @@ class GraphMaker():
                 fam_id = d.get('family', 'unknown_fam')
                 function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
-                cf = d.get('conflict', 0)
+                nc = d.get('node_class')
+                nc_tag = f"\tnc:Z:{nc}" if nc else ""
                 al = d.get('alternate', 0)
                 cnv = d.get('cnv_cluster_id', 0)
 
@@ -1859,8 +1865,8 @@ class GraphMaker():
                 segment_name = f"{n}_{clean_fam_id}"
                 
                 # Tags: fm = family ID, fn = function (spaces are allowed in Z tags), LN = visual length
-                tags = f"fm:Z:{fam_id}\tfn:Z:{function_desc}\tdv:f:{dv:.4f}\tcf:i:{cf}\tcv:i:{cnv}\tLN:i:{node_len}"
-                
+                tags = f"fm:Z:{fam_id}\tfn:Z:{function_desc}\tdv:f:{dv:.4f}\tcv:i:{cnv}\tLN:i:{node_len}{nc_tag}"
+                al = d.get('alternate', 0)                
                 out.write(f"S\t{segment_name}\t*\t{tags}\n")
                 
             # 2. Write Links (Edges)
@@ -1879,10 +1885,12 @@ class GraphMaker():
                 
                 # Assign GFA tags for overlapping SVs
                 sv_tags = ""
-                if d.get("is_inversion"):
-                    sv_tags += "\tiv:i:1"
-                if d.get("is_translocation"):
-                    sv_tags += "\ttr:i:1"
+                if d.get("inverted_block"):
+                    sv_tags += "\tib:i:1"
+                
+                jt = d.get("junction_type")
+                if jt:
+                    sv_tags += f"\tjt:Z:{jt}"
                     
                 # Output topology
                 out.write(f"L\t{u_name}\t+\t{v_name}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tags}\n")
@@ -2500,8 +2508,9 @@ class GraphMaker():
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                existing['is_inversion'] = existing.get('is_inversion', False) or d.get('is_inversion', False)
-                existing['is_translocation'] = existing.get('is_translocation', False) or d.get('is_translocation', False)
+                existing['inverted_block'] = existing.get('inverted_block', False) or d.get('inverted_block', False)
+                if 'junction_type' in d:
+                    existing['junction_type'] = d['junction_type']
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
@@ -2673,8 +2682,8 @@ class GraphMaker():
         
         
         if conflict != None:
-            if conflict != "shift" and not "conflict" in self.pg_graph.nodes[cur_pg_id]:
-                self.pg_graph.nodes[cur_pg_id]["conflict"]=conflict
+            if not "node_class" in self.pg_graph.nodes[cur_pg_id]:
+                self.pg_graph.nodes[cur_pg_id]["node_class"] = conflict
             # else where for more comprehensive marking
             #if conflict == "shift" and not "alternate" in self.pg_graph.nodes[cur_pg_id]:
             #    self.pg_graph.nodes[cur_pg_id]["alternate"]=1
@@ -2822,13 +2831,12 @@ class GraphMaker():
             alt_nodes.update(pre_assignments[i]["assignments"].keys())
             for pg in pre_assignments[i]["assignments"]:
                 conflict_status = None
+                if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
+                    conflict_status = "repeat_ambiguity"
                 if ("c2_conflict" in conflicts[i] and pg in conflicts[i]["c2_conflict"]):
-                    conflict_status = 2
+                    conflict_status = "assembly_repeat_break"
                 if ("c1_conflict" in conflicts[i] and pg in conflicts[i]["c1_conflict"]):
-                    conflict_status = 1
-                #nothing taking advantage of this for now
-                #if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
-                #    conflict_status = "shift"
+                    conflict_status = "synteny_breakpoint"
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
                         self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflict=conflict_status)
@@ -3593,7 +3601,7 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.compute_graph_metrics()
-    gmaker.detect_and_annotate_superbubbles()
+    gmaker.detect_and_annotate_hotspots()
 
     inversions_count, translocations_count = gmaker.tag_structural_variants()
     bridge_translocations, scaffolds = gmaker.flag_bridges()
