@@ -831,7 +831,7 @@ class GraphMaker():
         diversity = float(len(cur_profile.keys()))/float(len(self.all_diversity.keys()))
         return diversity
 
-    def detect_and_annotate_supperbubbles(self, max_depth=50):
+    def detect_and_annotate_superbubbles(self, max_depth=50):
         """
         TFS Superbubble Search.
         "Homebase" explores the graph using TFS (weight-prioritized DFS), 
@@ -839,7 +839,7 @@ class GraphMaker():
         Prevents combinatorial explosion by stopping hunts upon reconvergence 
         and only spawning hunts in unvisited territory.
         """
-        logging.warning("Detecting supperbubbles via TFS Bounded Hunts...")
+        logging.warning("Detecting superbubbles via TFS Bounded Hunts...")
         UG = self.get_undirected_pg_graph()
         
         def get_node_genomes(n):
@@ -1069,10 +1069,10 @@ class GraphMaker():
 
         # 5. Annotate Graph
         for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault('supperbubble_id', set())
+            self.pg_graph.nodes[n].setdefault('superbubble_id', set())
             self.pg_graph.nodes[n]['is_superbubble'] = False
         for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault('supperbubble_id', set())
+            d.setdefault('superbubble_id', set())
             d['is_superbubble'] = False
             
         for bid, bubble in enumerate(completed_bubbles, 1):
@@ -1081,7 +1081,7 @@ class GraphMaker():
                 
                 # ONLY tag internal nodes! Exclude the Exit Node (path[-1])
                 for n in path[:-1]:
-                    self.pg_graph.nodes[n]['supperbubble_id'].add(bid)
+                    self.pg_graph.nodes[n]['superbubble_id'].add(bid)
                     self.pg_graph.nodes[n]['is_superbubble'] = True
 
                 full_path = [origin] + path
@@ -1089,20 +1089,20 @@ class GraphMaker():
                     u, v = full_path[i], full_path[i+1]
                     # Tag both directions for undirected UI compatibility
                     if self.pg_graph.has_edge(u, v):
-                        self.pg_graph.edges[u, v]['supperbubble_id'].add(bid)
+                        self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
                         self.pg_graph.edges[u, v]['is_superbubble'] = True
                     if self.pg_graph.has_edge(v, u):
-                        self.pg_graph.edges[v, u]['supperbubble_id'].add(bid)
+                        self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
                         self.pg_graph.edges[v, u]['is_superbubble'] = True
 
-        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} supperbubbles.")    
+        logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")    
 
-    def detect_and_annotate_supperbubbles_scc(self):
+    def detect_and_annotate_superbubbles_scc(self):
         """
         High-performance superbubble detection using SCC Condensation to guarantee a DAG.
-        Annotates nodes and edges with 'supperbubble_id'.
+        Annotates nodes and edges with 'superbubble_id'.
         """
-        logging.warning("Detecting supperbubbles via SCC Condensation...")
+        logging.warning("Detecting superbubbles via SCC Condensation...")
         
         # 1. Condense SCCs → get a true DAG
         CG = nx.condensation(self.pg_graph)
@@ -1186,20 +1186,20 @@ class GraphMaker():
 
         # 6. Annotate Graph
         for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault("supperbubble_id", set())
+            self.pg_graph.nodes[n].setdefault("superbubble_id", set())
         for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault("supperbubble_id", set())
+            d.setdefault("superbubble_id", set())
 
         for bid, bubble in enumerate(bubbles, 1):
             bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]} # Pre-calculate set for fast edge lookups
             for n in bubble["nodes"]: # Only tag internals for nodes
-                self.pg_graph.nodes[n]["supperbubble_id"].add(bid)
+                self.pg_graph.nodes[n]["superbubble_id"].add(bid)
                 
             for u, v, d in self.pg_graph.edges(data=True):
                 if u in bubble_nodes and v in bubble_nodes:
-                    d["supperbubble_id"].add(bid)
+                    d["superbubble_id"].add(bid)
 
-        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} supperbubbles.")
+        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} superbubbles.")
 
 
     def flag_bridges(self):
@@ -1297,9 +1297,9 @@ class GraphMaker():
         # ---------------------------------------------------------
         # PASS 2: RESOLUTION (DOMINANCE SHIELDING)
         # ---------------------------------------------------------
-        translocation_count = 0
+        alt_path_count = 0
         scaffold_count = 0
-        bridge_event_id = 1
+        alt_path_event_id = 1
 
         def normalize_path(path_tuple):
             # Normalize directional paths so Forward and Reverse count as the same Highway
@@ -1350,12 +1350,20 @@ class GraphMaker():
 
             if is_scaffold:
                 scaffold_count += 1
+                # 1. Tag the nodes
                 for n in bridge_nodes:
                     self.pg_graph.nodes[n]['is_scaffold_path'] = True
+                
+                # 2. Tag the edges of the path!
+                # path_edges is a tuple of edges: ((u, x), (x, y), (y, w))
+                for edge in path_edges:
+                    for direction in [(edge[0], edge[1]), (edge[1], edge[0])]:
+                        if self.pg_graph.has_edge(*direction):
+                            self.pg_graph.edges[direction]['is_scaffold_path'] = True
             else:
                 #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
-                u_bubbles = self.pg_graph.nodes[u].get('supperbubble_id', set())
-                w_bubbles = self.pg_graph.nodes[w].get('supperbubble_id', set())
+                u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
+                w_bubbles = self.pg_graph.nodes[w].get('superbubble_id', set())
                 
                 # If U and W share a superbubble ID, this path forms a closed
                 # topological loop (a local detour/hotspot). It is NOT a translocation.
@@ -1370,6 +1378,7 @@ class GraphMaker():
                         true_bridge_nodes.append(n)
                         self.pg_graph.nodes[n]['is_alternative_path'] = True
                         self.pg_graph.nodes[n]['node_class'] = "alternative_path"
+                        self.pg_graph.nodes[n]['alt_path_event_id'] = alt_path_event_id  # <-- Added Event ID
 
                 # Edge-Level Check: Only flag edges unique to the dirt road
                 true_bridge_edges = []
@@ -1381,29 +1390,33 @@ class GraphMaker():
                         # Apply tags safely to whatever directional edges exist
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                self.pg_graph.edges[direction]['junction_type'] = "is_alternative_path"
-                                self.pg_graph.edges[direction]['bridge_event_id'] = bridge_event_id
+                                # Internal edges get the boolean overlay and the event ID
+                                self.pg_graph.edges[direction]['is_alternative_path'] = True
+                                self.pg_graph.edges[direction]['alt_path_event_id'] = alt_path_event_id
 
-                # Handle Entry and Exit classes
+                # Handle Entry and Exit classes (The actual junctions connecting to the backbone!)
                 if true_bridge_edges:
-                    translocation_count += 1
+                    alt_path_count += 1  # (Assuming you updated translocation_count to alt_path_count)
+                    
+                    # Tag the Entry Edge
                     edge_in = true_bridge_edges[0]
                     for direction in [(edge_in[0], edge_in[1]), (edge_in[1], edge_in[0])]:
                         if self.pg_graph.has_edge(*direction):
-                            self.pg_graph.edges[direction]['sv_class'] = "alt_path_junction"
+                            self.pg_graph.edges[direction]['junction_type'] = "alt_path_junction"
                     
+                    # Tag the Exit Edge
                     if len(true_bridge_edges) > 1:
                         edge_out = true_bridge_edges[-1]
                         for direction in [(edge_out[0], edge_out[1]), (edge_out[1], edge_out[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                self.pg_graph.edges[direction]['sv_class'] = "alt_path_junction"
+                                self.pg_graph.edges[direction]['junction_type'] = "alt_path_junction"
                 
                 # Increment the event ID only if we actually found unprotected elements
                 if true_bridge_nodes or true_bridge_edges:
-                    bridge_event_id += 1
+                    alt_path_event_id += 1
 
-        logging.warning(f"Bridge Detection: Tagged {translocation_count} unique bridge events and {scaffold_count} scaffolding gaps.")
-        return translocation_count, scaffold_count    
+        logging.warning(f"Alternative Path Detection: Tagged {alt_path_count} alternative paths and {scaffold_count} scaffolding gaps.")
+        return alt_path_count, scaffold_count   
 
     def compute_graph_metrics(self):
         """
@@ -1674,7 +1687,7 @@ class GraphMaker():
                         d["sv_class"] = "repeat_ambiguity_detour"
                         d["sv_entities"] = ",".join(cnv_detours)
                     elif assembly_gaps:
-                        d["sv_class"] = "potential_scaffold"
+                        d["is_scaffold_path"] = True
                         d["sv_entities"] = ",".join(assembly_gaps)
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
@@ -3562,12 +3575,10 @@ def main():
     gmaker.checkRFGraph()
     gmaker.calcStatistics()
     gmaker.compute_graph_metrics()
-    gmaker.detect_and_annotate_supperbubbles()
+    gmaker.detect_and_annotate_superbubbles()
 
-    inversions_count, translocations_count = gmaker.tag_structural_variants()
-    bridge_translocations, scaffolds = gmaker.flag_bridges()
-
-    all_translocations = translocations_count + bridge_translocations
+    inversions_count, sv_edges_count = gmaker.tag_structural_variants()
+    alt_paths_count, scaffolds_count = gmaker.flag_bridges()
 
     block_ids = gmaker.annotate_major_blocks_tfs(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
@@ -3645,23 +3656,44 @@ def main():
     contig_map = {gen_id: list(contigs.keys()) for gen_id, contigs in gmaker.replicon_map.items()}
     total_contigs = sum(len(contigs) for contigs in contig_map.values())
 
+    # Dynamically tally the new biological ontology tags
     cnv_clusters = set()
+    superbubbles = set()
+    synteny_breakpoints_count = 0
+    assembly_repeat_breaks_count = 0
+    
     for n, d in gmaker.pg_graph.nodes(data=True):
+        # Unique Paralogs
         if d.get("cnv_cluster_id", 0) > 0:
             cnv_clusters.add(d["cnv_cluster_id"])
-    
+        
+        # Unique Superbubbles
+        superbubbles.update(d.get("superbubble_id", set()))
+        
+        # Unique Breakpoint Nodes
+        nc = d.get("node_class")
+        if nc == "synteny_breakpoint":
+            synteny_breakpoints_count += 1
+        elif nc == "assembly_repeat_break":
+            assembly_repeat_breaks_count += 1
+
+    # Compile the strict event counts
     summary_dict = {
         "total_genomes": len(gmaker.replicon_map),
         "total_contigs": total_contigs,
         "total_features": len(gmaker.feature_index),
         "total_nodes": gmaker.pg_graph.number_of_nodes(),
-        "cnv_clusters": len(cnv_clusters),
-        "inversions": inversions_count,
-        "translocations": translocations_count,
+        "superbubbles": len(superbubbles),
+        "copy_number_variants": len(cnv_clusters),
+        "alternative_paths": alt_paths_count,                               # 1 insertion = 1 event
+        "structural_rearrangements": synteny_breakpoints_count + sv_edges_count,  # Breakpoint nodes + Path Dropouts
+        "inverted_blocks": inversions_count,                                      # 1 block = 1 event
+        "assembly_breaks": scaffolds_count,  # Shattered nodes + Scaffold bridges
         "parameters": {"k": pargs.ksize, "min": pargs.min},
         "block_manifest": list(block_ids),
         "contig_map": contig_map
     }
+
     summary_json = json.dumps(summary_dict)
     summary_xml = f"    <summary>{summary_json}</summary>\n  "
     
