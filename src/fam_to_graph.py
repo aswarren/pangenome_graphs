@@ -1076,15 +1076,15 @@ class GraphMaker():
             d['is_superbubble'] = False
             
         for bid, bubble in enumerate(completed_bubbles, 1):
-            origin = bubble['origin']
-            for path in bubble['winning_paths']:
-                
-                # ONLY tag internal nodes! Exclude the Exit Node (path[-1])
-                for n in path[:-1]:
-                    self.pg_graph.nodes[n]['superbubble_id'].add(bid)
-                    self.pg_graph.nodes[n]['is_superbubble'] = True
-
-                full_path = [origin] + path
+                origin = bubble['origin']
+                for path in bubble['winning_paths']:
+                    
+                    full_path = [origin] + path
+                    
+                    # Tag the Entry, Internal, and Exit nodes so the entire bubble is one unit
+                    for n in full_path:
+                        self.pg_graph.nodes[n]['superbubble_id'].add(bid)
+                        self.pg_graph.nodes[n]['is_superbubble'] = True
                 for i in range(len(full_path)-1):
                     u, v = full_path[i], full_path[i+1]
                     # Tag both directions for undirected UI compatibility
