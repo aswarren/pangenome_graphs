@@ -1665,7 +1665,6 @@ class GraphMaker():
             # Instantly check if any target class is True without iterating over the dictionary
             if any(u_node.get(c) for c in target_classes) or any(v_node.get(c) for c in target_classes):
                 drop_outs = set()
-                base_sv_class = "none"
                 
                 u_feat = self.pg_graph.nodes[u].get('features', {})
                 v_feat = self.pg_graph.nodes[v].get('features', {})
@@ -1684,7 +1683,6 @@ class GraphMaker():
                         
                     shared_items = u_items.intersection(v_items)
                     drop_outs = shared_items - edge_items
-                    base_sv_class = "genomic_rearrangement"
                     
                 elif self.context == "contig":
                     u_items, v_items = set(), set()
@@ -1767,9 +1765,6 @@ class GraphMaker():
                             d["repeat_fragmentation_junction"] = True
                             assigned_jct = True
                             
-                        # If none of the above, use the base context rearrangement flag
-                        if not assigned_jct:
-                            d[base_sv_class] = True
                             
                         d["sv_entities"] = ",".join(true_rearrangements)
                         sv_edges += 1
@@ -1817,7 +1812,7 @@ class GraphMaker():
             del unvisited_edges[seed_edge]
             
             # RULE 2: Never seed on a known structural junction
-            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'genomic_rearrangement', 'intra_contig_rearrangement'}
+            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path'}
             if any(seed_data.get(flag) for flag in junction_flags):
                 continue
                 
@@ -1955,7 +1950,7 @@ class GraphMaker():
                     sv_tags += "\tib:i:1"
                 
                 # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                edge_bools = [k for k in ["alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "genomic_rearrangement", "intra_contig_rearrangement", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
+                edge_bools = [k for k in ["alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
                 if edge_bools:
                     sv_tags += f"\tjt:Z:{','.join(edge_bools)}"
                     
@@ -2575,7 +2570,7 @@ class GraphMaker():
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                edge_bool_flags = ['inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'genomic_rearrangement', 'intra_contig_rearrangement', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
+                edge_bool_flags = ['inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
                 for flag in edge_bool_flags:
                     existing[flag] = existing.get(flag, False) or d.get(flag, False)
                 
@@ -3802,7 +3797,7 @@ def main():
 
     # Trigger the TSV exports alongside the main GEXF/GFA
     gmaker.write_reports(pargs.output)
-    
+
     if pargs.order_contigs != "none":
         unsorted_file = pargs.contig_output+".unsorted"
         gmaker.write_contigs(pargs.contig_output, unsorted_file)
