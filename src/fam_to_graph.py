@@ -1580,9 +1580,13 @@ class GraphMaker():
             d["cnv_cluster_id"] = alt_group.get(n, 0)
             
         # 4. Compute Edge Weights (Leave them as sets!)
+        total_contigs = float(sum(len(c) for c in self.replicon_map.values()))
+        
         for u, v, attr in self.pg_graph.edges(data=True):
-            if "genomes" in attr:
-                attr["weight"] = len(attr["genomes"]) / num_genomes
+            if self.context == "contig" and "sequences" in attr:
+                attr["weight"] = len(attr["sequences"]) / total_contigs if total_contigs > 0 else 0.0
+            elif "genomes" in attr:
+                attr["weight"] = len(attr["genomes"]) / num_genomes if num_genomes > 0 else 0.0
 
     def serialize_graph_for_gexf(self, target_graph=None):
             """
