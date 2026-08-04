@@ -1376,10 +1376,8 @@ class GraphMaker():
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
-                        self.pg_graph.nodes[n]['is_alternative_path'] = True
-                        self.pg_graph.nodes[n]['node_class'] = "alternative_path"
+                        self.pg_graph.nodes[n]['alternative_path'] = True
                         self.pg_graph.nodes[n]['alt_path_event_id'] = alt_path_event_id  # <-- Added Event ID
-
                 # Edge-Level Check: Only flag edges unique to the dirt road
                 true_bridge_edges = []
                 for e in path_edges:
@@ -1391,7 +1389,7 @@ class GraphMaker():
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
                                 # Internal edges get the boolean overlay and the event ID
-                                self.pg_graph.edges[direction]['is_alternative_path'] = True
+                                self.pg_graph.edges[direction]['alternative_path'] = True
                                 self.pg_graph.edges[direction]['alt_path_event_id'] = alt_path_event_id
 
                 # Handle Entry and Exit classes (The actual junctions connecting to the backbone!)
@@ -1402,14 +1400,14 @@ class GraphMaker():
                     edge_in = true_bridge_edges[0]
                     for direction in [(edge_in[0], edge_in[1]), (edge_in[1], edge_in[0])]:
                         if self.pg_graph.has_edge(*direction):
-                            self.pg_graph.edges[direction]['junction_type'] = "alt_path_junction"
+                            self.pg_graph.edges[direction]['alt_path_junction'] = True
                     
                     # Tag the Exit Edge
                     if len(true_bridge_edges) > 1:
                         edge_out = true_bridge_edges[-1]
                         for direction in [(edge_out[0], edge_out[1]), (edge_out[1], edge_out[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                self.pg_graph.edges[direction]['junction_type'] = "alt_path_junction"
+                                self.pg_graph.edges[direction]['alt_path_junction'] = True
                 
                 # Increment the event ID only if we actually found unprotected elements
                 if true_bridge_nodes or true_bridge_edges:
@@ -1494,7 +1492,7 @@ class GraphMaker():
                 d["label"] = list(label_set)[0]
                 
             if n in macro_conflicts:
-                d["node_class"] = "repeat_ambiguity_fragmentation"
+                d["repeat_ambiguity_fragmentation"] = True
                 
             d["cnv_cluster_id"] = alt_group.get(n, 0)
             
@@ -1576,12 +1574,13 @@ class GraphMaker():
                 d["inverted_block"] = True
                 inv_graph.add_edge(u, v)
 
-            u_cf = self.pg_graph.nodes[u].get('node_class', 'Stable_Syntenic')
-            v_cf = self.pg_graph.nodes[v].get('node_class', 'Stable_Syntenic')
+            u_node = self.pg_graph.nodes[u]
+            v_node = self.pg_graph.nodes[v]
             
             target_classes = ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]
             
-            if u_cf in target_classes or v_cf in target_classes:
+            # Instantly check if any target class is True without iterating over the dictionary
+            if any(u_node.get(c) for c in target_classes) or any(v_node.get(c) for c in target_classes):
                 drop_outs = set()
                 base_sv_class = "none"
                 
@@ -1672,19 +1671,27 @@ class GraphMaker():
                             
                     # Apply final tags based on precisely parsed dropouts
                     if true_rearrangements:
-                        if "alternative_path" in (u_cf, v_cf):
-                            d["junction_type"] = "alt_path_junction"
-                        elif "synteny_breakpoint" in (u_cf, v_cf):
-                            d["junction_type"] = "breakpoint_junction"
-                        elif "repeat_ambiguity_fragmentation" in (u_cf, v_cf):
-                            d["junction_type"] = "repeat_fragmentation_junction"
-                        else:
-                            d["junction_type"] = base_sv_class
+                        assigned_jct = False
+                        
+                        # Apply ALL applicable junction booleans simultaneously!
+                        if u_node.get("alternative_path") or v_node.get("alternative_path"):
+                            d["alt_path_junction"] = True
+                            assigned_jct = True
+                        if u_node.get("synteny_breakpoint") or v_node.get("synteny_breakpoint"):
+                            d["breakpoint_junction"] = True
+                            assigned_jct = True
+                        if u_node.get("repeat_ambiguity_fragmentation") or v_node.get("repeat_ambiguity_fragmentation"):
+                            d["repeat_fragmentation_junction"] = True
+                            assigned_jct = True
+                            
+                        # If none of the above, use the base context rearrangement flag
+                        if not assigned_jct:
+                            d[base_sv_class] = True
                             
                         d["sv_entities"] = ",".join(true_rearrangements)
                         sv_edges += 1
                     elif cnv_detours:
-                        d["sv_class"] = "repeat_ambiguity_detour"
+                        d["repeat_ambiguity_detour"] = True
                         d["sv_entities"] = ",".join(cnv_detours)
                     elif assembly_gaps:
                         d["is_scaffold_path"] = True
@@ -1726,8 +1733,9 @@ class GraphMaker():
             seed_edge, seed_data = next(iter(unvisited_edges.items()))
             del unvisited_edges[seed_edge]
             
-            # RULE 2: Never seed on a known translocation or stealth bridge
-            if "junction_type" in seed_data:
+            # RULE 2: Never seed on a known structural junction
+            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'genomic_rearrangement', 'intra_contig_rearrangement'}
+            if any(seed_data.get(flag) for flag in junction_flags):
                 continue
                 
             current_block = f"Block_{block_id}"
@@ -1743,8 +1751,8 @@ class GraphMaker():
             while stack:
                 curr_node, momentum = stack.pop()
                 
-                # Check the conflict status of the current node
-                curr_conflict = self.pg_graph.nodes[curr_node].get('node_class', 'Stable_Syntenic')
+                # Grab all flags active on the current node
+                curr_node_flags = self.pg_graph.nodes[curr_node]
                 
                 for nxt in undirected_pg.neighbors(curr_node):
                     edge_tuple = (min(curr_node, nxt), max(curr_node, nxt))
@@ -1752,8 +1760,8 @@ class GraphMaker():
                     if edge_tuple in unvisited_edges:
                         nxt_data = unvisited_edges[edge_tuple]
                         
-                        # RULE 2: Never follow a ['alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction'] or any rearrangement edge!
-                        if nxt_data.get('junction_type') is not None:
+                        # RULE 2: Never follow a structural junction edge
+                        if any(nxt_data.get(flag) for flag in junction_flags):
                             continue
                             
                         # Rule A: Check Momentum Overlap
@@ -1766,9 +1774,9 @@ class GraphMaker():
                             current_edges.append(edge_tuple)
                             current_nodes.add(nxt)
                             
-                            # RULE 1: MOMENTUM LOCK at Conflict Nodes (1, 3, 4)
+                            # RULE 1: MOMENTUM LOCK at Conflict Nodes
                             # Do not pick up new threads at a known evolutionary junction!
-                            if curr_conflict in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]:
+                            if any(curr_node_flags.get(flag) for flag in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]):
                                 new_momentum = momentum
                             else:
                                 # Normal accumulation on safe backbone nodes
@@ -1827,8 +1835,9 @@ class GraphMaker():
                 fam_id = d.get('family', 'unknown_fam')
                 function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
-                nc = d.get('node_class')
-                nc_tag = f"\tnc:Z:{nc}" if nc else ""
+                # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
+                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "is_scaffold_path"] if d.get(k)]
+                nc_tag = f"\tnc:Z:{','.join(node_bools)}" if node_bools else ""
                 al = d.get('alternate', 0)
                 cnv = d.get('cnv_cluster_id', 0)
 
@@ -1862,9 +1871,10 @@ class GraphMaker():
                 if d.get("inverted_block"):
                     sv_tags += "\tib:i:1"
                 
-                jt = d.get("junction_type")
-                if jt:
-                    sv_tags += f"\tjt:Z:{jt}"
+                # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
+                edge_bools = [k for k in ["alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "genomic_rearrangement", "intra_contig_rearrangement", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
+                if edge_bools:
+                    sv_tags += f"\tjt:Z:{','.join(edge_bools)}"
                     
                 # Output topology
                 out.write(f"L\t{u_name}\t+\t{v_name}\t+\t0M\twc:i:{seq_count}\tgc:i:{gen_count}{sv_tags}\n")
@@ -2482,9 +2492,9 @@ class GraphMaker():
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                existing['inverted_block'] = existing.get('inverted_block', False) or d.get('inverted_block', False)
-                if 'junction_type' in d:
-                    existing['junction_type'] = d['junction_type']
+                edge_bool_flags = ['inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'genomic_rearrangement', 'intra_contig_rearrangement', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
+                for flag in edge_bool_flags:
+                    existing[flag] = existing.get(flag, False) or d.get(flag, False)
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
@@ -2610,7 +2620,7 @@ class GraphMaker():
     def get_pg_id(self):
         return self.num_pg_nodes
 
-    def assign_pg_node(self, prev_feature, new_feature, pg_node, conflict=None):
+    def assign_pg_node(self, prev_feature, new_feature, pg_node, conflicts=None):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
 #         group_id=self.feature_index[new_feature].group_id
@@ -2655,9 +2665,9 @@ class GraphMaker():
             self.feature_index[new_feature].pg_assignment=cur_pg_id
         
         
-        if conflict != None:
-            if not "node_class" in self.pg_graph.nodes[cur_pg_id]:
-                self.pg_graph.nodes[cur_pg_id]["node_class"] = conflict
+        if conflicts:
+            for c in conflicts:
+                self.pg_graph.nodes[cur_pg_id][c] = True
             # else where for more comprehensive marking
             #if conflict == "shift" and not "alternate" in self.pg_graph.nodes[cur_pg_id]:
             #    self.pg_graph.nodes[cur_pg_id]["alternate"]=1
@@ -2804,21 +2814,22 @@ class GraphMaker():
             alt_nodes = set([])
             alt_nodes.update(pre_assignments[i]["assignments"].keys())
             for pg in pre_assignments[i]["assignments"]:
-                conflict_status = None
+                conflict_status = []
                 if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
-                    conflict_status = "repeat_ambiguity"
+                    conflict_status.append("repeat_ambiguity")
                 if ("c2_conflict" in conflicts[i] and pg in conflicts[i]["c2_conflict"]):
-                    conflict_status = "assembly_repeat_break"
+                    conflict_status.append("assembly_repeat_break")
                 if ("c1_conflict" in conflicts[i] and pg in conflicts[i]["c1_conflict"]):
-                    conflict_status = "synteny_breakpoint"
+                    conflict_status.append("synteny_breakpoint")
+
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
-                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflict=conflict_status)
+                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflicts=conflict_status)
             for pg in pre_assignments[i]["new_nodes"]:
                 new_pg = None
                 for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].items():
                     for f in features:
-                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflict=None)
+                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflicts=[])
                         alt_nodes.add(new_pg)
             if len(alt_nodes) > 1: self.storeAlternates(alt_nodes)
             i-=1
@@ -3671,10 +3682,9 @@ def main():
         superbubbles.update(d.get("superbubble_id", set()))
         
         # Unique Breakpoint Nodes
-        nc = d.get("node_class")
-        if nc == "synteny_breakpoint":
+        if d.get("synteny_breakpoint"):
             synteny_breakpoints_count += 1
-        elif nc == "assembly_repeat_break":
+        if d.get("assembly_repeat_break"):
             assembly_repeat_breaks_count += 1
 
     # Compile the strict event counts
