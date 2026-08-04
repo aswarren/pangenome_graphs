@@ -3699,6 +3699,7 @@ def main():
         "structural_rearrangements": synteny_breakpoints_count + sv_edges_count,  # Breakpoint nodes + Path Dropouts
         "inverted_blocks": inversions_count,                                      # 1 block = 1 event
         "assembly_breaks": scaffolds_count,  # Shattered nodes + Scaffold bridges
+        "fragmented_cnv": assembly_repeat_breaks_count,  # Shattered nodes + Scaffold bridges
         "parameters": {"k": pargs.ksize, "min": pargs.min},
         "block_manifest": list(block_ids),
         "contig_map": contig_map
