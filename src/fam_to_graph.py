@@ -809,7 +809,89 @@ class GraphMaker():
                 for g in self.contig_unorder.keys():
                     ch.write("\t".join([g] + list(self.contig_unorder[g].keys())) + "\n")
 
+    def write_reports(self, base_path):
+        import csv
+        
+        # Strip extension to use as a prefix
+        prefix = base_path.replace(".gexf", "").replace(".gfa", "")
+        
+        logging.warning("Exporting 5 tabular TSV reports...")
 
+        # 1. Synteny Similarity Matrix
+        with open(f"{prefix}_synteny_similarity.tsv", 'w') as f:
+            writer = csv.writer(f, delimiter='\t')
+            keys = sorted(self.similarity_matrix.keys())
+            writer.writerow(["ID"] + keys)
+            for k1 in keys:
+                row = [k1] + [self.similarity_matrix[k1].get(k2, 0) for k2 in keys]
+                writer.writerow(row)
+                
+        # 2. Scaffolding Recommendations
+        with open(f"{prefix}_scaffold_recommendations.tsv", 'w') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(["Node_U_Family", "Node_V_Family", "Target_Broken_Genomes", "Consensus_Support_Weight"])
+            for u, v, d in self.pg_graph.edges(data=True):
+                if d.get("is_scaffold_path"):
+                    u_fam = self.pg_graph.nodes[u].get('family', str(u))
+                    v_fam = self.pg_graph.nodes[v].get('family', str(v))
+                    targets = d.get("scaffold_entities", "")
+                    weight = d.get("weight", 0.0)
+                    if targets: # Only write the edges that carry the target names
+                        writer.writerow([u_fam, v_fam, targets, f"{weight:.4f}"])
+
+        # 3. Mobilized Genes / Dispersed Paralogs
+        with open(f"{prefix}_mobilized_gene_families.tsv", 'w') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(["CNV_Cluster_ID", "Protein_Family", "Function", "Total_Copies", "Replicons_Involved"])
+            for n, d in self.pg_graph.nodes(data=True):
+                if d.get("repeat_ambiguity_fragmentation"):
+                    cluster_id = d.get("cnv_cluster_id", 0)
+                    fam = d.get("family", "")
+                    func = d.get("label", "")
+                    
+                    replicons = set()
+                    copies = 0
+                    for g_id, c_dict in d.get("features", {}).items():
+                        if g_id in ["info", "md5", "start", "end"]: continue
+                        for c_id, f_list in c_dict.items():
+                            replicons.add(c_id)
+                            copies += len(f_list)
+                    writer.writerow([cluster_id, fam, func, copies, ",".join(replicons)])
+
+        # 4. Structural Variants & Junctions
+        with open(f"{prefix}_structural_variants.tsv", 'w') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(["Junction_Type", "Node_U_Family", "Node_V_Family", "Divergent_Genomes", "Consensus_Support_Weight"])
+            for u, v, d in self.pg_graph.edges(data=True):
+                jt = d.get("junction_type")
+                if jt:
+                    u_fam = self.pg_graph.nodes[u].get('family', str(u))
+                    v_fam = self.pg_graph.nodes[v].get('family', str(v))
+                    sv_ents = d.get("sv_entities", "")
+                    weight = d.get("weight", 0.0)
+                    writer.writerow([jt, u_fam, v_fam, sv_ents, f"{weight:.4f}"])
+
+        # 5. Superbubbles Catalog
+        if hasattr(self, 'completed_superbubbles'):
+            with open(f"{prefix}_superbubbles.tsv", 'w') as f:
+                writer = csv.writer(f, delimiter='\t')
+                writer.writerow(["Superbubble_ID", "Entry_Node_Family", "Exit_Node_Family", "Total_Allelic_Paths", "Max_Path_Length", "Internal_Genes"])
+                for bid, bubble in enumerate(self.completed_superbubbles, 1):
+                    entry_n = bubble['origin']
+                    paths = bubble['winning_paths']
+                    if not paths: continue
+                    exit_n = paths[0][-1]
+                    
+                    entry_fam = self.pg_graph.nodes[entry_n].get("family", str(entry_n))
+                    exit_fam = self.pg_graph.nodes[exit_n].get("family", str(exit_n))
+                    
+                    max_len = max(len(p) for p in paths)
+                    internal_genes = set()
+                    for p in paths:
+                        for internal_n in p[:-1]: # Don't list the exit node as internal
+                            internal_genes.add(self.pg_graph.nodes[internal_n].get("family", str(internal_n)))
+                            
+                    writer.writerow([bid, entry_fam, exit_fam, len(paths), max_len, ",".join(internal_genes)])
 
     def getTaxaIndicator(self, feature_id, mode="name"):
             if mode=="name":
@@ -1094,7 +1176,7 @@ class GraphMaker():
                     if self.pg_graph.has_edge(v, u):
                         self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
                         self.pg_graph.edges[v, u]['is_superbubble'] = True
-
+        self.completed_superbubbles = completed_bubbles # Save for TSV export
         logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")    
 
     def detect_and_annotate_superbubbles_scc(self):
@@ -1360,6 +1442,7 @@ class GraphMaker():
                     for direction in [(edge[0], edge[1]), (edge[1], edge[0])]:
                         if self.pg_graph.has_edge(*direction):
                             self.pg_graph.edges[direction]['is_scaffold_path'] = True
+                            self.pg_graph.edges[direction]['scaffold_entities'] = ",".join(data['walkers'])
             else:
                 #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
                 u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
@@ -3714,6 +3797,12 @@ def main():
     with open(pargs.output, 'w') as f:
         f.write(augmented_gexf)
 
+    with open(pargs.output, 'w') as f:
+        f.write(augmented_gexf)
+
+    # Trigger the TSV exports alongside the main GEXF/GFA
+    gmaker.write_reports(pargs.output)
+    
     if pargs.order_contigs != "none":
         unsorted_file = pargs.contig_output+".unsorted"
         gmaker.write_contigs(pargs.contig_output, unsorted_file)
