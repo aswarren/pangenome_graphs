@@ -85,6 +85,7 @@ class featureInfo():
         self.group_num=None
         self.start=None
         self.end=None
+        self.strand='+'
         self.function=""
         self.rf_forward=None # when this feature leaves out of its kmer window (left side) its in transition to this rf-node
         self.rf_reverse=None # when this feature leaves out of the kmer window (right side) its in transition to this rf-node
@@ -529,9 +530,9 @@ class featureParser():
         self.ip = None
         self.plaintab={'genome':0,'contig':1,'feature':2,'start':3, 'end':4, 'group':5}
         #self.ip={'taxid':2, 'genome':1, 'contig':3,'feature':2,'start':4, 'end':5, 'group':0}
-        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':15, 'function':14, 'organism':1}
-        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':16, 'function':14, 'organism':1}
-        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'group':17, 'function':14, 'organism':1}
+        self.pc_figfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'strand':11, 'group':15, 'function':14, 'organism':1}
+        self.pc_plfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'strand':11, 'group':16, 'function':14, 'organism':1}
+        self.pc_pgfam={'genome':0,'contig':2,'feature':5,'start':9, 'end':10, 'strand':11, 'group':17, 'function':14, 'organism':1}
         if self.file_type=="patric_tab" or self.file_type=="patric_genomes":
             self.parse=self.parseFeatureTab
             self.ip = self.plaintab
@@ -574,6 +575,8 @@ class featureParser():
                     result.genome_id=parts[self.ip['genome']]
                     result.start=int(parts[self.ip['start']])
                     result.end=int(parts[self.ip['end']])
+                    if 'strand' in self.ip:
+                        result.strand = parts[self.ip['strand']]
                     result.feature_ref = parts[self.ip['feature']]
                     result.organism = parts[self.ip['organism']]
                     
@@ -1657,53 +1660,56 @@ class GraphMaker():
         for u, v, d in self.pg_graph.edges(data=True):
             d["inverted_block"] = False
             
-            if self.pg_graph.has_edge(v, u):
+            # Condition 1: Topological Inversion (Physical Bidirectional Edges)
+            is_topological_inv = self.pg_graph.has_edge(v, u)
+            
+            # Condition 2: Relative Transcriptional Inversion (Different strands traversed this edge)
+            is_strand_inv = len(d.get("strands", set())) > 1
+            
+            if is_topological_inv or is_strand_inv:
                 d["inverted_block"] = True
                 inv_graph.add_edge(u, v)
 
             u_node = self.pg_graph.nodes[u]
             v_node = self.pg_graph.nodes[v]
             
-            target_classes = ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]
+            # --- REMOVED THE TARGET_CLASSES GATE ---
+            # Now we evaluate all edges for drop-outs to catch clean SVs!
+            drop_outs = set()
             
-            # Instantly check if any target class is True without iterating over the dictionary
-            if any(u_node.get(c) for c in target_classes) or any(v_node.get(c) for c in target_classes):
-                drop_outs = set()
+            u_feat = self.pg_graph.nodes[u].get('features', {})
+            v_feat = self.pg_graph.nodes[v].get('features', {})
+            
+            u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
+            v_cnv = self.pg_graph.nodes[v].get('cnv_cluster_id', 0)
+            
+            if self.context == "genome":
+                u_items = set(u_feat.keys()) - {'info', 'md5', 'start', 'end'}
+                v_items = set(v_feat.keys()) - {'info', 'md5', 'start', 'end'}
                 
-                u_feat = self.pg_graph.nodes[u].get('features', {})
-                v_feat = self.pg_graph.nodes[v].get('features', {})
+                # Pool bidirectional support to prevent inversions from flagging as dropouts
+                edge_items = set(d.get('genomes', set()))
+                if self.pg_graph.has_edge(v, u):
+                    edge_items.update(self.pg_graph.edges[v, u].get('genomes', set()))
+                    
+                shared_items = u_items.intersection(v_items)
+                drop_outs = shared_items - edge_items
                 
-                u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
-                v_cnv = self.pg_graph.nodes[v].get('cnv_cluster_id', 0)
+            elif self.context == "contig":
+                u_items, v_items = set(), set()
+                for gen_dict in u_feat.values():
+                    if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
+                for gen_dict in v_feat.values():
+                    if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
+                    
+                edge_items = set(d.get('sequences', set()))
+                if self.pg_graph.has_edge(v, u):
+                    edge_items.update(self.pg_graph.edges[v, u].get('sequences', set()))
+                    
+                shared_items = u_items.intersection(v_items)
+                drop_outs = shared_items - edge_items
                 
-                if self.context == "genome":
-                    u_items = set(u_feat.keys()) - {'info', 'md5', 'start', 'end'}
-                    v_items = set(v_feat.keys()) - {'info', 'md5', 'start', 'end'}
-                    
-                    # Pool bidirectional support to prevent inversions from flagging as dropouts
-                    edge_items = set(d.get('genomes', set()))
-                    if self.pg_graph.has_edge(v, u):
-                        edge_items.update(self.pg_graph.edges[v, u].get('genomes', set()))
-                        
-                    shared_items = u_items.intersection(v_items)
-                    drop_outs = shared_items - edge_items
-                    
-                elif self.context == "contig":
-                    u_items, v_items = set(), set()
-                    for gen_dict in u_feat.values():
-                        if isinstance(gen_dict, dict): u_items.update(gen_dict.keys())
-                    for gen_dict in v_feat.values():
-                        if isinstance(gen_dict, dict): v_items.update(gen_dict.keys())
-                        
-                    edge_items = set(d.get('sequences', set()))
-                    if self.pg_graph.has_edge(v, u):
-                        edge_items.update(self.pg_graph.edges[v, u].get('sequences', set()))
-                        
-                    shared_items = u_items.intersection(v_items)
-                    drop_outs = shared_items - edge_items
-                    base_sv_class = "intra_contig_rearrangement"
-                    
-                if drop_outs:
+            if drop_outs:
                     
                     # If this edge carries the majority of the shared genomes, it is the Highway.
                     # Do not impugn
@@ -1717,6 +1723,10 @@ class GraphMaker():
                     cnv_detours = set()
                     assembly_gaps = set()
                     
+                    # Track the physical nature of the divergence
+                    is_intra_contig = False
+                    is_inter_contig = False
+                    
                     for drop_gen in drop_outs:
                         u_term = target_is_terminal_in_node(drop_gen, u)
                         v_term = target_is_terminal_in_node(drop_gen, v)
@@ -1725,40 +1735,39 @@ class GraphMaker():
                             assembly_gaps.add(drop_gen)
                             continue
                             
-                        # --- NEW: PRECISE CNV DETOUR LOGIC ---
+                        # --- PRECISE CNV DETOUR LOGIC ---
                         is_detour = False
-                        
-                        # Case 1: The edge itself connects two copies of the same CNV
                         if u_cnv != 0 and u_cnv == v_cnv:
                             is_detour = True
-                            
-                        # Case 2: The genome exited U and went into a different copy of V
                         if not is_detour and v_cnv != 0:
                             for neighbor in UG.neighbors(u):
                                 if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == v_cnv:
                                     if drop_gen in get_edge_genomes(u, neighbor):
-                                        is_detour = True
-                                        break
+                                        is_detour = True; break
                                         
-                        # Case 3: The genome entered V from a different copy of U
                         if not is_detour and u_cnv != 0:
                             for neighbor in UG.neighbors(v):
                                 if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == u_cnv:
                                     if drop_gen in get_edge_genomes(v, neighbor):
-                                        is_detour = True
-                                        break
+                                        is_detour = True; break
                         # -------------------------------------
                         
                         if is_detour:
                             cnv_detours.add(drop_gen)
                         else:
                             true_rearrangements.add(drop_gen)
+                            # DYNAMIC TOPOLOGY CHECK: Are U and V on the same contig for this genome?
+                            u_contigs = set(self.pg_graph.nodes[u]['features'][drop_gen].keys())
+                            v_contigs = set(self.pg_graph.nodes[v]['features'][drop_gen].keys())
+                            if u_contigs & v_contigs:
+                                is_intra_contig = True
+                            else:
+                                is_inter_contig = True
                             
                     # Apply final tags based on precisely parsed dropouts
                     if true_rearrangements:
                         assigned_jct = False
                         
-                        # Apply ALL applicable junction booleans simultaneously!
                         if u_node.get("alternative_path") or v_node.get("alternative_path"):
                             d["alt_path_junction"] = True
                             assigned_jct = True
@@ -1769,6 +1778,12 @@ class GraphMaker():
                             d["repeat_fragmentation_junction"] = True
                             assigned_jct = True
                             
+                        # If none of the above, apply our dynamic structural divergence flags!
+                        if not assigned_jct:
+                            if is_inter_contig:
+                                d["inter_contig_rearrangement"] = True
+                            if is_intra_contig:
+                                d["intra_contig_rearrangement"] = True
                             
                         d["sv_entities"] = ",".join(true_rearrangements)
                         sv_edges += 1
@@ -1954,7 +1969,7 @@ class GraphMaker():
                     sv_tags += "\tib:i:1"
                 
                 # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                edge_bools = [k for k in ["alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
+                edge_bools = [k for k in ['inter_contig_rearrangement', 'intra_contig_rearrangement', "alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
                 if edge_bools:
                     sv_tags += f"\tjt:Z:{','.join(edge_bools)}"
                     
@@ -2523,7 +2538,7 @@ class GraphMaker():
         return num_features
 
 
-    def construct_pg_edge(self, prev_pg_id, cur_pg_id, genome_id, sequence_id):
+    def construct_pg_edge(self, prev_pg_id, cur_pg_id, genome_id, sequence_id, strand='+'):
             # Determine the unit based on Context
             context_key = genome_id if self.context == "genome" else sequence_id
             
@@ -2540,8 +2555,9 @@ class GraphMaker():
                 
                 edge_data["genomes"].add(genome_id)
                 edge_data["sequences"].add(sequence_id)
+                edge_data.setdefault("strands", set()).add(strand) # <-- Store the consensus strand!
             else:
-                self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes={genome_id}, sequences={sequence_id})
+                self.pg_graph.add_edge(prev_pg_id, cur_pg_id, genomes={genome_id}, sequences={sequence_id}, strands={strand})
 
 
 
@@ -2574,7 +2590,7 @@ class GraphMaker():
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                edge_bool_flags = ['inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
+                edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement','inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
                 for flag in edge_bool_flags:
                     existing[flag] = existing.get(flag, False) or d.get(flag, False)
                 
@@ -2702,7 +2718,7 @@ class GraphMaker():
     def get_pg_id(self):
         return self.num_pg_nodes
 
-    def assign_pg_node(self, prev_feature, new_feature, pg_node, conflicts=None):
+    def assign_pg_node(self, prev_feature, new_feature, pg_node, conflicts=None, relative_strand='+'):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
 #         group_id=self.feature_index[new_feature].group_id
@@ -2756,7 +2772,7 @@ class GraphMaker():
 
         if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
-            self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id)
+            self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id, strand=relative_strand)
             #if conflict:
             #    tier2=self.conflicts.setdefault(cur_pg_id, {})
             #    conflicted=tier2.setdefault(prev_pg_id, set([]))
@@ -2906,12 +2922,26 @@ class GraphMaker():
 
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
-                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflicts=conflict_status)
+                        # Translate the raw strand based on the TFS traversal direction!
+                        raw_strand = self.feature_index[f.new_feature].strand
+                        if f.direction == 1:  # 1 = decreasing/backward traversal
+                            rel_strand = '+' if raw_strand == '-' else '-'
+                        else:
+                            rel_strand = raw_strand
+                            
+                        self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflicts=conflict_status, relative_strand=rel_strand)
             for pg in pre_assignments[i]["new_nodes"]:
                 new_pg = None
                 for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].items():
                     for f in features:
-                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflicts=[])
+                        # Translate the raw strand based on the TFS traversal direction!
+                        raw_strand = self.feature_index[f.new_feature].strand
+                        if f.direction == 1:
+                            rel_strand = '+' if raw_strand == '-' else '-'
+                        else:
+                            rel_strand = raw_strand
+                            
+                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflicts=[], relative_strand=rel_strand)
                         alt_nodes.add(new_pg)
             if len(alt_nodes) > 1: self.storeAlternates(alt_nodes)
             i-=1
@@ -3227,7 +3257,14 @@ class GraphMaker():
                             elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
                                 edge_only=True
-                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id)
+                                
+                                raw_strand = self.feature_index[new_feature].strand
+                                if direction == 1:
+                                    rel_strand = '+' if raw_strand == '-' else '-'
+                                else:
+                                    rel_strand = raw_strand
+                                    
+                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id, strand=rel_strand)
                             else:
                                 logging.warning("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID))
                                 raise Exception("LogicError")
