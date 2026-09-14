@@ -1660,13 +1660,16 @@ class GraphMaker():
         for u, v, d in self.pg_graph.edges(data=True):
             d["inverted_block"] = False
             
-            # Condition 1: Topological Inversion (Physical Bidirectional Edges)
+            # Condition 1: Topological Inversion (Bidirectional edges)
             is_topological_inv = self.pg_graph.has_edge(v, u)
             
-            # Condition 2: Relative Transcriptional Inversion (Different strands traversed this edge)
-            is_strand_inv = len(d.get("strands", set())) > 1
+            # Condition 2: Edge-level Strand Flip (Multiple strands on the same edge)
+            is_edge_strand_inv = len(d.get("strands", set())) > 1
             
-            if is_topological_inv or is_strand_inv:
+            # Condition 3: Node-level Strand Flip (Both flanking genes are inverted!)
+            is_node_inv = self.pg_graph.nodes[u].get("inverted_block") and self.pg_graph.nodes[v].get("inverted_block")
+            
+            if is_topological_inv or is_edge_strand_inv or is_node_inv:
                 d["inverted_block"] = True
                 inv_graph.add_edge(u, v)
 
@@ -1932,8 +1935,8 @@ class GraphMaker():
                 fam_id = d.get('family', 'unknown_fam')
                 function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
-                # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "is_scaffold_path"] if d.get(k)]
+# Dynamically bundle all active boolean flags into a single comma-separated GFA tag
+                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "is_scaffold_path", "inverted_block"] if d.get(k)]
                 nc_tag = f"\tnc:Z:{','.join(node_bools)}" if node_bools else ""
                 al = d.get('alternate', 0)
                 cnv = d.get('cnv_cluster_id', 0)
@@ -2770,6 +2773,11 @@ class GraphMaker():
             #if conflict == "shift" and not "alternate" in self.pg_graph.nodes[cur_pg_id]:
             #    self.pg_graph.nodes[cur_pg_id]["alternate"]=1
 
+        node_strands = self.pg_graph.nodes[cur_pg_id].setdefault("strands", set())
+        node_strands.add(relative_strand)
+        if len(node_strands) > 1:
+            self.pg_graph.nodes[cur_pg_id]["inverted_block"] = True
+
         if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
             self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id, strand=relative_strand)
@@ -2850,6 +2858,67 @@ class GraphMaker():
             i=self.ksize-1
             while i >= 0:
                 for ik, features in feature_pile[i]["by_instance"].items():
+                    # 1. Separate guided features from unguided features
+                    guided_assignments = collections.defaultdict(set)
+                    unguided_features = set()
+                    
+                    max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
+                    valid_pgs = set()
+                    if max_keys[0] is not None:
+                        for k in max_keys:
+                            valid_pgs.add(pre_assignments[i]["inst_key_map"][k])
+                            
+                    for f in features:
+                        f_signed = self.sign_feature(f.new_feature, f.direction)
+                        assigned_to_guide = False
+                        
+                        # Check if this specific feature is a known guide for any valid_pg
+                        for pg in valid_pgs:
+                            if pg in pre_assignments[i]["assignments"] and ik in pre_assignments[i]["assignments"][pg]["guides"]:
+                                if f_signed in pre_assignments[i]["assignments"][pg]["guides"][ik]:
+                                    guided_assignments[pg].add(f)
+                                    assigned_to_guide = True
+                                    break
+                            if pg in pre_assignments[i]["new_nodes"] and ik in pre_assignments[i]["new_nodes"][pg]["guides"]:
+                                if f_signed in pre_assignments[i]["new_nodes"][pg]["guides"][ik]:
+                                    guided_assignments[pg].add(f)
+                                    assigned_to_guide = True
+                                    break
+                        
+                        if not assigned_to_guide:
+                            unguided_features.add(f)
+                            
+                    # 2. Process guided features (they go exactly to their guided PGs)
+                    for pg, sub_features in guided_assignments.items():
+                        block = "assignments" if pg in pre_assignments[i]["assignments"] else "new_nodes"
+                        cur_assignments = pre_assignments[i][block][pg]["features"].setdefault(ik, set())
+                        cur_assignments.update(sub_features)
+                        
+                    # 3. Process unguided features (close SNP bubbles or emit new node)
+                    if unguided_features:
+                        if valid_pgs:
+                            max_f = -1
+                            best_pg = None
+                            for pg in valid_pgs:
+                                n_f = self.num_features_pg_node(pg) if type(pg) != str else 0
+                                if n_f > max_f:
+                                    max_f = n_f
+                                    best_pg = pg
+                            block = "assignments" if best_pg in pre_assignments[i]["assignments"] else "new_nodes"
+                            cur_assignments = pre_assignments[i][block][best_pg]["features"].setdefault(ik, set())
+                            cur_assignments.update(unguided_features)
+                        else:
+                            # No guides exist at all! Create a new node for them.
+                            tmp_id = "nn"+str(len(pre_assignments[i]["new_nodes"].keys()))
+                            guide_feature = next(iter(unguided_features))
+                            self.track_guide(pre_assignments, guide_feature.new_feature, i, negative=guide_feature.direction, target_pg=tmp_id, new_node=True)
+                            
+                            cur_assignments = pre_assignments[i]["new_nodes"][tmp_id]["features"].setdefault(ik, set())
+                            cur_assignments.update(unguided_features)
+                i-=1
+            i=self.ksize-1
+            while i >= 0:
+                for ik, features in feature_pile[i]["by_instance"].items():
                     max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
                     if max_keys[0] == None: #no guides exist
                         #create new node and put it in
@@ -2922,9 +2991,8 @@ class GraphMaker():
 
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
-                        # Translate the raw strand based on the TFS traversal direction!
                         raw_strand = self.feature_index[f.new_feature].strand
-                        if f.direction == 1:  # 1 = decreasing/backward traversal
+                        if f.direction == 1:
                             rel_strand = '+' if raw_strand == '-' else '-'
                         else:
                             rel_strand = raw_strand
@@ -3723,6 +3791,11 @@ def main():
     gmaker.serialize_graph_for_gexf(graph_to_write)
     
     if pargs.layout:
+        gexf_capture = io.BytesIO() 
+        nx.readwrite.write_gexf(graph_to_write, gexf_capture) 
+        # Decode the bytes into a string
+        raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
+    
         # 1. Check if the user provided it via an environment variable (Great for HPC / module systems)
         layout_jar = os.environ.get('PANACONDA_LAYOUT_JAR')
         
@@ -3731,7 +3804,7 @@ def main():
             flat_bin_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "gexf_layout.jar")
             if os.path.exists(flat_bin_path):
                 layout_jar = flat_bin_path
-                
+        layout_cmd=""        
         # 3. Fallback to the legacy submodule path
         if not layout_jar:
             layout_jar = os.path.join(os.path.dirname(os.path.realpath(__file__)), "layout", "pangenome_layout", "bin", "gexf_layout.jar")
@@ -3746,29 +3819,24 @@ def main():
             layout_cmd = ["java", "-jar", layout_jar]
             # ... execute Popen ...
 
-        gexf_capture = io.BytesIO() 
-        nx.readwrite.write_gexf(graph_to_write, gexf_capture) 
-        # Decode the bytes into a string
-        raw_gexf_str = gexf_capture.getvalue().decode('utf-8')
-
-        cur_path = os.path.dirname(os.path.realpath(__file__))
-        logging.warning("laying out graph")
-        #layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
-        logging.warning(" ".join(layout_cmd))
-        
-        # In Python 3, Popen with string input requires text=True
-        p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True)
-        raw_gexf_output, err = p.communicate(input=raw_gexf_str)
-        if err and err.strip():
-            logging.warning("--- Layout Algorithm STDERR ---")
-            logging.warning(err.strip())
-            logging.warning("-------------------------------")
+            cur_path = os.path.dirname(os.path.realpath(__file__))
+            logging.warning("laying out graph")
+            #layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
+            logging.warning(" ".join(layout_cmd))
             
-        if p.returncode != 0:
-            logging.error(f"Layout algorithm failed with return code {p.returncode}")
-            # Optional: Fallback to the un-laid-out graph if Java completely crashed
-            if not raw_gexf_output:
-                raw_gexf_output = raw_gexf_str
+            # In Python 3, Popen with string input requires text=True
+            p = Popen(layout_cmd, stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True)
+            raw_gexf_output, err = p.communicate(input=raw_gexf_str)
+            if err and err.strip():
+                logging.warning("--- Layout Algorithm STDERR ---")
+                logging.warning(err.strip())
+                logging.warning("-------------------------------")
+                
+            if p.returncode != 0:
+                logging.error(f"Layout algorithm failed with return code {p.returncode}")
+                # Optional: Fallback to the un-laid-out graph if Java completely crashed
+                if not raw_gexf_output:
+                    raw_gexf_output = raw_gexf_str
         
         # --- FIX: Clean up malformed JSON double-quotes "" created by Gephi Java exporter ---
         #cleaned_gexf = raw_gexf_output.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
