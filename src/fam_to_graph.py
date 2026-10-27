@@ -25,52 +25,10 @@ import logging
 import urllib 
 import collections
 
-def pretty_print_POST(req):
-    """
-    printed and may differ from the actual request.
-    """
-    print('{}\n{}\n{}\n\n{}'.format(
-        '-----------START-----------',
-        req.method + ' ' + req.url,
-        '\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items()),
-        req.body,
-    ))
-
-
-
-#from lxml.etree import Element, ElementTree, tostring, fromstring, register_namespace, CDATA
-#try:
-#    from xml.etree.cElementTree import Element, ElementTree, tostring, fromstring, register_namespace, SubElement
-#except ImportError:
-#    try:
-#        from xml.etree.ElementTree import Element, ElementTree, tostring, fromstring, register_namespace, SubElement
-#    except ImportError:
-#        pass
+embed_info = False
 
 ##This script expects files which contain a list of consecutive protein family ID's for the replicons in an organism
 ## and some kind of summary information about where the kmers come from
-
-##NCBI_TAX_ID     RANK    TAX_PATH
-##590     genus   220341,90370,59201,28901,590
-#genome_name	genome_info_id	ncbi_tax_id	taxon_lineage_ids
-
-##NAME    NCBI_TAX_ID     ACCESSION       START_MIN
-##FIG01045527     946034  AERV01000001    507
-#fam_id		gid	ncbi_tax_id	sequence_info_id	start_max	figfam_product
-
-
-ip={'org_id':0,'contig_id':1,'locus_id':2,'start':3, 'end':4, 'fam_id':5}
-fi={'fam_id':0,'fam_description':1}
-
-
-
-#Edge Classes by reverse status. Here indexed to zero. Class 1: Forward, Forward; Class2: Forward, Reverse; Class3:Reverse, Forward; Class4:Reverse, Reverse
-edgeClass={(False,False):1,(False,True):2,(True,False):4,(True,True):8}
-edgePossible=set([1,2,4,8])
-
-def warning(*objs):
-    for o in objs:
-        print(o, file=sys.stderr)
 
 ##Class for storing information about the origin of a Kmer
 class featureInfo():
@@ -103,26 +61,6 @@ class featureInfo():
     def addEndInfo(self, rf_id, rhs, direction):
         self.rf_ends.append((rf_id, rhs, direction)) # storing the id of the feature on the rhs for convenience. effectively tells you what side *this* feature is on
 
-
-    def compareInstance(self, other_feature):
-        count1=self.instance_key.count(".")
-        count2=other_feature.instance_key.count(".")
-        short_str = long_str = None
-        if count1 == count2 == self.ksize:
-            return self.instance_key == other_feature.instance_key
-        elif count1 >= count2:
-            short_str = other_feature.instance_key
-            long_str = self.instance_key
-        else:
-            short_str = self.instance_key
-            long_str = other_feature.instance_key
-
-        short_option2= ".".join(short_str.split(".")[::-1])  # reverse
-
-        return long_str.startswith(short_str) or long_str.startswith(short_option2) or long_str.endswith(short_str) or long_str.endswith(short_option2)
-
-
-
     def getContextValue(self, context):
         if context=="genome":
             return self.genome_id
@@ -131,70 +69,6 @@ class featureInfo():
         else:
             return None
 
-    def getString(self):
-        #result="|".join([self.contig_id,self.org_id,str(self.start),str(self.end),self.function,self.fam_id])
-        #return result
-        return line
-    def getParts(self):
-        return line.split("\t")
-
-    def dict_to_line(self, target):
-        line_list=[None for i in range(len(ip))]
-        for k in ip:
-            line_list[ip[k]]=str(target[k])
-        return "\t".join(line_list)
-
-    #calculate region between genes
-    def getInterFeature(self,nxt_feature):
-        #print "from "+self.fam_id+" to "+nxt_feature.fam_id
-        cur_info=self.parse_line(self.line)
-        nxt_info=self.parse_line(nxt_feature.line)
-        edge_info={}
-        edge_info['contig_id']=cur_info['contig_id']
-        edge_info['org_id']=cur_info['org_id']
-        edge_info['start']=int(cur_info['end'])+1
-        edge_info['end']=int(nxt_info['start'])-1
-        edge_info['fam_id']="EDGE"
-        edge_info['locus_id']="None"
-        result=geneInfo(self.dict_to_line(edge_info))
-        return result
-
-    def parse_line(self, line=None):
-        result={}
-        if line == None:
-            line =self.line
-        try:
-            parts=line.strip().split("\t")
-            result['fam_id']=parts[ip['fam_id']]
-            result['contig_id']=parts[ip['contig_id']]
-            result['org_id']=parts[ip['org_id']]
-            result['start']=parts[ip['start']]
-            result['end']=parts[ip['end']]
-        except:
-            logging.debug("parsing problem. couldn't parse line: "+line)
-        return result
-    def getLocation(self):
-        result=self.parse_line(self.line)
-        return [result['contig_id'],result['start'],result['end']]
-        #return [self.contig_id, self.start, self.end]
-    def getLocationString(self):
-        result=self.parse_line(self.line)
-        return ":".join([result['contig_id'],str(result['start']),str(result['end'])])
-        #return ":".join([self.contig_id, str(self.start), str(self.end)])
-    def getFeatureString(self, delim=":"):
-        result=self.parse_line(self.line)
-        return delim.join([result['contig_id'],str(result['start']),str(result['end']), str(result['fam_id']), result['org_id']])
-        #return delim.join([self.contig_id, str(self.start), str(self.end), str(fam_id), str(org_id)])
-    def getReplicon(self):
-        result=self.parse_line(self.line)
-        return result['contig_id']
-    def getOrganism(self):
-        result=self.parse_line(self.line)
-        return result['org_id']
-    def getFam(self):
-        result=self.parse_line(self.line)
-        return result['fam_id']
-        #return self.org_id
 
 ##Class for storing all the geneInfo in a particular node
 ##along with the kmer information. does not store information in direction
@@ -212,19 +86,7 @@ class rfNode():
         self.split=False
         self.has_forward=False
         self.has_reverse=False
-        #dfs non-recursive variables
-        #self.done=False
-        #self.visited=False
-        #self.descending=True
-        #old variables
-        self.weightLabel=None
-        self.weight=None
-        self.linkOut={}#four classes of edges
-        self.visited=False
-        self.queued=False
-        self.self_edge=False
         self.numBins =0
-        #self.curRevStatus=rev_status
     
     def bidirectional(self):
         return (len(self.features[0]) > 0 or len(self.assigned_features[0]) > 0) and (len(self.features[1]) > 0 or len(self.assigned_features[1]) > 0)
@@ -241,281 +103,6 @@ class rfNode():
         else:
             self.features[0].add(feature_list[-1])#for space efficency only store right most feature in kmer
             self.has_forward=True
-    #each cell in list stores info[LetterOfKmer]=geneInfo()
-    def addInfo(self, position, cur_fam, info):
-        if self.infoList[position] != None:
-            if self.infoList[position][0]!=cur_fam:
-                logging.warning("logical error: trying to insert information about wrong family\n")
-                sys.exit()
-            self.infoList[position][-1].append(info)
-        else:
-            self.infoList[position]=(cur_fam,[info])
-    #add intergenic information to what will eventually become pan-genome edges
-    def addPGEInfo(self, inter_info, position):
-        if position > len(self.peInfo)-1:
-            print("out of bounds "+str(position)+" for "+" ".join(self.peInfo))
-        else:
-            self.peInfo[position].add(inter_info)
-
-    def addEdges(self,node_id,nxt_rev_status):
-        #get class of edge type
-        #if self.nodeID ==1 and node_id ==0:
-        #	print "Debug: makes no sense for this to link backwards"
-        edgeStatus=edgeClass[(self.curRevStatus,nxt_rev_status)]
-        if node_id in self.linkOut:
-            self.linkOut[node_id]=self.linkOut[node_id]|edgeStatus #bitwise OR to represent both multi status
-        else:
-            self.linkOut[node_id]=edgeStatus
-
-    #if the node has been visited before update its references
-    def updateNode(self, prev_node, in_edge_status, storage):
-        update_pos=[]
-        #ordered pg-node references to project onto current node	
-        if (not in_edge_status in edgePossible):
-            logging.warning("unforseen case: transitioning from "+"|".join(prev_node.infoList.keys())+" to "+"|".join(self.infoList.keys()))
-        #update references to pg-nodes from overlapping portion of previous k-mer
-        if in_edge_status & 1:
-            update_pos = list(range(1, len(prev_node.pgRefs), 1)) + [None]
-        elif in_edge_status & 2:
-            update_pos = [None] + list(range(len(prev_node.pgRefs)-1, 0, -1))
-        elif in_edge_status & 4:
-            update_pos = list(range(len(prev_node.pgRefs)-2, -1, -1)) + [None]
-        elif in_edge_status & 8:
-            update_pos = [None] + list(range(0, len(prev_node.pgRefs)-1, 1))
-        for cur_pos, prev_pos in enumerate(update_pos):
-            if prev_pos != None:
-                if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
-                    self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
-                elif prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
-                    storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
-                
-            
-    #if the node has not been visited before transfer previous references
-    def transferRefs(self, prev_node, in_edge_status, storage):
-        #add references to pg-nodes from overlapping portion of previous k-mer
-        #if in_edge_status & 1:
-        #	for n in prev_node.pgRefs[1:]:self.pgRefs.append(n)
-        #elif in_edge_status & 2:
-        #	for n in reversed(prev_node.pgRefs[1:]):self.pgRefs.append(n)
-        #elif in_edge_status & 4:
-        #	for n in reversed(prev_node.pgRefs[0:-1]):self.pgRefs.append(n)
-        #elif in_edge_status & 8:
-        #	for n in prev_node.pgRefs[0:-1]):self.pgRefs.append(n)
-        #if self.nodeID == 1 or self.nodeID ==2 or (prev_node != None and (prev_node.nodeID ==1 or prev_node.nodeID ==2)):
-        #	print "Debug: pgRefs and in_edge_status screwed up"
-        update_pos=[] #ordered pg-node references to project onto current node	
-        #update references to pg-nodes from overlapping portion of previous k-mer
-        if in_edge_status & 1:
-            update_pos = list(range(1, len(prev_node.pgRefs), 1)) + [None]
-        elif in_edge_status & 2:
-            update_pos = [None] + list(range(len(prev_node.pgRefs)-1, 0, -1))
-        elif in_edge_status & 4:
-            update_pos = list(range(len(prev_node.pgRefs)-2, -1, -1)) + [None]
-        elif in_edge_status & 8:
-            update_pos = [None] + list(range(0, len(prev_node.pgRefs)-1, 1))
-        for cur_pos, prev_pos in enumerate(update_pos):
-            if prev_pos != None:
-                if self.pgRefs[cur_pos] == None: #happens if already queued. transfer the reference
-                    self.pgRefs[cur_pos]=prev_node.pgRefs[prev_pos]
-                elif prev_node.pgRefs[prev_pos] != self.pgRefs[cur_pos]:
-                    storage.updatePGNode(prev_node.pgRefs[prev_pos], self.pgRefs[cur_pos])
-
-    #apply this kmers location info to current pg-node references
-    def applyInfo(self,storage):
-        #infoList is an OrderedDict
-        #if self.nodeID == 1 or self.nodeID ==2:
-        #	print "Debug: pgRefs and in_edge_status screwed up"
-        for count,info in enumerate(self.infoList):
-            nid=self.pgRefs[count]
-            storage.addInfoPGNode(nid,info[-1])#adds the node. edges are implied within every k-mer 
-
-    def addPGEdges(self,storage):
-        #if self.nodeID == 1 or self.nodeID ==2 :
-        #	print "Debug: pgRefs and in_edge_status screwed up"
-        for i in range(0,len(self.pgRefs)-1,1):
-            if self.pgRefs[i] == None or self.pgRefs[i+1] == None:
-                print("missing pg-nodes in "+str(self.nodeID))
-                sys.exit()
-            if len(self.peInfo[i]):
-                storage.getPGNode(self.pgRefs[i]).addEdge(self.pgRefs[i+1],self.peInfo[i])
-
-    #1st process previous knode using incoming direction edge to put ref in this kmer. And add this kmers labels to previous references.
-    #2nd Add edges to new family added in this kmer FOR ALL INCOMING EDGE TYPES
-    #if there is no previous node just straight expand it
-    #3rd Check outbound k nodes to see if identity process necessary (in BFS)
-    #4th when checking outbound k nodes see if prev_node == next_node OR cur_node == next_node
-    #NOTES direction does not matter at the pg-edge/node level
-    #model letters in k-mer more explicitly than stupid | separated     	
-    def visitNode(self, prev_node, in_edge_status, storage):
-        #if self.nodeID == 1 or self.nodeID ==2 or (prev_node != None and (prev_node.nodeID ==1 or prev_node.nodeID ==2)):
-        #	print "Debug: pgRefs and in_edge_status screwed up"
-        #if self.nodeID ==3261:
-        #	print "Debug: investigate here"
-        if prev_node == None:
-            for count,info in enumerate(self.infoList):
-                g_id=storage.addPGNode(info[0],info[-1])#adds the node. edges are implied within every k-mer 
-                self.pgRefs[count]=g_id
-        else:
-            
-            if (not in_edge_status in edgePossible):
-                logging.warning("unforseen case: transitioning from "+"|".join([x[0] for x in prev_node.infoList])+" to "+"|".join([x[0] for x in self.infoList]))
-
-            #if the beginnning of this kmer is new create a pg-node for it and a reference to it in this kmer
-            #handle new portion exposed in this kmer
-            #case 2|8 =10
-            if (in_edge_status & 10):
-                g_id=storage.addPGNode(self.infoList[0][0],self.infoList[0][-1])
-                self.pgRefs[0]=g_id
-
-            #transfer references from previous k-mer
-            #if self.nodeID==3261:
-            #	print "Debug: look at transfer of references to this node"
-            self.transferRefs(prev_node, in_edge_status, storage)
-    
-            #if the end of *this* kmer is new create a PG-node for it and add the reference to this kmer
-            #handle new portion exposed in this kmer
-            #case 1|4 =5
-            if (in_edge_status & 5):
-                g_id=storage.addPGNode(self.infoList[-1][0],self.infoList[-1][-1])
-                self.pgRefs[-1]=g_id
-            #some information may be unique to this kmer. apply it to the pg-nodes
-            self.applyInfo(storage)
-
-        self.visited=True
-                
-    def getReplicons(self):
-        result=set([])
-        #all the replicons should be the same for each fam in this kmer
-        for fam in self.infoList:
-            for info in fam[-1]: 
-                result.add(info.getReplicon())
-        return result
-    def testNode(self):
-        #make sure that all the families in the kmer come from same replicons
-        ref_set=set([info.getReplicon() for info in self.infoList[0][-1]])
-        for tup in self.infoList:
-            test_set=set([])
-            for info in tup[-1]:
-                test_set.add(info.getReplicon())
-            if test_set != ref_set:
-                warning("kmer "+self.nodeID+" has inconsistent replicons")
-                
-#pg-node "incubator" class
-class pgShell():
-    def __init__(self, nid,fid,gene_list):
-        self.node_id=nid
-        self.subsumed=False
-        self.consumed_list=[]#ids of the things its consumed
-        self.famSubset=famVersion(nid, fid,gene_list)
-        self.edges={}#key is nodeRef, value is set of geneInfo intergenic
-    def addEdge(self, nodeRef, e_info):
-        if not nodeRef in self.edges:
-            self.edges[nodeRef]=e_info.copy()
-        else: self.edges[nodeRef].update(e_info)
-    def addInfo(self, info_list):
-        for i in info_list:
-            self.famSubset.instances.add(i)
-    def subsumeNode(self, target):
-        for nid in target.edges:
-            if nid in self.edges:
-                self.edges[nid].update(target.edges[nid])
-            else:
-                self.edges[nid]=target.edges[nid] #Does this need to be copied?? It is a reference to a set after all...
-        self.famSubset.instances.update(target.famSubset.instances)
-        target.famSubset.subsumed=True
-        self.consumed_list.append(target.node_id)
-        self.consumed_list.extend(target.consumed_list)
-        
-#provides a summary of where this family occurs
-#a family may be differentiated into multiple version depending on its ocurrence in kmers
-class famVersion():
-    def __init__(self, id, famID, id_list):
-        self.summary_status=False
-        self.id=id
-        self.famID=famID
-        self.instances=set(id_list) #set of locations that identify this version of family
-        self.organisms=set()
-        self.tax_summary=set()
-        self.replicons=set()
-        self.locations=set()
-        self.functions=set()
-    #returns of summary items
-    def get_summary(self):
-        if not self.summary_status:
-            for i in self.instances:
-                self.replicons.add(i.getReplicon())
-                self.organisms.add(i.getOrganism())
-                self.locations.add(i.getLocationString())
-            self.summary_status=True
-        result={"replicons":self.replicons, "organisms":self.organisms, "locations":self.locations, "functions":self.functions}
-        return result
-        
-        
-#storing information about each protein family
-#function, name, locations
-#organizes occurences into versions depending on kmer
-class famInfo():
-    def __init__(self, fID):
-        self.fID=fID
-        self.versions=[]#stores famSummary objects which detail locations
-        self.label=""
-        self.description=""
-    #checks to see if the ID set that has changed now overlaps with any of the other sets
-    #function returns the number to adjust original idx by to account for emptied sets
-    def checkChainReaction(self, idx, fID, threshold, start=-1):
-        debug=False
-        num_adjust=0
-        adjustment=True
-        sets_merged=False #inefficient. should figure out which sets are merged and only updated those
-        while adjustment:
-            found=False
-            for idx2, v in enumerate(self.versions):
-                if idx2 != idx and idx2 > start: #id_set_list[0:idx]+id_set_list[idx+1:]:
-                    intersect=self.versions[idx].instances.intersection(v.instances)
-                    score=len(intersect)
-                    if(score>=threshold):
-                        if debug and fID == "FIG00638284":
-                            warning("Merging groups for "+fID)
-                            warning("Intersection", [':'.join(x.getLocation()) for x in intersect])
-                            warning("Group1", [':'.join(x.getLocation()) for x in self.versions[idx].instances])
-                            warning("Group2",[':'.join(x.getLocation()) for x in v.instances])
-                        self.versions[idx].instances |= v.instances
-                        v.instances=set([])
-                        found=True
-                        sets_merged=True
-                        if idx2 < idx:
-                            num_adjust=num_adjust+1
-                        start=idx2
-            adjustment= found
-        #remove empty sets
-        self.versions= [y for y in self.versions if len(y.instances)]				
-        return (idx-num_adjust, sets_merged)
-
-    #add id_set for an occurrence of the figfam in a kmer
-    def add_instance(self, id_set, threshold, locationHash):
-        matching_group=-1
-        change_groups=False#keeps track of which groups need to be updated
-        
-        for idx, v in enumerate(self.versions):
-            #bigset= id_set if len(id_set) > len(uid_set) else uid_set
-            score=len(id_set.intersection(v.instances))
-            if(score>=threshold):
-                matching_group=idx
-                #store the bigest id_set as the identifying one for this figfam
-                v.instances |= id_set
-                break
-        if matching_group == -1:
-            self.versions.append(famVersion(id_set))
-            matching_group = len(self.versions)-1
-        else:
-            matching_group, change_groups=self.checkChainReaction(matching_group, self.fID, threshold)
-        if not change_groups:
-            for loc in self.versions[matching_group].instances:
-                locationHash[loc]=(str(self.fID),str(matching_group))
-        else:
-            for idx_grp, v in enumerate(self.versions):
-                for loc in v.instances:
-                    locationHash[loc]=(str(self.fID),str(idx_grp))
 
 
         
@@ -560,12 +147,15 @@ class featureParser():
                 if header:
                     #define column position based on header
                     parts=line.strip().replace("#","").split("\t")
+                    valid_cols = {'genome', 'contig', 'feature', 'start', 'end', 'strand', 'group', 'function', 'organism'}
+                    new_ip = {}
                     x=0
                     while x < len(parts):
                         cur_part=parts[x].lower()
-                        if cur_part in self.ip:
-                            self.ip[cur_part]=x
+                        if cur_part in valid_cols or cur_part in self.ip:
+                            new_ip[cur_part]=x
                         x+=1
+                    self.ip = new_ip
                     continue
 
                 else:
@@ -575,17 +165,17 @@ class featureParser():
                     result.genome_id=parts[self.ip['genome']]
                     result.start=int(parts[self.ip['start']])
                     result.end=int(parts[self.ip['end']])
-                    if 'strand' in self.ip:
+                    if 'strand' in self.ip and self.ip['strand'] < len(parts):
                         result.strand = parts[self.ip['strand']]
                     result.feature_ref = parts[self.ip['feature']]
-                    result.organism = parts[self.ip['organism']]
+                    if 'organism' in self.ip and self.ip['organism'] < len(parts):
+                        result.organism = parts[self.ip['organism']]
                     
                     if self.file_type=="patric_genomes" or self.alpha=="pgfam_id":
                         result.md5 = parts[-1]
                     
-                    if self.parse_function:
+                    if self.parse_function and 'function' in self.ip and self.ip['function'] < len(parts):
                         result.function = parts[self.ip['function']]
-                    #result.end=parts[ip['end']]
             except:
                 logging.debug("warning: couldn't parse line: "+line)
                 continue
@@ -657,25 +247,24 @@ class featureParser():
 #GraphMaker(feature_tab=some_file, context="genome")
 class GraphMaker():
     def __init__(self, **kwargs):#feature_file, family_file, summary_file, ksize, ignore_fams=set([])):
-        #print feature_file
-        #print summary_file
-        #print str(ksize)
         self.feature_parser=None
+        label_func = kwargs.get("label_function", False)
+        alpha = kwargs.get("alpha", "pgfam_id")
         #convert option passed to file_type
-        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], feature_selector=kwargs["feature_selector"], file_type=kwargs["file_type"], parse_function=kwargs["label_function"], alpha=kwargs["alpha"])
-        self.context=kwargs["context"] #should be ["genome", "contig", "feature"]
+        self.feature_parser=featureParser(feature_files=kwargs["feature_files"], feature_selector=kwargs.get("feature_selector", "genome_id"), file_type=kwargs.get("file_type", "patric_tab"), parse_function=label_func, alpha=alpha)
+        self.context=kwargs.get("context", "genome") #should be ["genome", "contig", "feature"]
         self.context_levels={"genome":0,"contig":1,"feature":2}
-        self.ksize=kwargs["ksize"]
-        self.break_conflict=kwargs["break_conflict"]
-        self.label_function=kwargs["label_function"]
-        self.diversity=kwargs["diversity"]
+        self.ksize=kwargs.get("ksize", 3)
+        self.break_conflict=kwargs.get("break_conflict", False)
+        self.label_function=label_func
+        self.diversity=kwargs.get("diversity", "genus")
         self.all_diversity={}#for tracking total taxa numbers in the graph
         self.num_pg_nodes=0
         self.rf_graph=nx.DiGraph()# the rf-graph (close to de bruijn) created from series of features with group designations
         self.pg_graph=pFamGraph()# pg-graph is an undirected grpah
         self.rf_node_index=[]
         self.replicon_map=OrderedDict()#stores {genome_id:OrderedDict(contig_id)}
-        self.minSeq = kwargs["minSeq"]
+        self.minSeq = kwargs.get("minSeq", 1)
         self.no_edge=set([])
         self.conflicts={}
         self.contig_order={}#stores {genome_id:OrderedDict{contig_id:[feature_number]}}
@@ -837,7 +426,7 @@ class GraphMaker():
                 if d.get("is_scaffold_path"):
                     u_fam = self.pg_graph.nodes[u].get('family', str(u))
                     v_fam = self.pg_graph.nodes[v].get('family', str(v))
-                    targets = d.get("scaffold_entities", "")
+                    targets = d.get("scaffold_entities") or d.get("sv_entities", "")
                     weight = d.get("weight", 0.0)
                     if targets: # Only write the edges that carry the target names
                         writer.writerow([u_fam, v_fam, targets, f"{weight:.4f}"])
@@ -862,12 +451,23 @@ class GraphMaker():
                     writer.writerow([cluster_id, fam, func, copies, ",".join(replicons)])
 
         # 4. Structural Variants & Junctions
+        sv_junction_flags = [
+            "breakpoint_junction",
+            "inter_contig_rearrangement",
+            "intra_contig_rearrangement",
+            "alt_path_junction",
+            "repeat_fragmentation_junction",
+            "repeat_ambiguity_detour"
+        ]
         with open(f"{prefix}_structural_variants.tsv", 'w') as f:
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(["Junction_Type", "Node_U_Family", "Node_V_Family", "Divergent_Genomes", "Consensus_Support_Weight"])
             for u, v, d in self.pg_graph.edges(data=True):
-                jt = d.get("junction_type")
-                if jt:
+                active_jts = [flag for flag in sv_junction_flags if d.get(flag)]
+                if not active_jts and d.get("junction_type"):
+                    active_jts = [d.get("junction_type")]
+                if active_jts:
+                    jt = ",".join(active_jts)
                     u_fam = self.pg_graph.nodes[u].get('family', str(u))
                     v_fam = self.pg_graph.nodes[v].get('family', str(v))
                     sv_ents = d.get("sv_entities", "")
@@ -1170,121 +770,17 @@ class GraphMaker():
                     for n in full_path:
                         self.pg_graph.nodes[n]['superbubble_id'].add(bid)
                         self.pg_graph.nodes[n]['is_superbubble'] = True
-                for i in range(len(full_path)-1):
-                    u, v = full_path[i], full_path[i+1]
-                    # Tag both directions for undirected UI compatibility
-                    if self.pg_graph.has_edge(u, v):
-                        self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
-                        self.pg_graph.edges[u, v]['is_superbubble'] = True
-                    if self.pg_graph.has_edge(v, u):
-                        self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
-                        self.pg_graph.edges[v, u]['is_superbubble'] = True
+                    for i in range(len(full_path)-1):
+                        u, v = full_path[i], full_path[i+1]
+                        # Tag both directions for undirected UI compatibility
+                        if self.pg_graph.has_edge(u, v):
+                            self.pg_graph.edges[u, v]['superbubble_id'].add(bid)
+                            self.pg_graph.edges[u, v]['is_superbubble'] = True
+                        if self.pg_graph.has_edge(v, u):
+                            self.pg_graph.edges[v, u]['superbubble_id'].add(bid)
+                            self.pg_graph.edges[v, u]['is_superbubble'] = True
         self.completed_superbubbles = completed_bubbles # Save for TSV export
         logging.warning(f"Superbubble Detection: Found and annotated {len(completed_bubbles)} superbubbles.")    
-
-    def detect_and_annotate_superbubbles_scc(self):
-        """
-        High-performance superbubble detection using SCC Condensation to guarantee a DAG.
-        Annotates nodes and edges with 'superbubble_id'.
-        """
-        logging.warning("Detecting superbubbles via SCC Condensation...")
-        
-        # 1. Condense SCCs → get a true DAG
-        CG = nx.condensation(self.pg_graph)
-        scc_map = CG.graph['mapping']
-        scc_to_nodes = {}
-        for n, cid in scc_map.items():
-            scc_to_nodes.setdefault(cid, set()).add(n)
-
-        # --- DIAGNOSTIC LOGGING ---
-        orig_nodes = self.pg_graph.number_of_nodes()
-        dag_nodes = CG.number_of_nodes()
-        scc_sizes = sorted([len(v) for v in scc_to_nodes.values()], reverse=True)
-        
-        logging.warning(f"[DEBUG] Original Nodes: {orig_nodes} | Condensed DAG Nodes: {dag_nodes}")
-        if scc_sizes:
-            logging.warning(f"[DEBUG] Largest SCCs (node counts): {scc_sizes[:5]}")
-        # --------------------------
-
-        # 2. Identify candidate entry/exit nodes
-        # Relaxed per the reviewer's suggestion: just use all nodes to ensure we don't miss edge cases
-        candidates = list(CG.nodes)
-
-        # 3. Compute dominators
-        sources = [n for n in CG.nodes if CG.in_degree(n) == 0]
-        root_dom = "__dom_root__"
-        CG.add_node(root_dom)
-        for s in sources: CG.add_edge(root_dom, s)
-
-        idom = nx.immediate_dominators(CG, root_dom)
-        
-        # Cleaner dominator loop (Per the evaluation)
-        dom_sets = {v: set() for v in CG.nodes}
-        for v in CG.nodes:
-            cur = v
-            while cur != root_dom and cur in idom:
-                dom_sets[v].add(cur)
-                cur = idom[cur]
-        CG.remove_node(root_dom)
-
-        # 4. Compute post-dominators
-        RG = CG.reverse(copy=True)
-        sinks = [n for n in CG.nodes if CG.out_degree(n) == 0]
-        root_post = "__postdom_root__"
-        RG.add_node(root_post)
-        for t in sinks: RG.add_edge(root_post, t)
-
-        idom_post = nx.immediate_dominators(RG, root_post)
-        
-        # Cleaner post-dominator loop
-        postdom_sets = {v: set() for v in CG.nodes}
-        for v in CG.nodes:
-            cur = v
-            while cur != root_post and cur in idom_post:
-                postdom_sets[v].add(cur)
-                cur = idom_post[cur]
-        RG.remove_node(root_post)
-
-        # 5. Superbubble detection
-        bubbles = []
-        for s in candidates:
-            dominated = {v for v in CG.nodes if s in dom_sets.get(v, set())}
-            exits = [t for t in candidates if s in postdom_sets.get(t, set()) and t != s]
-
-            reachable_from_s = nx.descendants(CG, s) | {s}
-
-            for t in exits:
-                reachable_to_t = nx.ancestors(CG, t) | {t}
-                region = dominated & reachable_from_s & reachable_to_t
-
-                if s in region and t in region and len(region) > 2:
-                    # Note on len(region) > 2: This means at least one internal SCC exists.
-                    internal = region - {s, t}
-                    original_nodes = set()
-                    for cid in region:
-                        original_nodes |= scc_to_nodes[cid]
-
-                    bubbles.append({
-                        "entry": s, "exit": t,
-                        "nodes": original_nodes - scc_to_nodes[s] - scc_to_nodes[t]
-                    })
-
-        # 6. Annotate Graph
-        for n in self.pg_graph.nodes:
-            self.pg_graph.nodes[n].setdefault("superbubble_id", set())
-        for u, v, d in self.pg_graph.edges(data=True):
-            d.setdefault("superbubble_id", set())
-
-        for bid, bubble in enumerate(bubbles, 1):
-            bubble_nodes = bubble["nodes"] | {bubble["entry"], bubble["exit"]} # Pre-calculate set for fast edge lookups
-            for n in bubble["nodes"]: # Only tag internals for nodes
-                self.pg_graph.nodes[n]["superbubble_id"].add(bid)
-                
-            for u, v, d in self.pg_graph.edges(data=True):
-                if u in bubble_nodes and v in bubble_nodes:
-                    d["superbubble_id"].add(bid)
-
-        logging.warning(f"Superbubble Detection: Found and annotated {len(bubbles)} superbubbles.")
 
 
     def flag_bridges(self):
@@ -1512,7 +1008,22 @@ class GraphMaker():
         processed_n = set([])
         grp_id = 1
         
-        # 1. Build alt_groups mapping
+        # 1. Build alt_groups mapping by protein family (plus any explicit pg_node_alt sets)
+        family_to_nodes = collections.defaultdict(set)
+        for n, d in self.pg_graph.nodes(data=True):
+            first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
+            f_id = next(iter(first_group.values()))[0]
+            fam_id = self.feature_index[f_id].group_id
+            if fam_id:
+                family_to_nodes[fam_id].add(n)
+
+        for fam_id, nodes_set in family_to_nodes.items():
+            if len(nodes_set) > 1:
+                processed_n.update(nodes_set)
+                for alt in nodes_set:
+                    alt_group[alt] = grp_id
+                grp_id += 1
+
         for n, alts in self.pg_node_alt.items():
             if n in processed_n:
                 continue
@@ -1547,6 +1058,7 @@ class GraphMaker():
             first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
             f_id = next(iter(first_group.values()))[0]
             d["label"] = self.feature_index[f_id].group_id
+            d["family"] = d["label"]
             
             total_len = 0
             feat_count = 0
@@ -1573,8 +1085,7 @@ class GraphMaker():
                             label_set.add(self.feature_index[f].function)
                     
             d["diversity"] = self.calcDiversity(cur_diversity)            
-            if self.label_function:
-                d["family"] = d["label"] 
+            if self.label_function and label_set:
                 d["label"] = list(label_set)[0]
                 
             if n in macro_conflicts:
@@ -1795,6 +1306,7 @@ class GraphMaker():
                         d["sv_entities"] = ",".join(cnv_detours)
                     elif assembly_gaps:
                         d["is_scaffold_path"] = True
+                        d["scaffold_entities"] = ",".join(assembly_gaps)
                         d["sv_entities"] = ",".join(assembly_gaps)
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
@@ -1834,7 +1346,8 @@ class GraphMaker():
             del unvisited_edges[seed_edge]
             
             # RULE 2: Never seed on a known structural junction
-            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path'}
+            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path',
+                              'genomic_rearrangement', 'intra_contig_rearrangement', 'inter_contig_rearrangement'}
             if any(seed_data.get(flag) for flag in junction_flags):
                 continue
                 
@@ -2008,48 +1521,6 @@ class GraphMaker():
                         # W format: Sample Hap Index SeqID Start End Path
                         out.write(f"W\t{genome_id}\t1\t{contig_id}\t0\t{len(path)}\t{path_str}\n")
 
-
-    class taxInfo():
-        def __init__(self, genome_name, summary_id):
-            self.genome_name=genome_name
-            self.summary_id=summary_id
-        def get_summary_id(self):
-            return self.summary_id
-        
-    ##adds a PGShell to pg_initial and a pointer in pg_ptrs
-    def addPGNode(self,fid,gene_list):
-        nid=len(self.pg_initial)
-        self.pg_initial.append(pgShell(nid,fid,set(gene_list)))
-        self.pg_ptrs.append(nid)
-        return len(self.pg_ptrs)-1
-    def getPGNode(self, node_idx):
-        cur_ref=self.pg_ptrs[node_idx]
-        result=self.pg_initial[cur_ref]
-        #if result == None:
-        #	print "Debug: None type"
-        return result
-    def addInfoPGNode(self, nid, gene_list):
-        #if nid == None:
-        #	print "Debug: whats going on?"
-        cur_node=self.getPGNode(nid)
-        cur_node.addInfo(gene_list)
-    #using the idx provided make the main node subsume the target node
-    #don't have to destroy target...
-    def updatePGNode(self, main_idx, target_idx):
-        main_idx2=self.pg_ptrs[main_idx]
-        main_node = self.pg_initial[main_idx2]
-        target_idx2 = self.pg_ptrs[target_idx]
-        target_node = self.pg_initial[target_idx2]
-        #if main_node == None or target_node == None or target_idx==18:
-        #	print "Debug: None type here"
-        if main_node.node_id != target_node.node_id:
-            main_node.subsumeNode(target_node)
-            #now point all future references to target_node at main_node
-            for c in main_node.consumed_list:
-                self.pg_ptrs[c]=main_idx2
-            self.pg_initial[target_node.node_id]=None #destroy target
-        
-
     #called after all features have been processed so that can flip them
     #and so that those that contain an anchor node can be added the anchor_instance_keys lookup
     def finalizeInstanceKeys(self):
@@ -2146,32 +1617,6 @@ class GraphMaker():
         self.prev_node=self.cur_rf_node
         self.prev_reverse=reverse
 
-    ##Create an ID for kmer
-    ##In case directionality is flipped for entire genome I am flipping each kmer
-    ##This shouldn't adversely affect inversions nor the overall result
-    #takes a list of geneInfo objects
-    def makeKey(self, k_info_list, prev_key):
-        k_list=[]
-        for k in k_info_list:
-            k_list.append(k.getFam())
-        id_sep="|"
-        result=None
-        rev_status=False
-        if(k_list[0]> k_list[-1]):
-            k_list.reverse()
-            rev_status=True
-        result=id_sep.join(k_list)
-        if result in self.recentK:
-            self.kmerLevel+=1
-        else:
-            self.kmerLevel=0
-        self.recentK.append(result)
-        return ((self.kmerLevel, result), rev_status)
-                    
-    ##Separate the kmer back into its parts
-    def getParts(self, kmer):
-        return(kmer.split('.'))
-    
     #create a kmer based on the group ids in the features. Also append the feature to a feature_index
     def hashKmer(self, feature_list):
         kmer_hash=[]
@@ -2234,7 +1679,7 @@ class GraphMaker():
             if prev_feature == None or prev_feature.genome_id != feature.genome_id:
                 self.trackDiversity(feature.feature_id, self.all_diversity)
             self.replicon_map.setdefault(feature.genome_id,OrderedDict()).setdefault(feature.contig_id,[]).append(feature.feature_id)
-            if(prev_feature and prev_feature.contig_id != feature.contig_id):
+            if prev_feature and (prev_feature.contig_id != feature.contig_id or prev_feature.genome_id != feature.genome_id):
                 kmer_q=deque()#clear kmer stack because switching replicons
                 self.prev_node=None
                 self.prev_indices=[]
@@ -2293,91 +1738,6 @@ class GraphMaker():
             return cur_weights[0]
         else:
             return max(cur_weights, key=itemgetter(0))
-
-
-
-        
-    #for a given kmer return a set of the organisms involved
-    def getOrgSummary(self, kmer):
-        result=set()
-        if kmer in self.kmerLookup:
-            for i in next(iter(self.kmerLookup[kmer][0].infoList.values())):
-                result.add(i.org_id)
-        return result
-        
-    #for all the organisms of the kmer return a set of IDs at the taxonomy level
-    #e.g. all the genus IDs stored in summaryLookup under various organism IDs
-    def getTaxSummary(self,kmer):
-        result=set()
-        if kmer in self.kmerLookup:
-            for i in next(iter(self.kmerLookup[kmer][0].infoList.values())):
-                if(i.org_id in self.summaryLookup):
-                    result.add(self.summaryLookup[i.org_id].get_summary_id())
-        return result
-
-    #for a given node return a set of the organisms involved
-    def nodeOrgSummary(self,cnode):
-        result=set()
-        for i in next(iter(cnode.infoList.values())):
-            result.add(i.org_id)
-        return result
-    
-    def nodeTaxSummary(self,cnode):
-        result=set()
-        for i in cnode.instances:
-            org_id=i.getOrganism()
-            if(org_id in self.summaryLookup):
-                result.add(self.summaryLookup[org_id].get_summary_id())
-        return result
-
-    #Get the total number of unique taxonomy labels 
-    def completeTaxSummary(self):
-        result=set()
-        for k in self.summaryLookup.keys():
-            result.add(self.summaryLookup[k])
-        return result
-
-    #expects summary taxid, tax level, and the taxpath comma seperated values
-    def parseSummary(self, summary_file):
-        inHandle=open(summary_file, 'r')
-        logging.warning("parsing taxonomy information and constructing taxon table")
-        #header=inHandle.readline()
-        for line in inHandle:
-            if line.startswith('#'):
-                continue
-            summary_info=line.strip().split("\t")
-            if(self.summary_level==None):
-                self.summary_level=6
-            ref_id=summary_info[1]
-            genome_name=summary_info[0]
-            summary_id=summary_info[-1].split(',')[self.summary_level]
-            self.summaryLookup[ref_id]=self.taxInfo(genome_name,summary_id)
-        inHandle.close()
-
-    #expects two column family name information
-    def parseFamilyInfo(self, family_file):
-        in_handle=open(family_file, 'r')
-        logging.warning("parsing family information table")
-        #header=inHandle.readline()
-        for line in in_handle:
-            if line.startswith('#'):
-                continue
-            info_list=line.strip().split("\t")
-            try:
-                self.familyInfo[info_list[fi["fam_id"]]]=info_list[fi["fam_description"]]
-            except:
-                warning("problem parsing family info line: "+line)
-                try:
-                    self.familyInfo[info_list[fi["fam_id"]]]="No Label"
-                except:
-                    sys.exit()
-                pass
-
-        in_handle.close()
-    def getFamilyInfo(self, fid):
-        if fid in self.familyInfo:
-            return self.familyInfo[fid]
-        else: return None
 
     #i'm sorry universe this is going to be confusing
     #given the side of the kmer the feature is found on and its orientation relative to the kmer
@@ -2512,26 +1872,6 @@ class GraphMaker():
             return nxt_rf_id
         return None
 
-    #This should only be called on non-anchor nodes 
-    def storeRevisitGuides(self, cur_rf_id, pre_assignments):
-        #the leaving pg_node_id is used to distinguish the visit to an rf_node since an rf-node to rf-node transition can happen
-        #multiple times. Instead of making this a pre-visit operation make it a visit operation. Where every
-        #leaving pg-node points at the the same multi-pg-node array. That way no matter which is used
-        #to look it up on re-descent it will give all pg-options.
-        for i in [0,self.ksize-1]:
-            for pg in pre_assignments[i]:
-                for ik, features in pre_assignments[i][pg]["features"].items():
-                    for f in features:
-                        cur_guide = f
-                        cur_guide_cat = int(f < 0)
-                        cur_guide_side = int(i == self.ksize-1)
-                        #the same information that is used to queue a feature (that it is on the leaving side and what the next rf_node/feature will be 
-                        #should be able to be used in REVERSE to project/find the feature that is used to come here. AND THUS the pg_node that 
-                        #points here 
-                        leaving_pg_id = None
-                        multi_guide = {pg_id: {'nxt_guide':None,'nxt_guide_cat':None,'nxt_guide_side':None}}
-                        self.non_anchor_guides.setdefault(leaving_pg_id,{}).setdefault(cur_rf_id,{}).setdefault(pg_id, dict(nxt_guide=cur_guide, nxt_guide_cat=cur_guide_cat, nxt_guide_side=cur_guide_side)) 
-
 
     def num_features_pg_node(self, node_id):
         num_features=0
@@ -2583,7 +1923,6 @@ class GraphMaker():
                 gen_set.discard('')  # Remove empty strings
                 existing['genomes'] = gen_set
 
-                
                 # Merge Sequences
                 seq_set = set(existing.get('sequences', set())) | set(d.get('sequences', set()))
                 seq_set.discard('')
@@ -2593,9 +1932,11 @@ class GraphMaker():
                 existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement','inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path']
+                edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement', 'inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path', 'is_superbubble']
                 for flag in edge_bool_flags:
                     existing[flag] = existing.get(flag, False) or d.get(flag, False)
+                if 'superbubble_id' in existing or 'superbubble_id' in d:
+                    existing['superbubble_id'] = set(existing.get('superbubble_id', set())) | set(d.get('superbubble_id', set()))
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
@@ -2689,38 +2030,6 @@ class GraphMaker():
             
         return split, conflict, end_fragments
 
-    def detect_split(self, cur_pg_id, new_feature):
-        genome_id=self.feature_index[new_feature].genome_id
-        sequence_id=self.feature_index[new_feature].contig_id
-        if self.context!="feature" and \
-        genome_id in self.pg_graph.nodes[cur_pg_id]['features'] and \
-        sequence_id in self.pg_graph.nodes[cur_pg_id]['features'][genome_id]:
-            for cf in self.pg_graph.nodes[cur_pg_id]['features'][genome_id][sequence_id]:
-                #if the distance is < k it is a special case of an 'extra character loop' which requires emitting an extra pg-node
-                if abs(cf-new_feature)< self.ksize:
-                    return True
-
-    def move_features(self, target_pg_id, target_features):
-        tn = self.pg_graph.nodes[target_pg_id]
-        for t in target_features:
-            rn_id = self.feature_index[t].pg_assignment
-            if target_pg_id != rn_id:
-                rn = self.pg_graph.nodes[rn_id]
-                #print "moving feature"
-                genome = self.feature_index[t].genome_id
-                contig = self.feature_index[t].contig_id
-                rn["features"][genome][contig].remove(t)
-                if len(rn["features"][genome][contig]) == 0:
-                    del rn["features"][genome][contig]
-                if len(rn["features"][genome]) == 0:
-                    del rn["features"][genome]
-                tn["features"].setdefault(genome,{}).setdefault(contig,[]).append(t)
-                self.feature_index[t].pg_assignment = target_pg_id
-
-
-    def get_pg_id(self):
-        return self.num_pg_nodes
-
     def assign_pg_node(self, prev_feature, new_feature, pg_node, conflicts=None, relative_strand='+'):
         cur_pg_id=None
         #determine if there is a conflict based on mixed bundling
@@ -2796,7 +2105,7 @@ class GraphMaker():
             cur_parts=set(c.split('.'))
             cur_intersect = len(instance_parts.intersection(cur_parts))
             if cur_intersect > max_intersect:
-                max_interset = cur_intersect
+                max_intersect = cur_intersect
                 max_key = [c]
             elif cur_intersect > 0 and cur_intersect == max_intersect:
                 max_key.append(c)
@@ -2866,7 +2175,11 @@ class GraphMaker():
                     valid_pgs = set()
                     if max_keys[0] is not None:
                         for k in max_keys:
-                            valid_pgs.add(pre_assignments[i]["inst_key_map"][k])
+                            mapped_pgs = pre_assignments[i]["inst_key_map"][k]
+                            if isinstance(mapped_pgs, set):
+                                valid_pgs.update(mapped_pgs)
+                            else:
+                                valid_pgs.add(mapped_pgs)
                             
                     for f in features:
                         f_signed = self.sign_feature(f.new_feature, f.direction)
@@ -2905,6 +2218,9 @@ class GraphMaker():
                                     max_f = n_f
                                     best_pg = pg
                             block = "assignments" if best_pg in pre_assignments[i]["assignments"] else "new_nodes"
+                            if ik not in pre_assignments[i]["inst_key_map"]:
+                                guide_feature = next(iter(unguided_features))
+                                self.track_guide(pre_assignments, guide_feature.new_feature, i, negative=guide_feature.direction, target_pg=best_pg, new_node=(block == "new_nodes"))
                             cur_assignments = pre_assignments[i][block][best_pg]["features"].setdefault(ik, set())
                             cur_assignments.update(unguided_features)
                         else:
@@ -2916,42 +2232,6 @@ class GraphMaker():
                             cur_assignments = pre_assignments[i]["new_nodes"][tmp_id]["features"].setdefault(ik, set())
                             cur_assignments.update(unguided_features)
                 i-=1
-            i=self.ksize-1
-            while i >= 0:
-                for ik, features in feature_pile[i]["by_instance"].items():
-                    max_keys = self.maxInstanceOverlap(ik, pre_assignments[i]["inst_key_map"].keys())
-                    if max_keys[0] == None: #no guides exist
-                        #create new node and put it in
-                        tmp_id = "nn"+str(len(pre_assignments[i]["new_nodes"].keys()))
-                        assign_block="new_nodes"
-                        new_status=True
-                    elif len(max_keys) == 1:
-                        tmp_id = pre_assignments[i]["inst_key_map"][max_keys[0]]
-                        new_status = (type(tmp_id) == str and tmp_id.startswith('nn'))
-                        assign_block = "new_nodes" if new_status else "assignments"
-                    elif len(max_keys) > 1:
-                        #pick the one with the most features. this should be rare.
-                        logging.debug("Tie for pg-node selection based on instance keys "+" ".join(max_keys))
-                        max_features =0
-                        tmp_id = None
-                        mk = None
-                        for k in max_keys:
-                            pg_node = pre_assignments[i]["inst_key_map"][k]
-                            num_features=self.num_features_pg_node(pg_node)
-                            if num_features > max_features:
-                                max_features=num_features
-                                tmp_id = pg_node
-                        new_status = (type(tmp_id) == str and tmp_id.startswith('nn'))
-                        assign_block = "new_nodes" if new_status else "assignments"
-                    if not ik in pre_assignments[i]["inst_key_map"]:
-                        #track guide creates new_node position in pre_assignments
-                        guide_feature=next(iter(features))
-                        self.track_guide(pre_assignments, guide_feature.new_feature, i, negative=guide_feature.direction, target_pg=tmp_id, new_node=new_status)
-                    cur_assignments=pre_assignments[i][assign_block][tmp_id]["features"].setdefault(ik,set([]))
-                    cur_assignments.update(features)
-                    #self.anchorInstanceExpansion(features, cur_node)
-                    
-                i-=1
         else:
             i=self.ksize-1
             while i >= 0:
@@ -2960,7 +2240,7 @@ class GraphMaker():
                     for pg in conflicts[i]["shift"]:
                         for ik in conflicts[i]["shift"][pg]["features"]:
                             self.alt_counter+=1
-                            tmp_id = len(pre_assignments[i]["new_nodes"].keys())
+                            tmp_id = "nn"+str(len(pre_assignments[i]["new_nodes"].keys()))
                             pre_assignments[i]["new_nodes"].setdefault(tmp_id, {'guides':{},'features':{}})
                             pre_assignments[i]["new_nodes"][tmp_id]["features"][ik]=conflicts[i]["shift"][pg]["features"][ik]
                             #take out features of pre_assignments
@@ -3013,107 +2293,6 @@ class GraphMaker():
                         alt_nodes.add(new_pg)
             if len(alt_nodes) > 1: self.storeAlternates(alt_nodes)
             i-=1
-                        
-                        
-
-    def oldMethod(self):
-        #PHASE 2:
-        #Determine the best guide to use
-        #Reorganize by target pg_node so that conflicts and splits can be detected per
-        guide_to_assign={}
-        for feature_tuple in to_assign:
-            #unpack
-            kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= feature_tuple
-            #determine the best guide to use
-            if len(pg_set) > 1:
-                instance_key = self.feature_index[new_feature].instance_key
-                if instance_key in target_guides:
-                    target_guide = target_guides[instance_key][0]
-                else:
-                    max_key = self.maxInstanceOverlap(instance_key, target_guides.keys())
-                    if max_key != None:
-                        target_guide = target_guides[max_key][0]
-                    else:
-                        target_guide = None
-            elif len(target_guides.keys()) >= 1: #all instance keys refer to the same pg-node
-                target_guide = next(iter(target_guides.values()))[0]
-            else:
-                target_guide = None
-            if target_guide != None:
-                pg = self.feature_index[target_guide].pg_assignment
-                guide_to_assign.setdefault(pg,(target_guide, []))[1].append(feature_tuple)
-            else:
-                guide_to_assign.setdefault(None,(target_guide, []))[1].append(feature_tuple)
-
-                #if (not cur_node.palindrome) and (kmer_side != rhs_guide_side):
-                    #these should always be the same except for palindromes
-                #    assert LogicError
-
-            #PHASE 4:Make assignments based on the previous two phases
-            for pg_node, assign_tuple in guide_to_assign.items():
-                #PHASE 3: Determine if there are ANY conflicts.
-                target_guide, assign_list = assign_tuple
-                num_conflict=num_split=0
-                c1_conflict =False
-                break_here=False # if break conflicts is true then want to use unassigned kmer as guide so that incoming features will be assigned to a new node
-                if target_guide != None:
-                    #conflict occurs when mixed bundling tries to violate synteny context
-                    num_split, num_conflict, c1_conflict, assign_list = self.find_conflicts(assign_list, target_guide)
-                if num_split > 0:
-                    logging.info("SPLIT CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_split)+" splits in a bundle of size "+str(num_targets))
-                elif num_conflict > 0:
-                    if c1_conflict:
-                        logging.info("C1 CONFLICT: rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets))
-                    else:
-                        if self.break_conflict:
-                            break_here=True
-                            target_guide=None
-                        logging.info("C2 CONFLICT: in rf-node "+str(cur_node.nodeID)+" there are "+str(num_conflict)+" conflicts in a bundle of size "+str(num_targets))
-                default_guide = default_guide_cat = default_guide_side = None
-                split_guide = split_guide_cat = split_guide_side = None
-                for cur_tuple in assign_list:
-                    #unpack
-                    kmer_side, direction, rhs_feature, prev_feature, new_feature, leaving_feature, conflict, split= cur_tuple
-                    cur_node.assigned_features[direction].add(rhs_feature)
-                    
-                    assigned =  self.feature_index[new_feature].pg_assignment != None
-                    do_queue=True
-                    #DON't DO THIS. Always queue.
-                    #if break_here and assigned:
-                    #    prev_feature = None
-                    #    do_queue=False
-
-                    #assign to pg-node
-                    #conflict=False
-                    if target_guide == None:
-                        #if (not assigned) or (not break_here): #only care if it assigned or not if break_here aka conflict
-                        if default_guide == None:
-                            default_guide=new_feature
-                            self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
-                        else:
-                            new_guide=default_guide
-                            assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=new_guide)
-
-                    else:
-                        if split:
-                            if split_guide == None:
-                                split_guide=new_feature
-                                #IS THERE ANY GURANTEE THAT THE NODE YOU PICK WON'T BE A SPLIT CONFLICT AGAIN?
-                                assignment, conflict = self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=None)
-                            else:
-                                assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=split_guide)
-                        else:
-                            assignment,conflict=self.assign_pg_node(prev_feature=prev_feature, new_feature=new_feature, guide=target_guide)
-                            if up_targets and conflict:
-                                logging.info("conflict with up-targets! in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID))
-                            elif conflict:
-                                logging.info("conflict in pg-node "+str(assignment)+" from rf-node "+str(cur_node.nodeID))
-                    #make sure that where ever the feature is assigned, that all the other features in this visit, with the same instance key are there too.
-                    instance_key = self.feature_index[new_feature].instance_key
-                    #if instance_key in target_guides:
-                    #    self.move_features(assignment, target_guides[instance_key])
-                    #queue base on leaving feature
-                    #if do_queue:
 
     #walk down the kmer and fill out to_assign
     #process features remaining in cur_node.features
@@ -3161,29 +2340,6 @@ class GraphMaker():
     def getFeatureRecord(self, feature):
         return self.feature_index[abs(feature)]
 
-    #for all features in all k positions. check if the instance key for the feature is an anchor instance key.
-    #the only time this can/needs to be used is when it is a duplicate node since anchor nodes will pick up all threads
-    #palindromes should be fine because the anchor instance key expansion will place it in the position it needs to be in.
-    #if its a starting node then its an anchor node (no need to do middle, or lhs)
-    #if its a duplicate node then the previous k-1 features will have been checked.
-    #NOTE anchor instance keys are really just a move-ahead proceedure since eventually when that anchor rf-node is encountered
-    #it will pick up all combine all threads and walk back the ones that haven't been added.
-    #instance keys themselves will still be used to segregate assignments when multiple pg-nodes are available
-    #also the concept of anchor keys is still valid since that guarantee is held up when the anchor rf-node is encountered.
-    def anchorInstanceExpansion(self, features_ptr, cur_node):
-        #if not cur_node.anchorNode():
-        cur_features = set([i.new_feature for i in features_ptr])
-        for f in cur_features:
-            instance_key_orig = ".".join(self.feature_index[f].instance_key.split(".")[:-1])#take off the repeat number
-            #expand projection/target selection based on instance key 
-            instances_pkg = self.anchor_instance_keys.get(instance_key_orig, [None,[]])
-            for extra in instances_pkg[1]:
-                if not extra in cur_features:
-                    #blank feature context
-                    features_ptr.add(self.featureContext(None, None, None, None, extra, None, False, False))
-        
-
-    
     def getColumnGuides(self, pre_assignments, col):
         result_guides =set([])
         for pg_node in pre_assignments[col]["assignments"]:
@@ -3222,11 +2378,11 @@ class GraphMaker():
         if not new_node:
             pre_assignments[col]["assignments"].setdefault(target_pg, {'guides':{},'features':{}})
             pre_assignments[col]["assignments"][target_pg]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
-            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, target_pg)
+            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, set()).add(target_pg)
         else:
             pre_assignments[col]["new_nodes"].setdefault(target_pg, {'guides':{},'features':{}})
             pre_assignments[col]["new_nodes"][target_pg]['guides'].setdefault(guide_ikey, set([])).add(new_guide)
-            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, target_pg)
+            pre_assignments[col]["inst_key_map"].setdefault(guide_ikey, set()).add(target_pg)
             
 
     def track_feature(self, col, feature_pile, new_feature, feature_info, instance_key):
@@ -3483,234 +2639,9 @@ class GraphMaker():
                     self.expand_features(cv.prev_node, cv.cur_node, targets=cntargets, guide_array=new_guide, node_queue=cv.node_queue, node_bundles=cv.node_bundles, up_targets=True)
             pv=cv
 
-    #recursive function with a visit queue.
-    def tfs_expand(self, prev_node, cur_node, targets, guide):
-        node_bundles={}#organized by rf-node id, values are next features "bundle" to look for (in case of palindrome or duplicate)
-        prev_bundles={}
-        node_queue=deque()#tuples of (next rf-node id to visit, the guide to send to it, and the next features to look for)
-        #seen_targets=set([])
-        #put this conditional in expand_features
-        #if cur_node.anchorNode():
-            #expand_features assigns features to pg-nodes, queues rf-nodes for visiting, and organizes feature threads to pass to each
-            #self.expand_features(cur_node, targets=None, guide=None, node_queue=node_queue)
-            #figure out targets not seen before
-        self.expand_features(prev_node, cur_node, targets=targets, guide=guide, node_queue=node_queue, node_bundles=node_bundles)
-        #seen_targets.update(targets)
-        #NOW need to think carefully about where targets will be set. I guess always right side? They need be divided into decreasing and increasing.
-        #Also this means projection based on edge will need to be well thought out. 
-        while len(node_queue):
-            #next_guide needs to be populated IF AND WHEN new targets come back from the DFS AND 
-            #they proceed to a Node that has already been visited WHICH surely has to be a 
-            #duplicate/palindrome node else IT WOULD RETURN NEW TARGETS that would be passed down to the node from which NEW TARGETS comes
-            next_node_id, next_guide= node_queue.popleft()
-            #if prev_node and next_node_id != prev_node.nodeID: #prevent recursing "up"
-            next_node=self.rf_node_index[next_node_id]
-            next_targets=node_bundles[next_node_id]
-            #careful here sets are passed by reference
-            #EITHER the next rf-node is still in the queue in which case it is OK to accumulate bundle info from new_targets found in other visits
-            #OR the bundle information is being transmitted right here in which case only the new stuff should be transmitted down next time
-            #so clear out the bundle info here
-            node_bundles[next_node_id]=[[set([]),set([])],[set([]),set([])]]
-            #Recursion!
-            new_targets = self.tfs_expand(prev_node=cur_node, cur_node=next_node, targets=next_targets, guide=next_guide)
-            if not cur_node.anchorNode():
-                #not needed because expand_features will put features in node bundles new_return_targets=return_targets.difference(seen_targets)
-                #must process 
-                #just got new targets returned from a DFS. expand them, and update queue based on them
-                if(len(new_targets)):
-                    new_guide= self.getTargetGuide(cv.targets)#can be any feature just assigned.
-                    #after this or during this...need to think about the forking guide problem wrt restoring things into the queue
-                    #if there are return targets and a guide for this node...it means a guide needs to be projected to go with all those nodes that have already been visited by TFS
-                    #so if there is a guide: 
-                    self.expand_features (prev_node, cur_node, targets=new_targets, guide=new_guide, node_queue=node_queue, node_bundles=node_bundles, up_targets=True)
-                    #seen_targets.update(new_return_targets)
-        if prev_node==None:
-            return None
-        elif -1 in node_bundles: # -1 is used to track 'new' threads exposed by anchor node that are to be passed 'up'
-            return (node_bundles[-1])
-
-
-
-
-    #transform the kmerNode graph (rf-graph) into a pg-graph
-    #if the minOrg requirment is not met the node is added to the graph but is marked in active.
-    #dfs still proceeds in case a node that does meet minOrg is encounterd (which will require considering prev. expanded nodes in identity resolution)
-    def bfsExpand(self, minOrg):
-        print("expanding kmer graph in to pg-graph total knodes: "+str(len(self.rf_node_list)))
-        for start_k_id, start_knode in enumerate(self.rf_node_list):
-            if start_knode.visited:
-                continue
-            else:
-                knode_q=deque()
-                knode_q.append((start_k_id,None,None))
-                prev_k_id=None
-                in_edge_status=None # type of edge arrived by
-                while len(knode_q) > 0:
-                    visiting_k_id, prev_k_id, in_edge_status=knode_q.popleft()
-                    cur_knode=self.rf_node_list[visiting_k_id]
-                    #do work for expanding this kmer node into pg-graph nodes
-                    #if prev_knode and incoming_status != None :
-                    if prev_k_id != None:
-                        cur_knode.visitNode(self.rf_node_list[prev_k_id], in_edge_status, self)#expand and store refs to pg-ndoes
-                    else:
-                        cur_knode.visitNode(None, None, self)
-                    for k_id in cur_knode.linkOut:
-                        if k_id == visiting_k_id:#self loop this should not happen because of kmer levels
-                            continue
-                            #something selfish
-                            #cur_knode.self_edge=True
-                        elif k_id == prev_k_id:#return loop
-                            continue
-                            #handle return loop. create single edge back and apply labels
-                            #return_node=self.kmerList[k_id]
-                            #return_node.applyInfo(self)
-                        elif self.rf_node_list[k_id].visited or self.rf_node_list[k_id].queued:	
-                            return_node=self.rf_node_list[k_id]
-                            return_node.updateNode(cur_knode, cur_knode.linkOut[k_id], self)
-                        else:
-                            #if k_id ==208:
-                            #	print "Debug: why is this being queued so much?"
-                            knode_q.append((k_id, visiting_k_id, cur_knode.linkOut[k_id]))
-                            self.rf_node_list[k_id].queued=True
-                    cur_knode.addPGEdges(self)
-
-# undirected weighted
-# class pFamGraph(nx.Graph):
-#     def __init__(self):
-#         #Graph.__init__(self, weighted=True)
-#         nx.Graph.__init__(self)
-#     if not hasattr(nx.Graph,"nodes_iter"):
-#         def nodes_iter(self, data=False):
-#             if data ==True:
-#                 for i in self.nodes:
-#                     yield (i,self.nodes[i])
-#             if data ==False:
-#                 for i in self.nodes:
-#                     yield i 
-#     if not hasattr(nx.Graph,"edges_iter"):
-#         def edges_iter(self, data=False):
-#             if data ==True:
-#                 for i in self.edges:
-#                     yield (i,self.get_edge_data(*i))
-#             else:
-#                 for i in self.edges:
-#                     yield i
-                    
 class pFamGraph(nx.DiGraph):
     def __init__(self):
-        #Graph.__init__(self, weighted=True)
         nx.DiGraph.__init__(self)
-
-
-                                
-                            
-                    
-                
-
-def toGML(cur_graph, file_name):
-        readwrite.graphml.write_graphml(cur_graph, file_name)
-
-def node_to_gff(gff_handle, node, feature_counter, graphID):
-    for i in node.instances:
-        fid=next(feature_counter)
-        contig_id, start, end = i.getLocation()
-        #for now don't know direction, or feature id
-        line="\t".join([contig_id, 'PanGraph', 'match', str(start), str(end), str(len(node.instances)), '+', '.', ";".join(["ID="+str(fid),"Name="+node.famID,"graphID="+str(graphID)])])
-        gff_handle.write(line)
-
-def edge_to_gff(gff_handle, edge):
-    return 0
-
-#create data maps for keeping track of relationships between graph entities
-#finalaize node ids and edge ids
-#create GFF records
-#org_map genome id to name
-#sid_to_edge sequence id to edge id
-#takes number of nodes so that edges can have unique ids wrt to nodes
-def create_indices(storage, pgraph, csize, gff_outfile):
-    bgzf_handle = bgzf.BgzfWriter(gff_outfile,'wb')
-    edge_counter=itertools.count()
-    node_counter=itertools.count()
-    feature_counter=itertools.count()
-    storage.org_map={}#maps which genome ids have which names
-    storage.sid_to_edge={}#maps which sequence ids have which edges
-    storage.graph_to_offset={}#maps graph ID (node or edge) to offset location start,end
-    for n in pgraph.nodes():
-        ncount=str(next(node_counter))
-        pgraph.nodes[n]['id']=ncount
-        start_voff=bgzf_handle.tell()
-        node_to_gff(gff_handle=bgzf_handle,node=n, feature_counter=feature_counter, graphID=ncount)
-        end_voff=bgzf_handle.tell()
-        storage.graph_to_offset[ncount]=[start_voff,end_voff]
-    for e in pgraph.edges():
-        ecount=next(edge_counter)
-        pgraph.adj[e[0]][e[1]]['id']=str(ecount+csize)
-        for r in (pgraph.adj[e[0]][e[1]]['replicons']).split(','):
-            storage.sid_to_edge.setdefault(r,[]).append(pgraph.adj[e[0]][e[1]]['id'])
-            #edge_to_gff(bgzf_handle)
-    for k,v in storage.summaryLookup.items():
-        storage.org_map[k]=v.genome_name
-
-
-
-#remove certain attributes that are no longer useful or prohibiitively large from graph output
-def remove_attributes(pgraph, from_edges=[], from_nodes=[]):
-    if from_edges:
-        for e in pgraph.edges():
-            for r in from_edges:
-                try: pgraph.adj[e[0]][e[1]].pop(r,None)
-                except: pass
-    #from nodes need to implement
-    if from_nodes:
-        for n in pgraph.nodes():
-            for r in from_nodes:
-                try: delattr(n,r)
-                except: pass
-
-#possibly assembly mistakes
-#or genome rearrangement points
-def find_rearrangements(pgraph, storage, out_file, gminimum=None):
-    out_handle=open(out_file,'w')
-    if not gminimum:
-        gminimum=len(storage.summaryLookup)#default to all genomes in
-    for u,v,data in pgraph.edges(data=True):
-        us=u.get_summary()
-        vs=v.get_summary()
-        if len(data['instances']) == 1 and len(us['organisms']) >= gminimum and len(vs['organisms']) >= gminimum:
-            out_handle.write(next(iter(data['instances'])).getLocationString()+"\n")
-    out_handle.close()
-        
-        
-def modGexf(in_handle, out_file, k_size, minOrg, storage, pgraph):
-    #register_namespace('',"http://www.gexf.net/1.1draft")
-    encoding='utf-8'
-    header='<?xml version="1.0" encoding="%s"?>'%encoding
-    gexf_xml=ElementTree(fromstring(in_handle.getvalue()))
-    metadata_element=Element("meta")
-    metadata_element.append(Element("ksize",value=str(k_size)))
-    metadata_element.append(Element("minorg",value=str(minOrg)))
-    gn_element=Element("org_map")
-    gn_element.text=CDATA(json.dumps(storage.org_map))
-    metadata_element.append(gn_element)
-    contig_element= Element("contig_map")
-    contig_element.text = CDATA(json.dumps(storage.replicon_map))
-    metadata_element.append(contig_element)
-    sid_element = Element("edge_map")
-    sid_element.text = CDATA(json.dumps(storage.sid_to_edge))
-    metadata_element.append(sid_element)
-    root=gexf_xml.getroot()
-    root.insert(0, metadata_element)
-    gexf_handle=open(out_file, 'w')
-    gexf_handle.write(header.encode(encoding))
-    gexf_xml.write(gexf_handle, encoding=encoding)
-    gexf_handle.close()
-
-#calculate graph statistics
-def stats(graph):
-    num_nodes=graph.order()
-    num_edges=graph.size()
-    avg_degree= float(num_edges)/num_nodes
-    print("\t".join([str(num_nodes),str(num_edges),str(avg_degree)]))
 
 
 def main():
@@ -3765,8 +2696,6 @@ def main():
             gmaker.traverse_priority = pargs.order_contigs
     gmaker.processFeatures()
     gmaker.RF_to_PG()
-    #if gmaker.break_conflict:
-    #    gmaker.break_edges()
     if pargs.rfgraph != None:
         nx.readwrite.write_gexf(gmaker.rf_graph, pargs.rfgraph)
     gmaker.checkPGGraph()
@@ -3780,9 +2709,61 @@ def main():
 
     block_ids = gmaker.annotate_major_blocks_tfs(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
-    
     if pargs.gfa:
         gmaker.export_gfa(pargs.gfa)
+
+    # Create the summary JSON blob and write TSV reports BEFORE serialize_graph_for_gexf mutates sets/dicts
+    contig_map = {gen_id: list(contigs.keys()) for gen_id, contigs in gmaker.replicon_map.items()}
+    total_contigs = sum(len(contigs) for contigs in contig_map.values())
+
+    # Dynamically tally the biological ontology tags
+    cnv_clusters = set()
+    fragmented_cnv_clusters = set()
+    superbubbles = set()
+    synteny_breakpoints_count = 0
+    assembly_repeat_breaks_count = 0
+    
+    for n, d in gmaker.pg_graph.nodes(data=True):
+        # Unique Paralogs
+        if d.get("cnv_cluster_id", 0) > 0:
+            cnv_clusters.add(d["cnv_cluster_id"])
+            if d.get("repeat_ambiguity_fragmentation"):
+                fragmented_cnv_clusters.add(d["cnv_cluster_id"])
+        
+        # Unique Superbubbles
+        sb_val = d.get("superbubble_id", set())
+        if isinstance(sb_val, set):
+            superbubbles.update(sb_val)
+        elif sb_val:
+            superbubbles.update(str(sb_val).split(","))
+        
+        # Unique Breakpoint Nodes
+        if d.get("synteny_breakpoint"):
+            synteny_breakpoints_count += 1
+        if d.get("assembly_repeat_break"):
+            assembly_repeat_breaks_count += 1
+
+    # Compile the strict event counts
+    summary_dict = {
+        "total_genomes": len(gmaker.replicon_map),
+        "total_contigs": total_contigs,
+        "total_features": len(gmaker.feature_index),
+        "total_nodes": gmaker.pg_graph.number_of_nodes(),
+        "superbubbles": len(superbubbles),
+        "copy_number_variants": len(cnv_clusters),
+        "alternative_paths": alt_paths_count,                                    # 1 insertion = 1 event
+        "structural_rearrangements": synteny_breakpoints_count + sv_edges_count, # Breakpoint nodes + Path Dropouts
+        "inverted_blocks": inversions_count,                                     # 1 block = 1 event
+        "assembly_breaks": assembly_repeat_breaks_count + scaffolds_count,       # Shattered repeat nodes + Scaffold bridges
+        "fragmented_cnv": len(fragmented_cnv_clusters),                          # Shattered / fragmented paralog clusters
+        "parameters": {"k": pargs.ksize, "min": pargs.min},
+        "block_manifest": list(block_ids),
+        "contig_map": contig_map
+    }
+
+    # Trigger the TSV exports alongside the main GEXF/GFA while pg_graph attributes are still native sets/dicts
+    if isinstance(pargs.output, str):
+        gmaker.write_reports(pargs.output)
 
     graph_to_write = gmaker.pg_graph
     if not pargs.gexf_directed:
@@ -3817,11 +2798,7 @@ def main():
         else:
             logging.warning(f"Using layout jar at: {layout_jar}")
             layout_cmd = ["java", "-jar", layout_jar]
-            # ... execute Popen ...
-
-            cur_path = os.path.dirname(os.path.realpath(__file__))
             logging.warning("laying out graph")
-            #layout_cmd =["java", "-jar", os.path.join(cur_path, "layout/pangenome_layout/bin/gexf_layout.jar")]
             logging.warning(" ".join(layout_cmd))
             
             # In Python 3, Popen with string input requires text=True
@@ -3837,11 +2814,6 @@ def main():
                 # Optional: Fallback to the un-laid-out graph if Java completely crashed
                 if not raw_gexf_output:
                     raw_gexf_output = raw_gexf_str
-        
-        # --- FIX: Clean up malformed JSON double-quotes "" created by Gephi Java exporter ---
-        #cleaned_gexf = raw_gexf_output.replace('""', '&quot;') # (use raw_gexf_str if not laying out)
-        #cleaned_gexf = cleaned_gexf.replace('=&quot;', '=""')  # Restores empty attributes like name=""
-        #cleaned_gexf = cleaned_gexf.replace('>&quot;<', '>""<') # Restores empty tags like <tag>""</tag>
                 
     else:
         # If not using layout, intercept NetworkX bytes buffer to ensure clean JSON
@@ -3850,62 +2822,17 @@ def main():
         
         raw_gexf_output = gexf_capture.getvalue().decode('utf-8')
 
-    # Create the summary JSON blob
-    contig_map = {gen_id: list(contigs.keys()) for gen_id, contigs in gmaker.replicon_map.items()}
-    total_contigs = sum(len(contigs) for contigs in contig_map.values())
-
-    # Dynamically tally the new biological ontology tags
-    cnv_clusters = set()
-    superbubbles = set()
-    synteny_breakpoints_count = 0
-    assembly_repeat_breaks_count = 0
-    
-    for n, d in gmaker.pg_graph.nodes(data=True):
-        # Unique Paralogs
-        if d.get("cnv_cluster_id", 0) > 0:
-            cnv_clusters.add(d["cnv_cluster_id"])
-        
-        # Unique Superbubbles
-        superbubbles.update(d.get("superbubble_id", set()))
-        
-        # Unique Breakpoint Nodes
-        if d.get("synteny_breakpoint"):
-            synteny_breakpoints_count += 1
-        if d.get("assembly_repeat_break"):
-            assembly_repeat_breaks_count += 1
-
-    # Compile the strict event counts
-    summary_dict = {
-        "total_genomes": len(gmaker.replicon_map),
-        "total_contigs": total_contigs,
-        "total_features": len(gmaker.feature_index),
-        "total_nodes": gmaker.pg_graph.number_of_nodes(),
-        "superbubbles": len(superbubbles),
-        "copy_number_variants": len(cnv_clusters),
-        "alternative_paths": alt_paths_count,                               # 1 insertion = 1 event
-        "structural_rearrangements": synteny_breakpoints_count + sv_edges_count,  # Breakpoint nodes + Path Dropouts
-        "inverted_blocks": inversions_count,                                      # 1 block = 1 event
-        "assembly_breaks": scaffolds_count,  # Shattered nodes + Scaffold bridges
-        "fragmented_cnv": assembly_repeat_breaks_count,  # Shattered nodes + Scaffold bridges
-        "parameters": {"k": pargs.ksize, "min": pargs.min},
-        "block_manifest": list(block_ids),
-        "contig_map": contig_map
-    }
-
     summary_json = json.dumps(summary_dict)
     summary_xml = f"    <summary>{summary_json}</summary>\n  "
     
     # Inject directly into the <meta> block (no regex cleaning needed on summary_xml)
     augmented_gexf = re.sub(r'</meta>', f'{summary_xml}</meta>', raw_gexf_output)  
 
-    with open(pargs.output, 'w') as f:
-        f.write(augmented_gexf)
-
-    with open(pargs.output, 'w') as f:
-        f.write(augmented_gexf)
-
-    # Trigger the TSV exports alongside the main GEXF/GFA
-    gmaker.write_reports(pargs.output)
+    if isinstance(pargs.output, str):
+        with open(pargs.output, 'w') as f:
+            f.write(augmented_gexf)
+    else:
+        pargs.output.write(augmented_gexf)
 
     if pargs.order_contigs != "none":
         unsorted_file = pargs.contig_output+".unsorted"
