@@ -659,8 +659,14 @@ class GraphMaker():
                     stack.append(cv) # Re-push for bottom-up
                     
                     # 3. Prepare Children
+                    passed_hunts = set()
                     for succ, weight in reversed(valid_succ_weights):
-                        hunts_for_child = [h.clone() for h in active_hunts_to_pass]
+                        edge_gens = get_edge_genomes(cv.node, succ)
+                        hunts_for_child = []
+                        for h in active_hunts_to_pass:
+                            if not edge_gens.issubset(h.highway_genomes):
+                                hunts_for_child.append(h.clone())
+                                passed_hunts.add(h)
                         
                         # USER FIX: ONLY spawn new hunts if we are in unvisited territory!
                         if is_new_territory and len(valid_succ_weights) > 1:
@@ -691,6 +697,10 @@ class GraphMaker():
                             child_pack = VisitPack(succ, hunts_for_child, child_dfs_path)
                             cv.children.append(child_pack)
                             stack.append(child_pack)
+                            
+                    for h in active_hunts_to_pass:
+                        if h not in passed_hunts:
+                            cv.returned_hunts.append(h)
                 #vastly simplified            
                 else:
                     # ---------------------------------------------------------
@@ -727,21 +737,35 @@ class GraphMaker():
                                 exit_groups.setdefault(exit_node, []).append(h.best_path)
                             
                             # 4. Highway Backfill and Bubble Annotation
+                            import heapq
                             for exit_node, paths in exit_groups.items():
                                 highway_path = []
-                                curr = cv.node
                                 highway_genomes = winning_hunts[0].highway_genomes
                                 
-                                # Trace the heaviest edges matching the highway genomes
-                                for _ in range(max_depth):
-                                    if curr == exit_node:
+                                # Find the highest-support shortest path matching highway_genomes from cv.node to exit_node
+                                hq = [(-len(highway_genomes), 0, 0, cv.node, [])]
+                                best_seen = {cv.node: (len(highway_genomes), 0)}
+                                while hq:
+                                    neg_min_ov, hops, neg_tot_ov, curr_n, c_path = heapq.heappop(hq)
+                                    if curr_n == exit_node:
+                                        highway_path = c_path
                                         break
-                                    succs = [s for s in UG.neighbors(curr) if s != cv.node and s not in highway_path]
-                                    if not succs: break
-                                    
-                                    best_succ = max(succs, key=lambda s: len(get_edge_genomes(curr, s).intersection(highway_genomes)))
-                                    highway_path.append(best_succ)
-                                    curr = best_succ
+                                    if hops >= max_depth:
+                                        continue
+                                    min_ov = -neg_min_ov
+                                    tot_ov = -neg_tot_ov
+                                    for s in UG.neighbors(curr_n):
+                                        if s == cv.node or s in c_path:
+                                            continue
+                                        ov = len(get_edge_genomes(curr_n, s).intersection(highway_genomes))
+                                        if ov == 0:
+                                            continue
+                                        nxt_min_ov = min(min_ov, ov)
+                                        nxt_hops = hops + 1
+                                        prev_best = best_seen.get(s)
+                                        if prev_best is None or (nxt_min_ov, -nxt_hops) > (prev_best[0], -prev_best[1]):
+                                            best_seen[s] = (nxt_min_ov, nxt_hops)
+                                            heapq.heappush(hq, (-nxt_min_ov, nxt_hops, -(tot_ov + ov), s, c_path + [s]))
                                     
                                 if highway_path and highway_path[-1] == exit_node:
                                     paths.append(highway_path)
@@ -895,6 +919,8 @@ class GraphMaker():
         # 1. Pre-calculate the maximum combined (Fwd+Rev) support for every (U, W) bubble
         max_supports = {}
         path_supports = {} 
+        has_direct_empty_site = set()
+        max_island_nodes = 150
         
         for data in discovered_paths.values():
             u, w = data['u'], data['w']
@@ -905,6 +931,9 @@ class GraphMaker():
             
             if path_supports[norm_path] > max_supports.get(norm_uw, 0):
                 max_supports[norm_uw] = path_supports[norm_path]
+                
+            if not data['bridge_nodes'] and data['non_terminal_targets']:
+                has_direct_empty_site.add(norm_uw)
 
         # Helper for direction-agnostic edge support
         def get_bidirectional_support(n1, n2):
@@ -934,6 +963,12 @@ class GraphMaker():
             if not bridge_nodes:
                 continue
 
+            # Option 3A: If (U, W) also has a non-terminal direct adjacency path (empty integration site U -> W)
+            # and this path is a bounded insertion (<= max_island_nodes), allow flagging the island even if >50% prevalence
+            if norm_uw in has_direct_empty_site and len(bridge_nodes) <= max_island_nodes:
+                this_path_support = path_supports.get(normalize_path(path_edges), len(data['walkers']))
+                shield_threshold = max(shield_threshold, this_path_support)
+
             if broken_targets:
                 scaffold_count += 1
                 # 1. Tag the nodes
@@ -951,8 +986,17 @@ class GraphMaker():
 
             if non_terminal_targets:
                 #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
-                u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
-                w_bubbles = self.pg_graph.nodes[w].get('superbubble_id', set())
+                u_bubbles = set(self.pg_graph.nodes[u].get('superbubble_id', set()))
+                for _, _, ed in self.pg_graph.out_edges(u, data=True):
+                    u_bubbles.update(ed.get('superbubble_id', set()))
+                for _, _, ed in self.pg_graph.in_edges(u, data=True):
+                    u_bubbles.update(ed.get('superbubble_id', set()))
+
+                w_bubbles = set(self.pg_graph.nodes[w].get('superbubble_id', set()))
+                for _, _, ed in self.pg_graph.out_edges(w, data=True):
+                    w_bubbles.update(ed.get('superbubble_id', set()))
+                for _, _, ed in self.pg_graph.in_edges(w, data=True):
+                    w_bubbles.update(ed.get('superbubble_id', set()))
                 
                 # If U and W share a superbubble ID, this path forms a closed
                 # topological loop (a local detour/hotspot). It is NOT a translocation.
@@ -2046,6 +2090,7 @@ class GraphMaker():
         undirected.add_nodes_from(self.pg_graph.nodes(data=True))
         
         num_genomes = float(len(self.replicon_map.keys()))
+        total_contigs = float(sum(len(c) for c in self.replicon_map.values()))
         
         for u, v, d in self.pg_graph.edges(data=True):
             if undirected.has_edge(u, v):
@@ -2062,7 +2107,10 @@ class GraphMaker():
                 existing['sequences'] = seq_set
                                 
                 # Recalculate true combined weight
-                existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
+                if self.context == "contig":
+                    existing['weight'] = len(seq_set) / total_contigs if total_contigs > 0 else 0.0
+                else:
+                    existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
                 edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement', 'inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path', 'is_superbubble']

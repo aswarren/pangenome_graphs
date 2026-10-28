@@ -337,6 +337,54 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
             self.assertFalse(gm_iso.pg_graph.nodes[pn].get("repeat_ambiguity", False))
             self.assertFalse(gm_iso.pg_graph.nodes[pn].get("repeat_ambiguity_fragmentation", False))
 
+        # Verify (1) Superbubble minority paths are NOT double-tagged as alternative_path when pinch points are untagged,
+        # and (2) Majority-prevalence bounded islands (>50 genes, paired with a direct U->W empty site) ARE flagged as alternative_path (Option 3A)
+        rows = ["#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup"]
+        for g_idx, (gid, has_ice, allele) in enumerate([("g1", True, "V1"), ("g2", True, "V1"), ("g3", False, "V2")], 1):
+            pos = 100
+            seq_fams = [f"A{i}" for i in range(1, 46)] + [allele] + [f"M{i}" for i in range(1, 46)]
+            if has_ice:
+                seq_fams.extend([f"ICE_{i}" for i in range(1, 56)])
+            seq_fams.extend([f"B{i}" for i in range(1, 46)])
+            for f_i, fam in enumerate(seq_fams, 1):
+                rows.append(f"{gid}\tOrg{g_idx}\tc1\tf_{gid}_{f_i}\t{pos}\t{pos+90}\t+\t{fam}")
+                pos += 100
+        sb_ice_file = os.path.join(self.temp_dir.name, "sb_ice.txt")
+        with open(sb_ice_file, "w") as f:
+            f.write("\n".join(rows))
+        gm_sb = GraphMaker(
+            feature_files=[sb_ice_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gm_sb.processFeatures()
+        gm_sb.RF_to_PG()
+        gm_sb.compute_graph_metrics()
+        gm_sb.detect_and_annotate_superbubbles()
+        gm_sb.tag_structural_variants()
+        gm_sb.flag_bridges()
+
+        fam_to_node = {d.get("family"): n for n, d in gm_sb.pg_graph.nodes(data=True)}
+        # Superbubble check: V1 and V2 are superbubble interior nodes and NOT alternative_path; A45 and M1 are clean pinch points
+        self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["V1"]].get("is_superbubble", False))
+        self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["V2"]].get("is_superbubble", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["V2"]].get("alternative_path", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["A45"]].get("is_superbubble", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["M1"]].get("is_superbubble", False))
+
+        # Option 3A check: 55-gene majority ICE (present in 2/3 genomes, empty site M45->B1 in 1/3) is flagged as alternative_path
+        self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["ICE_1"]].get("alternative_path", False))
+        self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["ICE_55"]].get("alternative_path", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["M45"]].get("alternative_path", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["B1"]].get("alternative_path", False))
+
 
 if __name__ == '__main__':
     unittest.main()
