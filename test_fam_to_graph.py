@@ -154,6 +154,189 @@ g2\tOrg2\tchr2\tf4_10\t1000\t1100\tD3"""
         self.assertEqual(summary["total_nodes"], 20)
         self.assertEqual(summary["copy_number_variants"], 4)
 
+    def test_inversion_and_shift_repeat_ambiguity(self):
+        """Verify opposite-direction contigs restore reference strand, true DNA inversions stay contiguous across k-mers, and shift splits preserve repeat_ambiguity."""
+        # g1 & g2 forward: A1(+) A2(+) A3(+) B1(+) B2(+) B3(+) B4(+) C1(+) C2(+) C3(+)
+        # g3 has B1..B4 inverted in both gene order and DNA strand: A1(+) A2(+) A3(+) B4(-) B3(-) B2(-) B1(-) C1(+) C2(+) C3(+)
+        # g4 is the entire contig reverse-complemented (opposite assembly direction, NOT a rearrangement relative to g1/g2):
+        #   C3(-) C2(-) C1(-) B4(-) B3(-) B2(-) B1(-) A3(-) A2(-) A1(-)
+        features = """#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup
+g1\tOrg1\tc1\tf1_1\t100\t200\t+\tA1
+g1\tOrg1\tc1\tf1_2\t200\t300\t+\tA2
+g1\tOrg1\tc1\tf1_3\t300\t400\t+\tA3
+g1\tOrg1\tc1\tf1_4\t400\t500\t+\tB1
+g1\tOrg1\tc1\tf1_5\t500\t600\t+\tB2
+g1\tOrg1\tc1\tf1_6\t600\t700\t+\tB3
+g1\tOrg1\tc1\tf1_7\t700\t800\t+\tB4
+g1\tOrg1\tc1\tf1_8\t800\t900\t+\tC1
+g1\tOrg1\tc1\tf1_9\t900\t1000\t+\tC2
+g1\tOrg1\tc1\tf1_10\t1000\t1100\t+\tC3
+g2\tOrg2\tc1\tf2_1\t100\t200\t+\tA1
+g2\tOrg2\tc1\tf2_2\t200\t300\t+\tA2
+g2\tOrg2\tc1\tf2_3\t300\t400\t+\tA3
+g2\tOrg2\tc1\tf2_4\t400\t500\t+\tB1
+g2\tOrg2\tc1\tf2_5\t500\t600\t+\tB2
+g2\tOrg2\tc1\tf2_6\t600\t700\t+\tB3
+g2\tOrg2\tc1\tf2_7\t700\t800\t+\tB4
+g2\tOrg2\tc1\tf2_8\t800\t900\t+\tC1
+g2\tOrg2\tc1\tf2_9\t900\t1000\t+\tC2
+g2\tOrg2\tc1\tf2_10\t1000\t1100\t+\tC3
+g3\tOrg3\tc1\tf3_1\t100\t200\t+\tA1
+g3\tOrg3\tc1\tf3_2\t200\t300\t+\tA2
+g3\tOrg3\tc1\tf3_3\t300\t400\t+\tA3
+g3\tOrg3\tc1\tf3_4\t400\t500\t-\tB4
+g3\tOrg3\tc1\tf3_5\t500\t600\t-\tB3
+g3\tOrg3\tc1\tf3_6\t600\t700\t-\tB2
+g3\tOrg3\tc1\tf3_7\t700\t800\t-\tB1
+g3\tOrg3\tc1\tf3_8\t800\t900\t+\tC1
+g3\tOrg3\tc1\tf3_9\t900\t1000\t+\tC2
+g3\tOrg3\tc1\tf3_10\t1000\t1100\t+\tC3
+g4\tOrg4\tc1\tf4_1\t100\t200\t-\tC3
+g4\tOrg4\tc1\tf4_2\t200\t300\t-\tC2
+g4\tOrg4\tc1\tf4_3\t300\t400\t-\tC1
+g4\tOrg4\tc1\tf4_4\t400\t500\t-\tB4
+g4\tOrg4\tc1\tf4_5\t500\t600\t-\tB3
+g4\tOrg4\tc1\tf4_6\t600\t700\t-\tB2
+g4\tOrg4\tc1\tf4_7\t700\t800\t-\tB1
+g4\tOrg4\tc1\tf4_8\t800\t900\t-\tA3
+g4\tOrg4\tc1\tf4_9\t900\t1000\t-\tA2
+g4\tOrg4\tc1\tf4_10\t1000\t1100\t-\tA1"""
+        inv_file = os.path.join(self.temp_dir.name, "inv_features.txt")
+        with open(inv_file, "w") as f:
+            f.write(features)
+
+        gmaker = GraphMaker(
+            feature_files=[inv_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gmaker.processFeatures()
+        gmaker.RF_to_PG()
+        gmaker.calcStatistics()
+        gmaker.compute_graph_metrics()
+        inv_events, _ = gmaker.tag_structural_variants()
+
+        # Exactly 1 contiguous inverted component (B1-B2-B3-B4 plus boundary edges), and A1-A2-A3 / C1-C2-C3 are NOT inverted
+        self.assertEqual(inv_events, 1)
+        fam_to_node = {d["label"]: n for n, d in gmaker.pg_graph.nodes(data=True)}
+        for non_inv in ["A1", "A2", "A3", "C1", "C2", "C3"]:
+            nid = fam_to_node[non_inv]
+            self.assertFalse(gmaker.pg_graph.nodes[nid].get("inverted_block", False), f"{non_inv} should not be marked inverted_block")
+        for inv_fam in ["B1", "B2", "B3", "B4"]:
+            nid = fam_to_node[inv_fam]
+            self.assertTrue(gmaker.pg_graph.nodes[nid].get("inverted_block", False), f"{inv_fam} should be marked inverted_block")
+        # Add a localized repeat R1-R2-R3 duplicated in g2 so shift conflict splits R1-R2-R3 into original + new_pg nodes,
+        # and verify BOTH original and split nodes have repeat_ambiguity == True.
+        shift_features = """#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup
+g1\tOrg1\tc1\ts1_1\t100\t200\t+\tA1
+g1\tOrg1\tc1\ts1_2\t200\t300\t+\tA2
+g1\tOrg1\tc1\ts1_3\t300\t400\t+\tA3
+g1\tOrg1\tc1\ts1_4\t400\t500\t+\tR1
+g1\tOrg1\tc1\ts1_5\t500\t600\t+\tR2
+g1\tOrg1\tc1\ts1_6\t600\t700\t+\tR3
+g1\tOrg1\tc1\ts1_7\t700\t800\t+\tC1
+g1\tOrg1\tc1\ts1_8\t800\t900\t+\tC2
+g1\tOrg1\tc1\ts1_9\t900\t1000\t+\tC3
+g2\tOrg2\tc1\ts2_1\t100\t200\t+\tA1
+g2\tOrg2\tc1\ts2_2\t200\t300\t+\tA2
+g2\tOrg2\tc1\ts2_3\t300\t400\t+\tA3
+g2\tOrg2\tc1\ts2_4\t400\t500\t+\tR1
+g2\tOrg2\tc1\ts2_5\t500\t600\t+\tR2
+g2\tOrg2\tc1\ts2_6\t600\t700\t+\tR3
+g2\tOrg2\tc1\ts2_7\t700\t800\t+\tR1
+g2\tOrg2\tc1\ts2_8\t800\t900\t+\tR2
+g2\tOrg2\tc1\ts2_9\t900\t1000\t+\tR3
+g2\tOrg2\tc1\ts2_10\t1000\t1100\t+\tC1
+g2\tOrg2\tc1\ts2_11\t1100\t1200\t+\tC2
+g2\tOrg2\tc1\ts2_12\t1200\t1300\t+\tC3"""
+        shift_file = os.path.join(self.temp_dir.name, "shift_features.txt")
+        with open(shift_file, "w") as f:
+            f.write(shift_features)
+        gm_shift = GraphMaker(
+            feature_files=[shift_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gm_shift.processFeatures()
+        gm_shift.RF_to_PG()
+        gm_shift.calcStatistics()
+        gm_shift.compute_graph_metrics()
+        r_nodes = [n for n, d in gm_shift.pg_graph.nodes(data=True) if d.get("label") in {"R1", "R2", "R3"}]
+        self.assertEqual(len(r_nodes), 6, "Expected 3 original + 3 split PG nodes for R1..R3")
+        for rn in r_nodes:
+            self.assertTrue(gm_shift.pg_graph.nodes[rn].get("repeat_ambiguity", False), f"Node {rn} ({gm_shift.pg_graph.nodes[rn].get('label')}) missing repeat_ambiguity")
+            self.assertGreater(gm_shift.pg_graph.nodes[rn].get("cnv_cluster_id", 0), 0)
+
+        # Verify isolated paralogs in different k-mer contexts on different contigs do NOT get flagged as repeat_ambiguity or repeat_ambiguity_fragmentation
+        iso_paralog_features = """#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup
+g1\tOrg1\tchr1\tp1_1\t100\t200\t+\tA1
+g1\tOrg1\tchr1\tp1_2\t200\t300\t+\tA2
+g1\tOrg1\tchr1\tp1_3\t300\t400\t+\tA3
+g1\tOrg1\tchr1\tp1_4\t400\t500\t+\tPARA
+g1\tOrg1\tchr1\tp1_5\t500\t600\t+\tB1
+g1\tOrg1\tchr1\tp1_6\t600\t700\t+\tB2
+g1\tOrg1\tchr1\tp1_7\t700\t800\t+\tB3
+g1\tOrg1\tchr2\tp2_1\t100\t200\t+\tC1
+g1\tOrg1\tchr2\tp2_2\t200\t300\t+\tC2
+g1\tOrg1\tchr2\tp2_3\t300\t400\t+\tC3
+g1\tOrg1\tchr2\tp2_4\t400\t500\t+\tPARA
+g1\tOrg1\tchr2\tp2_5\t500\t600\t+\tD1
+g1\tOrg1\tchr2\tp2_6\t600\t700\t+\tD2
+g1\tOrg1\tchr2\tp2_7\t700\t800\t+\tD3
+g2\tOrg2\tchr1\tp3_1\t100\t200\t+\tA1
+g2\tOrg2\tchr1\tp3_2\t200\t300\t+\tA2
+g2\tOrg2\tchr1\tp3_3\t300\t400\t+\tA3
+g2\tOrg2\tchr1\tp3_4\t400\t500\t+\tPARA
+g2\tOrg2\tchr1\tp3_5\t500\t600\t+\tB1
+g2\tOrg2\tchr1\tp3_6\t600\t700\t+\tB2
+g2\tOrg2\tchr1\tp3_7\t700\t800\t+\tB3
+g2\tOrg2\tchr2\tp4_1\t100\t200\t+\tC1
+g2\tOrg2\tchr2\tp4_2\t200\t300\t+\tC2
+g2\tOrg2\tchr2\tp4_3\t300\t400\t+\tC3
+g2\tOrg2\tchr2\tp4_4\t400\t500\t+\tPARA
+g2\tOrg2\tchr2\tp4_5\t500\t600\t+\tD1
+g2\tOrg2\tchr2\tp4_6\t600\t700\t+\tD2
+g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
+        iso_file = os.path.join(self.temp_dir.name, "iso_paralog.txt")
+        with open(iso_file, "w") as f:
+            f.write(iso_paralog_features)
+        gm_iso = GraphMaker(
+            feature_files=[iso_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gm_iso.processFeatures()
+        gm_iso.RF_to_PG()
+        gm_iso.calcStatistics()
+        gm_iso.compute_graph_metrics()
+        para_nodes = [n for n, d in gm_iso.pg_graph.nodes(data=True) if d.get("family") == "PARA"]
+        self.assertEqual(len(para_nodes), 2, "Expected 2 distinct PG-nodes for isolated paralog PARA in different k-mer contexts")
+        for pn in para_nodes:
+            self.assertEqual(gm_iso.pg_graph.nodes[pn].get("cnv_cluster_id", 0), 0)
+            self.assertFalse(gm_iso.pg_graph.nodes[pn].get("repeat_ambiguity", False))
+            self.assertFalse(gm_iso.pg_graph.nodes[pn].get("repeat_ambiguity_fragmentation", False))
+
 
 if __name__ == '__main__':
     unittest.main()

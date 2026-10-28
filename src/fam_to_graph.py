@@ -293,6 +293,7 @@ class GraphMaker():
         self.visit_number=0
         self.alt_counter =0
         self.similarity_matrix = collections.defaultdict(lambda: collections.defaultdict(int))
+        self.contig_polarity = {}
         #based on the feature that is leaving the kmer: flip 0/1, orientation forward/reverse 0/1, leaving_position left/right 0/f1
         #gives position of the newest feature in the next kmer, the adjustment to the leaving feature to get the rhs of next kmer
         self.projection_table=[[[
@@ -766,8 +767,8 @@ class GraphMaker():
                     
                     full_path = [origin] + path
                     
-                    # Tag the Entry, Internal, and Exit nodes so the entire bubble is one unit
-                    for n in full_path:
+                    # Tag only the Internal variant nodes (path[:-1]), leaving Entry/Exit pinch-point anchors clean
+                    for n in path[:-1]:
                         self.pg_graph.nodes[n]['superbubble_id'].add(bid)
                         self.pg_graph.nodes[n]['is_superbubble'] = True
                     for i in range(len(full_path)-1):
@@ -864,14 +865,17 @@ class GraphMaker():
                                         'w': current_node,
                                         'bridge_nodes': set(bridge_nodes),
                                         'path_edges': path_edges,
-                                        'is_scaffold': True,
+                                        'broken_targets': set(),
+                                        'non_terminal_targets': set(),
                                         'walkers': set()
                                     }
                                 
                                 discovered_paths[path_edges]['walkers'].add(walker_genome)
                                 
-                                if not (prev_is_term and curr_is_term):
-                                    discovered_paths[path_edges]['is_scaffold'] = False
+                                if prev_is_term and curr_is_term:
+                                    discovered_paths[path_edges]['broken_targets'].add(target_genome)
+                                else:
+                                    discovered_paths[path_edges]['non_terminal_targets'].add(target_genome)
 
                         last_seen[target_genome] = {'pg_node': current_node, 'walk_idx': walk_idx}
 
@@ -916,7 +920,8 @@ class GraphMaker():
             u = data['u']
             w = data['w']
             bridge_nodes = data['bridge_nodes']
-            is_scaffold = data['is_scaffold']
+            broken_targets = data['broken_targets']
+            non_terminal_targets = data['non_terminal_targets']
             
             norm_uw = tuple(sorted([u, w]))
             dominant_support = max_supports.get(norm_uw, 1)
@@ -929,7 +934,7 @@ class GraphMaker():
             if not bridge_nodes:
                 continue
 
-            if is_scaffold:
+            if broken_targets:
                 scaffold_count += 1
                 # 1. Tag the nodes
                 for n in bridge_nodes:
@@ -937,12 +942,14 @@ class GraphMaker():
                 
                 # 2. Tag the edges of the path!
                 # path_edges is a tuple of edges: ((u, x), (x, y), (y, w))
+                target_str = ",".join(sorted(broken_targets))
                 for edge in path_edges:
                     for direction in [(edge[0], edge[1]), (edge[1], edge[0])]:
                         if self.pg_graph.has_edge(*direction):
                             self.pg_graph.edges[direction]['is_scaffold_path'] = True
-                            self.pg_graph.edges[direction]['scaffold_entities'] = ",".join(data['walkers'])
-            else:
+                            self.pg_graph.edges[direction]['scaffold_entities'] = target_str
+
+            if non_terminal_targets:
                 #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
                 u_bubbles = self.pg_graph.nodes[u].get('superbubble_id', set())
                 w_bubbles = self.pg_graph.nodes[w].get('superbubble_id', set())
@@ -1008,21 +1015,26 @@ class GraphMaker():
         processed_n = set([])
         grp_id = 1
         
-        # 1. Build alt_groups mapping by protein family (plus any explicit pg_node_alt sets)
-        family_to_nodes = collections.defaultdict(set)
-        for n, d in self.pg_graph.nodes(data=True):
-            first_group = next(i for key, i in d["features"].items() if type(i) == dict and key != "info")
-            f_id = next(iter(first_group.values()))[0]
-            fam_id = self.feature_index[f_id].group_id
-            if fam_id:
-                family_to_nodes[fam_id].add(n)
-
-        for fam_id, nodes_set in family_to_nodes.items():
-            if len(nodes_set) > 1:
-                processed_n.update(nodes_set)
-                for alt in nodes_set:
-                    alt_group[alt] = grp_id
-                grp_id += 1
+        # 1. Build alt_groups mapping from identical k-mer neighborhood repeats (rf_node columns) and local shift alternates (pg_node_alt)
+        for rf_node in self.rf_node_index:
+            col_fam_pgs = collections.defaultdict(set)
+            for rhs_f in rf_node.features[0] | rf_node.assigned_features[0]:
+                for offset in range(self.ksize):
+                    f_id = rhs_f - offset
+                    col = (self.ksize - 1) - offset
+                    feat = self.feature_index[f_id]
+                    if feat.pg_assignment is not None and feat.group_id:
+                        col_fam_pgs[(col, feat.group_id)].add(feat.pg_assignment)
+            for rhs_f in rf_node.features[1] | rf_node.assigned_features[1]:
+                for offset in range(self.ksize):
+                    f_id = rhs_f - offset
+                    col = offset
+                    feat = self.feature_index[f_id]
+                    if feat.pg_assignment is not None and feat.group_id:
+                        col_fam_pgs[(col, feat.group_id)].add(feat.pg_assignment)
+            for pgs in col_fam_pgs.values():
+                if len(pgs) > 1:
+                    self.storeAlternates(pgs)
 
         for n, alts in self.pg_node_alt.items():
             if n in processed_n:
@@ -1039,14 +1051,20 @@ class GraphMaker():
             clusters.setdefault(c_id,[]).append(node)
             
         macro_conflicts = set()
+        repeat_ambig_nodes = set()
         for c_id, nodes in clusters.items():
             cluster_genomes = {}
+            cluster_gen_copies = collections.defaultdict(int)
             for node in nodes:
                 feat_dict = self.pg_graph.nodes[node].get("features", {})
                 for gen_id, seq_dict in feat_dict.items():
                     if gen_id in ["info", "md5", "start", "end"]: continue
                     cluster_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
+                    for f_list in seq_dict.values():
+                        cluster_gen_copies[gen_id] += len(f_list)
             
+            if any(copies > 1 for copies in cluster_gen_copies.values()):
+                repeat_ambig_nodes.update(nodes)
             if any(len(contigs) > 1 for contigs in cluster_genomes.values()):
                 macro_conflicts.update(nodes)
 
@@ -1088,6 +1106,8 @@ class GraphMaker():
             if self.label_function and label_set:
                 d["label"] = list(label_set)[0]
                 
+            if n in repeat_ambig_nodes:
+                d["repeat_ambiguity"] = True
             if n in macro_conflicts:
                 d["repeat_ambiguity_fragmentation"] = True
                 
@@ -1224,29 +1244,34 @@ class GraphMaker():
                 drop_outs = shared_items - edge_items
                 
             if drop_outs:
-                    
-                    # If this edge carries the majority of the shared genomes, it is the Highway.
-                    # Do not impugn
                     edge_support = len(edge_items)
                     shared_support = len(shared_items)
-                    
-                    if edge_support > (shared_support / 2.0):
-                        continue
 
                     true_rearrangements = set()
                     cnv_detours = set()
                     assembly_gaps = set()
-                    
+
+                    for drop_gen in drop_outs:
+                        u_term = target_is_terminal_in_node(drop_gen, u)
+                        v_term = target_is_terminal_in_node(drop_gen, v)
+                        if u_term and v_term:
+                            assembly_gaps.add(drop_gen)
+
+                    # If this edge carries the majority of the shared genomes, it is the Highway.
+                    # Do not impugn it as a rearrangement, but still allow it to serve as a 1-hop scaffold bridge!
+                    if edge_support > (shared_support / 2.0):
+                        if assembly_gaps:
+                            d["is_scaffold_path"] = True
+                            d["scaffold_entities"] = ",".join(sorted(assembly_gaps))
+                            d["sv_entities"] = ",".join(sorted(assembly_gaps))
+                        continue
+
                     # Track the physical nature of the divergence
                     is_intra_contig = False
                     is_inter_contig = False
                     
                     for drop_gen in drop_outs:
-                        u_term = target_is_terminal_in_node(drop_gen, u)
-                        v_term = target_is_terminal_in_node(drop_gen, v)
-                        
-                        if u_term and v_term:
-                            assembly_gaps.add(drop_gen)
+                        if drop_gen in assembly_gaps:
                             continue
                             
                         # --- PRECISE CNV DETOUR LOGIC ---
@@ -1299,15 +1324,16 @@ class GraphMaker():
                             if is_intra_contig:
                                 d["intra_contig_rearrangement"] = True
                             
-                        d["sv_entities"] = ",".join(true_rearrangements)
+                        d["sv_entities"] = ",".join(sorted(edge_items))
                         sv_edges += 1
                     elif cnv_detours:
                         d["repeat_ambiguity_detour"] = True
-                        d["sv_entities"] = ",".join(cnv_detours)
-                    elif assembly_gaps:
+                        d["sv_entities"] = ",".join(sorted(edge_items))
+                    if assembly_gaps:
                         d["is_scaffold_path"] = True
-                        d["scaffold_entities"] = ",".join(assembly_gaps)
-                        d["sv_entities"] = ",".join(assembly_gaps)
+                        d["scaffold_entities"] = ",".join(sorted(assembly_gaps))
+                        if "sv_entities" not in d:
+                            d["sv_entities"] = ",".join(sorted(assembly_gaps))
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
         logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
@@ -1325,8 +1351,15 @@ class GraphMaker():
         # Sort edges by weight (descending) so we seed the heaviest Highways first
         edges_sorted = sorted(undirected_pg.edges(data=True), key=lambda x: x[2].get('weight', 0), reverse=True)
         
-        # Track unvisited edges (using sorted tuple keys to avoid directionality issues)
-        unvisited_edges = {(min(u, v), max(u, v)): d for u, v, d in edges_sorted}
+        # Initialize unvisited edges with their available sequence threads (using sorted tuple keys to avoid directionality issues)
+        momentum_key = 'genomes' if self.context == 'feature' else 'sequences'
+        unvisited_edges = {}
+        for u, v, d in edges_sorted:
+            edge_tuple = (min(u, v), max(u, v))
+            unvisited_edges[edge_tuple] = {
+                'data': d,
+                'threads': set(d.get(momentum_key, set()))
+            }
         
         block_id = 1
         block_manifest = []
@@ -1334,29 +1367,32 @@ class GraphMaker():
         # Initialize default edge and node blocks on the Directed Graph
         for u, v in self.pg_graph.edges():
             self.pg_graph.edges[u, v]['block'] = "Fragment"
+            self.pg_graph.edges[u, v]['block_set'] = set()
         for n in self.pg_graph.nodes():
             self.pg_graph.nodes[n]['block'] = set()
             
         total_nodes = self.pg_graph.number_of_nodes()
         min_nodes_req = total_nodes * min_node_fraction
+        junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path',
+                          'genomic_rearrangement', 'intra_contig_rearrangement', 'inter_contig_rearrangement'}
         
-        while unvisited_edges:
-            # 1. Pop the heaviest unvisited edge to seed a new Block
-            seed_edge, seed_data = next(iter(unvisited_edges.items()))
-            del unvisited_edges[seed_edge]
+        while True:
+            # 1. Find the heaviest unvisited edge that still has threads (and is not a structural junction) to seed a new Block
+            seed_edge = None
+            for e, info in unvisited_edges.items():
+                if len(info['threads']) > 0 and not any(info['data'].get(flag) for flag in junction_flags):
+                    seed_edge = e
+                    break
             
-            # RULE 2: Never seed on a known structural junction
-            junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path',
-                              'genomic_rearrangement', 'intra_contig_rearrangement', 'inter_contig_rearrangement'}
-            if any(seed_data.get(flag) for flag in junction_flags):
-                continue
+            if not seed_edge:
+                break
                 
             current_block = f"Block_{block_id}"
             current_nodes = set([seed_edge[0], seed_edge[1]])
             current_edges = [seed_edge]
             
-            momentum_key = 'genomes' if self.context == 'feature' else 'sequences'
-            momentum_set = set(seed_data.get(momentum_key, set()))
+            momentum_set = set(unvisited_edges[seed_edge]['threads'])
+            unvisited_edges[seed_edge]['threads'].clear()
             
             stack = [(seed_edge[0], momentum_set), (seed_edge[1], momentum_set)]
             
@@ -1371,19 +1407,20 @@ class GraphMaker():
                     edge_tuple = (min(curr_node, nxt), max(curr_node, nxt))
                     
                     if edge_tuple in unvisited_edges:
-                        nxt_data = unvisited_edges[edge_tuple]
+                        info = unvisited_edges[edge_tuple]
+                        nxt_data = info['data']
                         
                         # RULE 2: Never follow a structural junction edge
                         if any(nxt_data.get(flag) for flag in junction_flags):
                             continue
                             
-                        # Rule A: Check Momentum Overlap
-                        edge_threads = set(nxt_data.get(momentum_key, set()))
-                        overlap = momentum.intersection(edge_threads)
+                        # Rule A: Check Momentum Overlap against remaining threads
+                        original_edge_threads = set(info['threads'])
+                        overlap = momentum.intersection(original_edge_threads)
                         
                         # If there is physical continuity (overlap > 0), thread through!
                         if len(overlap) > 0:
-                            del unvisited_edges[edge_tuple]
+                            info['threads'] -= overlap
                             current_edges.append(edge_tuple)
                             current_nodes.add(nxt)
                             
@@ -1393,7 +1430,7 @@ class GraphMaker():
                                 new_momentum = momentum
                             else:
                                 # Normal accumulation on safe backbone nodes
-                                new_momentum = momentum.union(edge_threads)
+                                new_momentum = momentum.union(original_edge_threads)
                                 
                             stack.append((nxt, new_momentum))
             
@@ -1408,25 +1445,31 @@ class GraphMaker():
                     block_manifest.append("Fragment")
                     
             # 4. Apply Labels to the DIRECTED graph
-            for u, v in current_edges:
-                # Apply to both possible directions in the directed graph
-                if self.pg_graph.has_edge(u, v):
-                    self.pg_graph.edges[u, v]['block'] = final_block_label
-                if self.pg_graph.has_edge(v, u):
-                    self.pg_graph.edges[v, u]['block'] = final_block_label
-                    
-            # Nodes accumulate the blocks of their incident edges
-            for n in current_nodes:
-                if final_block_label != "Fragment":
+            if final_block_label != "Fragment":
+                for u, v in current_edges:
+                    if self.pg_graph.has_edge(u, v):
+                        self.pg_graph.edges[u, v]['block_set'].add(final_block_label)
+                    if self.pg_graph.has_edge(v, u):
+                        self.pg_graph.edges[v, u]['block_set'].add(final_block_label)
+                        
+                # Nodes accumulate the blocks of their incident edges
+                for n in current_nodes:
                     self.pg_graph.nodes[n]['block'].add(final_block_label)
 
-        # 5. Clean up node 'block' attributes for GEXF export
+        # 5. Clean up node and edge 'block' attributes for GEXF export
         for n, d in self.pg_graph.nodes(data=True):
             blocks = d.get('block', set())
             if not blocks:
                 d['block'] = "Fragment"
             else:
                 # e.g., "Block_1,Block_2" for Paralog Hubs!
+                d['block'] = ",".join(sorted(list(blocks)))
+
+        for u, v, d in self.pg_graph.edges(data=True):
+            blocks = d.pop('block_set', set())
+            if not blocks:
+                d['block'] = "Fragment"
+            else:
                 d['block'] = ",".join(sorted(list(blocks)))
 
         logging.warning(f"Block Detection (TFS Momentum): Found {block_id - 1} major blocks.")
@@ -1702,12 +1745,102 @@ class GraphMaker():
         if self.debug: nx.set_node_attributes(self.rf_graph, "visit", "")
 
 
+    def compute_contig_polarities(self):
+        """
+        Aligns contig orientations across shared canonical k-mers (rfNodes)
+        so that contigs assembled on the reverse-complement strand are normalized
+        to the reference orientation, while intra-contig inversions are preserved.
+        """
+        self.contig_polarity = {}
+        pair_votes = collections.defaultdict(lambda: [0, 0])  # (k1, k2) -> [same, opp]
+        for rf_node in self.rf_node_index:
+            c0 = {(self.feature_index[f].genome_id, self.feature_index[f].contig_id) for f in rf_node.features[0]}
+            c1 = {(self.feature_index[f].genome_id, self.feature_index[f].contig_id) for f in rf_node.features[1]}
+            both = c0 & c1
+            c0 -= both
+            c1 -= both
+            c0_list = sorted(c0)
+            c1_list = sorted(c1)
+            for i in range(len(c0_list)):
+                ca = c0_list[i]
+                for j in range(i + 1, len(c0_list)):
+                    cb = c0_list[j]
+                    pair_votes[(ca, cb)][0] += 1
+                    pair_votes[(cb, ca)][0] += 1
+                for cb in c1_list:
+                    pair_votes[(ca, cb)][1] += 1
+                    pair_votes[(cb, ca)][1] += 1
+            for i in range(len(c1_list)):
+                ca = c1_list[i]
+                for j in range(i + 1, len(c1_list)):
+                    cb = c1_list[j]
+                    pair_votes[(ca, cb)][0] += 1
+                    pair_votes[(cb, ca)][0] += 1
+
+        adj = collections.defaultdict(dict)
+        for (ca, cb), (same, opp) in pair_votes.items():
+            adj[ca][cb] = (same, opp)
+
+        all_contigs = []
+        contig_len = {}
+        for g_id, c_dict in self.replicon_map.items():
+            for c_id, f_list in c_dict.items():
+                key = (g_id, c_id)
+                if key not in contig_len:
+                    all_contigs.append(key)
+                    contig_len[key] = len(f_list)
+
+        seed_order = sorted(range(len(all_contigs)), key=lambda idx: (-contig_len[all_contigs[idx]], idx))
+        for idx in seed_order:
+            seed = all_contigs[idx]
+            if seed in self.contig_polarity:
+                continue
+            self.contig_polarity[seed] = 0
+            assigned_in_comp = {seed}
+            while True:
+                best_cand = None
+                best_weight = -1
+                best_same = 0
+                best_opp = 0
+                for cand in all_contigs:
+                    if cand in self.contig_polarity or cand not in adj:
+                        continue
+                    ref_same = 0
+                    ref_opp = 0
+                    for u in assigned_in_comp:
+                        if u in adj[cand]:
+                            s, o = adj[cand][u]
+                            if self.contig_polarity[u] == 0:
+                                ref_same += s
+                                ref_opp += o
+                            else:
+                                ref_same += o
+                                ref_opp += s
+                    w = ref_same + ref_opp
+                    if w > 0 and w > best_weight:
+                        best_weight = w
+                        best_cand = cand
+                        best_same = ref_same
+                        best_opp = ref_opp
+                if best_cand is None:
+                    break
+                self.contig_polarity[best_cand] = 1 if best_opp > best_same else 0
+                assigned_in_comp.add(best_cand)
+
+    def get_relative_strand(self, feat_id):
+        feat = self.feature_index[feat_id]
+        raw_strand = feat.strand
+        if self.contig_polarity.get((feat.genome_id, feat.contig_id), 0) == 1:
+            return '+' if raw_strand == '-' else '-'
+        return raw_strand
+
     def RF_to_PG(self):
         #determine list of starting nodes
         for node in self.rf_node_index:
             if node.anchorNode():
                 self.rf_starting_list.append(node)
         self.finalizeInstanceKeys()
+        self.compute_contig_polarities()
         #sort by area that it will take up, then by whether it is earlier in the contig
         if self.traverse_priority == "area":
             #numBins will be the number of contexts the kmer will show up in (non-dup). this number will be inflated but correct for relative sorting.
@@ -1937,6 +2070,8 @@ class GraphMaker():
                     existing[flag] = existing.get(flag, False) or d.get(flag, False)
                 if 'superbubble_id' in existing or 'superbubble_id' in d:
                     existing['superbubble_id'] = set(existing.get('superbubble_id', set())) | set(d.get('superbubble_id', set()))
+                if 'strands' in existing or 'strands' in d:
+                    existing['strands'] = set(existing.get('strands', set())) | set(d.get('strands', set()))
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
@@ -2041,7 +2176,8 @@ class GraphMaker():
         end=self.feature_index[new_feature].end
         #if there is already a node for this feature
 
-        if self.feature_index[new_feature].pg_assignment != None:
+        was_assigned = (self.feature_index[new_feature].pg_assignment != None)
+        if was_assigned:
             if (pg_node != None):
                 if pg_node != self.feature_index[new_feature].pg_assignment:
                     cur_pg_id = self.feature_index[new_feature].pg_assignment
@@ -2082,14 +2218,22 @@ class GraphMaker():
             #if conflict == "shift" and not "alternate" in self.pg_graph.nodes[cur_pg_id]:
             #    self.pg_graph.nodes[cur_pg_id]["alternate"]=1
 
-        node_strands = self.pg_graph.nodes[cur_pg_id].setdefault("strands", set())
-        node_strands.add(relative_strand)
-        if len(node_strands) > 1:
-            self.pg_graph.nodes[cur_pg_id]["inverted_block"] = True
+        if not was_assigned or prev_feature != None:
+            node_strands = self.pg_graph.nodes[cur_pg_id].setdefault("strands", set())
+            node_strands.add(relative_strand)
+            if len(node_strands) > 1:
+                self.pg_graph.nodes[cur_pg_id]["inverted_block"] = True
 
         if prev_feature != None :
             prev_pg_id = self.feature_index[prev_feature].pg_assignment
-            self.construct_pg_edge(prev_pg_id, cur_pg_id, genome_id, sequence_id, strand=relative_strand)
+            is_rc = (self.contig_polarity.get((genome_id, sequence_id), 0) == 1)
+            if (prev_feature > new_feature) ^ is_rc:
+                u_pg, v_pg = cur_pg_id, prev_pg_id
+                edge_strand = self.get_relative_strand(prev_feature)
+            else:
+                u_pg, v_pg = prev_pg_id, cur_pg_id
+                edge_strand = relative_strand
+            self.construct_pg_edge(u_pg, v_pg, genome_id, sequence_id, strand=edge_strand)
             #if conflict:
             #    tier2=self.conflicts.setdefault(cur_pg_id, {})
             #    conflicted=tier2.setdefault(prev_pg_id, set([]))
@@ -2251,8 +2395,12 @@ class GraphMaker():
     #store alternate pg-nodes at a given k-position
     def storeAlternates(self, pg_ids):
         assert type(pg_ids == set)
+        combined = set(pg_ids)
         for i in pg_ids:
-            self.pg_node_alt.setdefault(i, set([])).update(pg_ids)
+            if i in self.pg_node_alt:
+                combined.update(self.pg_node_alt[i])
+        for i in combined:
+            self.pg_node_alt[i] = combined
 
     #make assignments that are in pre_assignments
     def makeAssignments(self, pre_assignments, conflicts):
@@ -2260,6 +2408,7 @@ class GraphMaker():
         while i >= 0:
             alt_nodes = set([])
             alt_nodes.update(pre_assignments[i]["assignments"].keys())
+            has_shift = ("shift" in conflicts[i] and len(conflicts[i]["shift"]) > 0)
             for pg in pre_assignments[i]["assignments"]:
                 conflict_status = []
                 if ("shift" in conflicts[i] and pg in conflicts[i]["shift"]):
@@ -2269,27 +2418,21 @@ class GraphMaker():
                 if ("c1_conflict" in conflicts[i] and pg in conflicts[i]["c1_conflict"]):
                     conflict_status.append("synteny_breakpoint")
 
+                if conflict_status and pg in self.pg_graph.nodes:
+                    for c in conflict_status:
+                        self.pg_graph.nodes[pg][c] = True
+
                 for ik, features in pre_assignments[i]["assignments"][pg]["features"].items():
                     for f in features:
-                        raw_strand = self.feature_index[f.new_feature].strand
-                        if f.direction == 1:
-                            rel_strand = '+' if raw_strand == '-' else '-'
-                        else:
-                            rel_strand = raw_strand
-                            
+                        rel_strand = self.get_relative_strand(f.new_feature)
                         self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=pg, conflicts=conflict_status, relative_strand=rel_strand)
+            new_node_conflicts = ["repeat_ambiguity"] if has_shift else []
             for pg in pre_assignments[i]["new_nodes"]:
                 new_pg = None
                 for ik, features in pre_assignments[i]["new_nodes"][pg]["features"].items():
                     for f in features:
-                        # Translate the raw strand based on the TFS traversal direction!
-                        raw_strand = self.feature_index[f.new_feature].strand
-                        if f.direction == 1:
-                            rel_strand = '+' if raw_strand == '-' else '-'
-                        else:
-                            rel_strand = raw_strand
-                            
-                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflicts=[], relative_strand=rel_strand)
+                        rel_strand = self.get_relative_strand(f.new_feature)
+                        new_pg=self.assign_pg_node(prev_feature=f.prev_feature, new_feature=f.new_feature, pg_node=new_pg, conflicts=new_node_conflicts, relative_strand=rel_strand)
                         alt_nodes.add(new_pg)
             if len(alt_nodes) > 1: self.storeAlternates(alt_nodes)
             i-=1
@@ -2481,14 +2624,18 @@ class GraphMaker():
                             elif self.feature_index[new_feature].pg_assignment != None:
                                 #construct pg-edge to previously created node
                                 edge_only=True
-                                
-                                raw_strand = self.feature_index[new_feature].strand
-                                if direction == 1:
-                                    rel_strand = '+' if raw_strand == '-' else '-'
+                                gen_id = self.feature_index[new_feature].genome_id
+                                seq_id = self.feature_index[new_feature].contig_id
+                                is_rc = (self.contig_polarity.get((gen_id, seq_id), 0) == 1)
+                                prev_pg_id = self.feature_index[prev_feature].pg_assignment
+                                cur_pg_id = self.feature_index[new_feature].pg_assignment
+                                if (prev_feature > new_feature) ^ is_rc:
+                                    u_pg, v_pg = cur_pg_id, prev_pg_id
+                                    edge_strand = self.get_relative_strand(prev_feature)
                                 else:
-                                    rel_strand = raw_strand
-                                    
-                                self.construct_pg_edge(self.feature_index[prev_feature].pg_assignment, self.feature_index[new_feature].pg_assignment, self.feature_index[new_feature].genome_id, self.feature_index[new_feature].contig_id, strand=rel_strand)
+                                    u_pg, v_pg = prev_pg_id, cur_pg_id
+                                    edge_strand = self.get_relative_strand(new_feature)
+                                self.construct_pg_edge(u_pg, v_pg, gen_id, seq_id, strand=edge_strand)
                             else:
                                 logging.warning("pre-processed, unassigned target "+str(new_feature)+" in "+str(cur_node.nodeID)+" from "+str(prev_node.nodeID))
                                 raise Exception("LogicError")
