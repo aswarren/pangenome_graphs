@@ -1234,19 +1234,6 @@ class GraphMaker():
             
         for u, v, d in self.pg_graph.edges(data=True):
             d["inverted_block"] = False
-            
-            # Condition 1: Topological Inversion (Bidirectional edges)
-            is_topological_inv = self.pg_graph.has_edge(v, u)
-            
-            # Condition 2: Edge-level Strand Flip (Multiple strands on the same edge)
-            is_edge_strand_inv = len(d.get("strands", set())) > 1
-            
-            # Condition 3: Node-level Strand Flip (Both flanking genes are inverted!)
-            is_node_inv = self.pg_graph.nodes[u].get("inverted_block") and self.pg_graph.nodes[v].get("inverted_block")
-            
-            if is_topological_inv or is_edge_strand_inv or is_node_inv:
-                d["inverted_block"] = True
-                inv_graph.add_edge(u, v)
 
             u_node = self.pg_graph.nodes[u]
             v_node = self.pg_graph.nodes[v]
@@ -1378,6 +1365,73 @@ class GraphMaker():
                         d["scaffold_entities"] = ",".join(sorted(assembly_gaps))
                         if "sv_entities" not in d:
                             d["sv_entities"] = ",".join(sorted(assembly_gaps))
+
+        def has_local_alt_path(src, dst, banned_nodes=None, max_hops=15):
+            if src == dst or not UG.has_node(src) or not UG.has_node(dst):
+                return False
+            q = deque([(src, 0)])
+            vis = {src}
+            while q:
+                cur, dist = q.popleft()
+                if cur == dst:
+                    return True
+                if dist >= max_hops:
+                    continue
+                for nb in UG.neighbors(cur):
+                    if cur == src and nb == dst and banned_nodes is None:
+                        continue
+                    if banned_nodes and nb in banned_nodes:
+                        continue
+                    if nb not in vis:
+                        vis.add(nb)
+                        q.append((nb, dist + 1))
+            return False
+
+        # Pass 1: Identify core inverted edges from the polarity-normalized contig walks
+        for u, v, d in self.pg_graph.edges(data=True):
+            if u == v:
+                continue
+            # Condition 1: Topological opposite walk direction in polarity-normalized graph
+            is_topological_inv = self.pg_graph.has_edge(v, u)
+            # Condition 2: Both flanking genes have polarity-normalized strand inversions on a local transition (never across a long-range rearrangement jump)
+            both_nodes_inv = bool(self.pg_graph.nodes[u].get("inverted_block") and self.pg_graph.nodes[v].get("inverted_block"))
+            is_rearrangement_jump = bool(d.get("intra_contig_rearrangement") or d.get("inter_contig_rearrangement") or d.get("breakpoint_junction"))
+            is_local_node_inv = both_nodes_inv and (not is_rearrangement_jump or has_local_alt_path(u, v, max_hops=15))
+
+            if is_topological_inv or is_local_node_inv:
+                d["inverted_block"] = True
+                inv_graph.add_edge(u, v)
+
+        # Pass 2: Bridge short local indel/superbubble branches (<= 15 steps) along polarity-normalized contig walks inside an inverted block
+        for g_id, contigs in self.replicon_map.items():
+            for c_id, feat_list in contigs.items():
+                is_rc = (self.contig_polarity.get((g_id, c_id), 0) == 1)
+                norm_feats = list(reversed(feat_list)) if is_rc else feat_list
+                norm_nodes = []
+                for f_id in norm_feats:
+                    pg_id = self.feature_index[f_id].pg_assignment
+                    if pg_id is not None and (not norm_nodes or norm_nodes[-1] != pg_id):
+                        norm_nodes.append(pg_id)
+                idx_w = 0
+                while idx_w < len(norm_nodes) - 1:
+                    u_start = norm_nodes[idx_w]
+                    if u_start in inv_graph and inv_graph.degree(u_start) > 0:
+                        for j_w in range(idx_w + 2, min(len(norm_nodes), idx_w + 16)):
+                            u_end = norm_nodes[j_w]
+                            if u_end in inv_graph and inv_graph.degree(u_end) > 0:
+                                inter_nodes = set(norm_nodes[idx_w + 1:j_w])
+                                if has_local_alt_path(u_start, u_end, banned_nodes=inter_nodes, max_hops=15):
+                                    for k_w in range(idx_w, j_w):
+                                        na, nb = norm_nodes[k_w], norm_nodes[k_w + 1]
+                                        if na != nb and self.pg_graph.has_edge(na, nb):
+                                            self.pg_graph.edges[na, nb]["inverted_block"] = True
+                                            inv_graph.add_edge(na, nb)
+                                break
+                    idx_w += 1
+
+        # Pass 3: Synchronize node-level inverted_block attribute with active inverted block edges
+        for n in self.pg_graph.nodes():
+            self.pg_graph.nodes[n]["inverted_block"] = bool(n in inv_graph and inv_graph.degree(n) > 0)
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
         logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
@@ -1964,17 +2018,25 @@ class GraphMaker():
     def compute_contig_polarities(self):
         """
         Aligns contig orientations across shared canonical k-mers (rfNodes)
-        so that contigs assembled on the reverse-complement strand are normalized
-        to the reference orientation, while intra-contig inversions are preserved.
+        using purity-weighted conflict-free backbone voting so that contigs
+        assembled on the reverse-complement strand are normalized to the
+        reference orientation, while intra-contig inversions are preserved.
         """
         self.contig_polarity = {}
+        contig_rf = collections.defaultdict(dict)  # (g_id, c_id) -> {rf_id: +1/-1}
         pair_votes = collections.defaultdict(lambda: [0, 0])  # (k1, k2) -> [same, opp]
         for rf_node in self.rf_node_index:
+            if getattr(rf_node, "palindrome", 0):
+                continue
             c0 = {(self.feature_index[f].genome_id, self.feature_index[f].contig_id) for f in rf_node.features[0]}
             c1 = {(self.feature_index[f].genome_id, self.feature_index[f].contig_id) for f in rf_node.features[1]}
             both = c0 & c1
             c0 -= both
             c1 -= both
+            for ca in c0:
+                contig_rf[ca][rf_node.nodeID] = 1
+            for cb in c1:
+                contig_rf[cb][rf_node.nodeID] = -1
             c0_list = sorted(c0)
             c1_list = sorted(c1)
             for i in range(len(c0_list)):
@@ -1993,55 +2055,148 @@ class GraphMaker():
                     pair_votes[(ca, cb)][0] += 1
                     pair_votes[(cb, ca)][0] += 1
 
-        adj = collections.defaultdict(dict)
-        for (ca, cb), (same, opp) in pair_votes.items():
-            adj[ca][cb] = (same, opp)
-
         all_contigs = []
         contig_len = {}
+        contig_order_idx = {}
         for g_id, c_dict in self.replicon_map.items():
             for c_id, f_list in c_dict.items():
                 key = (g_id, c_id)
                 if key not in contig_len:
+                    contig_order_idx[key] = len(all_contigs)
                     all_contigs.append(key)
                     contig_len[key] = len(f_list)
 
-        seed_order = sorted(range(len(all_contigs)), key=lambda idx: (-contig_len[all_contigs[idx]], idx))
-        for idx in seed_order:
-            seed = all_contigs[idx]
+        adj = collections.defaultdict(dict)
+        for (ca, cb), (same, opp) in pair_votes.items():
+            min_rf = min(len(contig_rf[ca]), len(contig_rf[cb]))
+            min_req = min(5, max(1, min_rf // 2))
+            if same + opp >= min_req:
+                adj[ca][cb] = (same, opp)
+
+        def seed_score(c):
+            tot_pw = 0.0
+            for nb, (s, o) in adj[c].items():
+                w = s + o
+                if w > 0:
+                    diff = abs(s - o)
+                    tot_pw += diff * ((diff / w) ** 2)
+            return (tot_pw, contig_len[c], -contig_order_idx[c])
+
+        seed_order = sorted(all_contigs, key=seed_score, reverse=True)
+        components = []
+
+        for seed in seed_order:
             if seed in self.contig_polarity:
                 continue
             self.contig_polarity[seed] = 0
             assigned_in_comp = {seed}
             while True:
+                unanimous_rf_sign = {}
+                any_rf_votes = collections.defaultdict(lambda: [0, 0])
+                for u in assigned_in_comp:
+                    pu = -1 if self.contig_polarity[u] == 1 else 1
+                    for rf_id, s in contig_rf[u].items():
+                        if s * pu == 1:
+                            any_rf_votes[rf_id][0] += 1
+                        else:
+                            any_rf_votes[rf_id][1] += 1
+                for rf_id, (pos_c, neg_c) in any_rf_votes.items():
+                    if pos_c > 0 and neg_c == 0:
+                        unanimous_rf_sign[rf_id] = 1
+                    elif neg_c > 0 and pos_c == 0:
+                        unanimous_rf_sign[rf_id] = -1
+
                 best_cand = None
-                best_weight = -1
-                best_same = 0
-                best_opp = 0
+                best_key = (-1, -1.0, -1, -1)
+                best_pol = 0
                 for cand in all_contigs:
                     if cand in self.contig_polarity or cand not in adj:
                         continue
-                    ref_same = 0
-                    ref_opp = 0
-                    for u in assigned_in_comp:
-                        if u in adj[cand]:
-                            s, o = adj[cand][u]
-                            if self.contig_polarity[u] == 0:
-                                ref_same += s
-                                ref_opp += o
+                    if not any(u in adj[cand] for u in assigned_in_comp):
+                        continue
+                    u_same = u_opp = 0
+                    all_same = all_opp = 0
+                    for rf_id, s in contig_rf[cand].items():
+                        if rf_id in unanimous_rf_sign:
+                            if s == unanimous_rf_sign[rf_id]:
+                                u_same += 1
                             else:
-                                ref_same += o
-                                ref_opp += s
-                    w = ref_same + ref_opp
-                    if w > 0 and w > best_weight:
-                        best_weight = w
+                                u_opp += 1
+                        if rf_id in any_rf_votes:
+                            all_same += any_rf_votes[rf_id][0 if s == 1 else 1]
+                            all_opp += any_rf_votes[rf_id][1 if s == 1 else 0]
+                    min_req = min(5, max(1, len(contig_rf[cand]) // 2))
+                    if u_same + u_opp >= min_req:
+                        w = u_same + u_opp
+                        diff = abs(u_same - u_opp)
+                        pw = diff * ((diff / w) ** 2)
+                        key = (1, pw, w, -contig_order_idx[cand])
+                        c_pol = 1 if u_opp > u_same else 0
+                    elif all_same + all_opp > 0:
+                        w = all_same + all_opp
+                        diff = abs(all_same - all_opp)
+                        pw = diff * ((diff / w) ** 2)
+                        key = (0, pw, w, -contig_order_idx[cand])
+                        c_pol = 1 if all_opp > all_same else 0
+                    else:
+                        continue
+                    if key > best_key:
+                        best_key = key
                         best_cand = cand
-                        best_same = ref_same
-                        best_opp = ref_opp
+                        best_pol = c_pol
                 if best_cand is None:
                     break
-                self.contig_polarity[best_cand] = 1 if best_opp > best_same else 0
+                self.contig_polarity[best_cand] = best_pol
                 assigned_in_comp.add(best_cand)
+            components.append(assigned_in_comp)
+
+        # Post-refinement pass against the unanimous conflict-free backbone of each component
+        for comp in components:
+            if len(comp) <= 1:
+                continue
+            for _ in range(5):
+                changed = False
+                for gc in sorted(comp, key=lambda x: (contig_len[x], contig_order_idx[x])):
+                    u_same = u_opp = 0
+                    shared_total = 0
+                    for rf_id, s in contig_rf[gc].items():
+                        pos_c = neg_c = 0
+                        for u in comp:
+                            if u == gc or rf_id not in contig_rf[u]:
+                                continue
+                            ns = contig_rf[u][rf_id] * (-1 if self.contig_polarity[u] == 1 else 1)
+                            if ns == 1:
+                                pos_c += 1
+                            else:
+                                neg_c += 1
+                        if pos_c + neg_c > 0:
+                            shared_total += 1
+                        if pos_c > 0 and neg_c == 0:
+                            if s == 1:
+                                u_same += 1
+                            else:
+                                u_opp += 1
+                        elif neg_c > 0 and pos_c == 0:
+                            if s == -1:
+                                u_same += 1
+                            else:
+                                u_opp += 1
+                    min_unanimous = max(10, int(0.2 * shared_total)) if shared_total >= 20 else max(1, shared_total // 2)
+                    if u_same + u_opp >= min_unanimous and u_same != u_opp:
+                        new_p = 1 if u_opp > u_same else 0
+                        if new_p != self.contig_polarity[gc]:
+                            self.contig_polarity[gc] = new_p
+                            changed = True
+                if not changed:
+                    break
+
+            # Ensure the majority of the component (or earliest input contig on a tie) has polarity 0
+            len_0 = sum(contig_len[u] for u in comp if self.contig_polarity[u] == 0)
+            len_1 = sum(contig_len[u] for u in comp if self.contig_polarity[u] == 1)
+            first_c = min(comp, key=lambda u: contig_order_idx[u])
+            if len_1 > len_0 or (len_1 == len_0 and self.contig_polarity[first_c] == 1):
+                for u in comp:
+                    self.contig_polarity[u] = 1 - self.contig_polarity[u]
 
     def get_relative_strand(self, feat_id):
         feat = self.feature_index[feat_id]

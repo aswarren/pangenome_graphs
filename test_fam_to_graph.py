@@ -160,6 +160,8 @@ g2\tOrg2\tchr2\tf4_10\t1000\t1100\tD3"""
         # g3 has B1..B4 inverted in both gene order and DNA strand: A1(+) A2(+) A3(+) B4(-) B3(-) B2(-) B1(-) C1(+) C2(+) C3(+)
         # g4 is the entire contig reverse-complemented (opposite assembly direction, NOT a rearrangement relative to g1/g2):
         #   C3(-) C2(-) C1(-) B4(-) B3(-) B2(-) B1(-) A3(-) A2(-) A1(-)
+        # g5 is also sequenced in reverse order (C3..C1(-) and A3..A1(-)), AND within that backwards replicon
+        #   the local neighborhood B1..B4 underwent an inversion (appearing as B1(+) B2(+) B3(+) B4(+)):
         features = """#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup
 g1\tOrg1\tc1\tf1_1\t100\t200\t+\tA1
 g1\tOrg1\tc1\tf1_2\t200\t300\t+\tA2
@@ -200,7 +202,17 @@ g4\tOrg4\tc1\tf4_6\t600\t700\t-\tB2
 g4\tOrg4\tc1\tf4_7\t700\t800\t-\tB1
 g4\tOrg4\tc1\tf4_8\t800\t900\t-\tA3
 g4\tOrg4\tc1\tf4_9\t900\t1000\t-\tA2
-g4\tOrg4\tc1\tf4_10\t1000\t1100\t-\tA1"""
+g4\tOrg4\tc1\tf4_10\t1000\t1100\t-\tA1
+g5\tOrg5\tc1\tf5_1\t100\t200\t-\tC3
+g5\tOrg5\tc1\tf5_2\t200\t300\t-\tC2
+g5\tOrg5\tc1\tf5_3\t300\t400\t-\tC1
+g5\tOrg5\tc1\tf5_4\t400\t500\t+\tB1
+g5\tOrg5\tc1\tf5_5\t500\t600\t+\tB2
+g5\tOrg5\tc1\tf5_6\t600\t700\t+\tB3
+g5\tOrg5\tc1\tf5_7\t700\t800\t+\tB4
+g5\tOrg5\tc1\tf5_8\t800\t900\t-\tA3
+g5\tOrg5\tc1\tf5_9\t900\t1000\t-\tA2
+g5\tOrg5\tc1\tf5_10\t1000\t1100\t-\tA1"""
         inv_file = os.path.join(self.temp_dir.name, "inv_features.txt")
         with open(inv_file, "w") as f:
             f.write(features)
@@ -222,6 +234,10 @@ g4\tOrg4\tc1\tf4_10\t1000\t1100\t-\tA1"""
         gmaker.calcStatistics()
         gmaker.compute_graph_metrics()
         inv_events, _ = gmaker.tag_structural_variants()
+
+        # Both g4 and g5 were sequenced in reverse order relative to the pangenome backbone (polarity == 1)
+        self.assertEqual(gmaker.contig_polarity[("g4", "c1")], 1)
+        self.assertEqual(gmaker.contig_polarity[("g5", "c1")], 1)
 
         # Exactly 1 contiguous inverted component (B1-B2-B3-B4 plus boundary edges), and A1-A2-A3 / C1-C2-C3 are NOT inverted
         self.assertEqual(inv_events, 1)
