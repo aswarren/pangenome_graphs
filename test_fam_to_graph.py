@@ -370,6 +370,7 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         gm_sb.detect_and_annotate_superbubbles()
         gm_sb.tag_structural_variants()
         gm_sb.flag_bridges()
+        sb_manifest = gm_sb.annotate_major_blocks_tfs()
 
         fam_to_node = {d.get("family"): n for n, d in gm_sb.pg_graph.nodes(data=True)}
         # Superbubble check: V1 and V2 are superbubble interior nodes and NOT alternative_path; A45 and M1 are clean pinch points
@@ -384,6 +385,84 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["ICE_55"]].get("alternative_path", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["M45"]].get("alternative_path", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["B1"]].get("alternative_path", False))
+
+        # Intra-block absorption check (4.2): both superbubble alleles (V1/V2) and the intra-chromosomal ICE belong to Block_1, not Fragment
+        self.assertEqual(gm_sb.pg_graph.nodes[fam_to_node["V1"]].get("block"), "Block_1")
+        self.assertEqual(gm_sb.pg_graph.nodes[fam_to_node["V2"]].get("block"), "Block_1")
+        self.assertEqual(gm_sb.pg_graph.nodes[fam_to_node["ICE_1"]].get("block"), "Block_1")
+        self.assertEqual(gm_sb.pg_graph.nodes[fam_to_node["ICE_55"]].get("block"), "Block_1")
+        self.assertEqual(sb_manifest, ["Block_1"])
+
+        # Multi-replicon TF-IDF separation + Replicon Bridge + Small AMR Plasmid Fragment test (4.1, 4.2, 4.3)
+        rep_rows = ["#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup"]
+        for g_idx, gid in enumerate(["g1", "g2", "g3"], 1):
+            if gid in ("g1", "g2"):
+                # Clean two-chromosome genomes + 3-gene streamlined AMR plasmid (<5% of 85 total nodes)
+                pos = 100
+                for i in range(1, 41):
+                    rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_chr1\tf_{gid}_c1_{i}\t{pos}\t{pos+90}\t+\tC1_{i}")
+                    pos += 100
+                pos = 100
+                for i in range(1, 41):
+                    rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_chr2\tf_{gid}_c2_{i}\t{pos}\t{pos+90}\t+\tC2_{i}")
+                    pos += 100
+            else:
+                # g3 has an inter-replicon bridge (BR_1, BR_2) fusing part of chr1 and chr2 onto one contig
+                pos = 100
+                fused = [f"C1_{i}" for i in range(1, 21)] + ["BR_1", "BR_2"] + [f"C2_{i}" for i in range(21, 41)]
+                for idx_f, fam in enumerate(fused, 1):
+                    rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_fused\tf_{gid}_fu_{idx_f}\t{pos}\t{pos+90}\t+\t{fam}")
+                    pos += 100
+                pos = 100
+                rest1 = [f"C1_{i}" for i in range(21, 41)]
+                for idx_f, fam in enumerate(rest1, 1):
+                    rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_chr1b\tf_{gid}_c1b_{idx_f}\t{pos}\t{pos+90}\t+\t{fam}")
+                    pos += 100
+                pos = 100
+                rest2 = [f"C2_{i}" for i in range(1, 21)]
+                for idx_f, fam in enumerate(rest2, 1):
+                    rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_chr2a\tf_{gid}_c2a_{idx_f}\t{pos}\t{pos+90}\t+\t{fam}")
+                    pos += 100
+            # Streamlined 3-gene AMR plasmid (3 nodes out of 85 = 3.5% < 5%)
+            pos = 100
+            for i in range(1, 4):
+                rep_rows.append(f"{gid}\tOrg{g_idx}\t{gid}_plasmid\tf_{gid}_p_{i}\t{pos}\t{pos+90}\t+\tAMR_P{i}")
+                pos += 100
+
+        rep_file = os.path.join(self.temp_dir.name, "multi_rep.txt")
+        with open(rep_file, "w") as f:
+            f.write("\n".join(rep_rows))
+        gm_rep = GraphMaker(
+            feature_files=[rep_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gm_rep.processFeatures()
+        gm_rep.RF_to_PG()
+        gm_rep.compute_graph_metrics()
+        gm_rep.detect_and_annotate_superbubbles()
+        gm_rep.tag_structural_variants()
+        gm_rep.flag_bridges()
+        rep_manifest = gm_rep.annotate_major_blocks_tfs(min_node_fraction=0.05)
+
+        rep_fam_to_node = {d.get("family"): n for n, d in gm_rep.pg_graph.nodes(data=True)}
+        b_c1 = gm_rep.pg_graph.nodes[rep_fam_to_node["C1_10"]].get("block")
+        b_c2 = gm_rep.pg_graph.nodes[rep_fam_to_node["C2_30"]].get("block")
+        self.assertIn(b_c1, ("Block_1", "Block_2"))
+        self.assertIn(b_c2, ("Block_1", "Block_2"))
+        self.assertNotEqual(b_c1, b_c2)
+        self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_1"]].get("block"), "Replicon Bridge")
+        self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_2"]].get("block"), "Replicon Bridge")
+        self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["AMR_P1"]].get("block"), "Fragment")
+        self.assertIn("Replicon Bridge", rep_manifest)
+        self.assertIn("Fragment", rep_manifest)
 
 
 if __name__ == '__main__':

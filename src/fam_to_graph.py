@@ -1385,18 +1385,49 @@ class GraphMaker():
     
     def annotate_major_blocks_tfs(self, min_node_fraction=0.05):
         """
-        Identifies major blocks using a Stack-Based Consensus Walk.
-        Threads through Paralog Hubs by tracking physical sequence (contig) momentum.
-        Assigns Block IDs to edges, and aggregates them on nodes.
+        Identifies major blocks using a Stack-Based Consensus Walk with TF-IDF thread weighting.
+        Threads through Paralog Hubs by tracking physical sequence (contig) momentum,
+        absorbs intra-block bubbles/islands into their host block, and classifies
+        cross-replicon bridges/hubs as 'Replicon Bridge'.
         """
         # We walk the undirected graph to allow bidirectional replicon tracing
         undirected_pg = self.get_undirected_pg_graph()
-        
-        # Sort edges by weight (descending) so we seed the heaviest Highways first
-        edges_sorted = sorted(undirected_pg.edges(data=True), key=lambda x: x[2].get('weight', 0), reverse=True)
+        momentum_key = 'genomes' if self.context == 'feature' else 'sequences'
+
+        # 0. Pre-compute Contig/Genome TF-IDF Weights (Completeness x Structural Fidelity)
+        seq_to_genome = {}
+        tf_weight = {}
+        for g_id, contigs in self.replicon_map.items():
+            g_total = max(1, sum(len(f_arr) for f_arr in contigs.values()))
+            for c_id, f_arr in contigs.items():
+                seq_to_genome[c_id] = g_id
+                tf_weight[c_id] = float(len(f_arr)) / float(g_total)
+            if momentum_key == 'genomes':
+                max_c = max((len(f_arr) for f_arr in contigs.values()), default=0)
+                tf_weight[g_id] = float(max_c) / float(g_total)
+
+        promiscuity_flags = {'inter_contig_rearrangement', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alt_path_junction'}
+        promiscuity_hits = collections.defaultdict(int)
+        for u, v, d in undirected_pg.edges(data=True):
+            if any(d.get(flag) for flag in promiscuity_flags):
+                for t in d.get(momentum_key, set()):
+                    promiscuity_hits[t] += 1
+
+        thread_weight = {
+            t: tf_weight.get(t, 0.01) / (1.0 + promiscuity_hits.get(t, 0))
+            for t in tf_weight
+        }
+        def get_t_weight(t):
+            return thread_weight.get(t, 0.01 / (1.0 + promiscuity_hits.get(t, 0)))
+
+        # Sort edges by TF-IDF weight sum (then edge weight) so we seed the most complete, faithful Highways first
+        edges_sorted = sorted(
+            undirected_pg.edges(data=True),
+            key=lambda x: (sum(get_t_weight(t) for t in x[2].get(momentum_key, set())), x[2].get('weight', 0)),
+            reverse=True
+        )
         
         # Initialize unvisited edges with their available sequence threads (using sorted tuple keys to avoid directionality issues)
-        momentum_key = 'genomes' if self.context == 'feature' else 'sequences'
         unvisited_edges = {}
         for u, v, d in edges_sorted:
             edge_tuple = (min(u, v), max(u, v))
@@ -1407,6 +1438,8 @@ class GraphMaker():
         
         block_id = 1
         block_manifest = []
+        block_threads = {}
+        small_walks = []
         
         # Initialize default edge and node blocks on the Directed Graph
         for u, v in self.pg_graph.edges():
@@ -1417,8 +1450,9 @@ class GraphMaker():
             
         total_nodes = self.pg_graph.number_of_nodes()
         min_nodes_req = total_nodes * min_node_fraction
+        # Exclude intra_contig_rearrangement so intra-replicon rearrangements do not shatter a chromosome
         junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path',
-                          'genomic_rearrangement', 'intra_contig_rearrangement', 'inter_contig_rearrangement'}
+                          'genomic_rearrangement', 'inter_contig_rearrangement'}
         
         while True:
             # 1. Find the heaviest unvisited edge that still has threads (and is not a structural junction) to seed a new Block
@@ -1436,85 +1470,223 @@ class GraphMaker():
             current_edges = [seed_edge]
             
             momentum_set = set(unvisited_edges[seed_edge]['threads'])
+            walk_all_threads = set(momentum_set)
             unvisited_edges[seed_edge]['threads'].clear()
             
             stack = [(seed_edge[0], momentum_set), (seed_edge[1], momentum_set)]
             
-            # 2. TFS Stack Traversal
+            # 2. TFS Stack Traversal (weight-prioritized with TF-IDF Replicon Exclusivity Guard)
             while stack:
                 curr_node, momentum = stack.pop()
-                
-                # Grab all flags active on the current node
                 curr_node_flags = self.pg_graph.nodes[curr_node]
+                mom_genomes = {seq_to_genome[s] for s in momentum if s in seq_to_genome} if momentum_key == 'sequences' else set(momentum)
                 
+                candidates = []
                 for nxt in undirected_pg.neighbors(curr_node):
                     edge_tuple = (min(curr_node, nxt), max(curr_node, nxt))
+                    if edge_tuple not in unvisited_edges:
+                        continue
+                    info = unvisited_edges[edge_tuple]
+                    nxt_data = info['data']
                     
-                    if edge_tuple in unvisited_edges:
-                        info = unvisited_edges[edge_tuple]
-                        nxt_data = info['data']
+                    # RULE 2: Never follow a cross-replicon structural junction edge
+                    if any(nxt_data.get(flag) for flag in junction_flags):
+                        continue
                         
-                        # RULE 2: Never follow a structural junction edge
-                        if any(nxt_data.get(flag) for flag in junction_flags):
+                    original_edge_threads = set(info['threads'])
+                    overlap = momentum.intersection(original_edge_threads)
+                    if not overlap:
+                        continue
+                        
+                    continuing_w = sum(get_t_weight(s) for s in overlap)
+                    competing_w = 0.0
+                    if momentum_key == 'sequences' and mom_genomes:
+                        competing_w = sum(
+                            get_t_weight(s) for s in (original_edge_threads - momentum)
+                            if seq_to_genome.get(s) in mom_genomes
+                        )
+                        # TF-IDF Replicon Exclusivity Guard: Do not bleed into a second replicon via a minority thread
+                        if not nxt_data.get('is_scaffold_path') and competing_w > continuing_w:
                             continue
                             
-                        # Rule A: Check Momentum Overlap against remaining threads
-                        original_edge_threads = set(info['threads'])
-                        overlap = momentum.intersection(original_edge_threads)
+                    candidates.append((continuing_w, edge_tuple, nxt, info, nxt_data, original_edge_threads, overlap, competing_w))
+                
+                # Sort ascending so the highest TF-IDF weighted continuation is pushed last and popped first (classic TFS)
+                candidates.sort(key=lambda x: x[0])
+                
+                for continuing_w, edge_tuple, nxt, info, nxt_data, original_edge_threads, overlap, competing_w in candidates:
+                    # Re-verify overlap in case threads were updated
+                    actual_overlap = momentum.intersection(info['threads'])
+                    if not actual_overlap:
+                        continue
+                    info['threads'] -= actual_overlap
+                    current_edges.append(edge_tuple)
+                    current_nodes.add(nxt)
+                    
+                    # RULE 1: MOMENTUM LOCK at Conflict Nodes
+                    if any(curr_node_flags.get(flag) for flag in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]):
+                        new_momentum = momentum
+                    elif momentum_key == 'sequences' and competing_w > 0.0 and not nxt_data.get('is_scaffold_path'):
+                        overlap_genomes = {seq_to_genome.get(s) for s in actual_overlap}
+                        safe_recruit = {s for s in original_edge_threads if s in momentum or seq_to_genome.get(s) not in overlap_genomes}
+                        new_momentum = momentum.union(safe_recruit)
+                    else:
+                        new_momentum = momentum.union(original_edge_threads)
                         
-                        # If there is physical continuity (overlap > 0), thread through!
-                        if len(overlap) > 0:
-                            info['threads'] -= overlap
-                            current_edges.append(edge_tuple)
-                            current_nodes.add(nxt)
-                            
-                            # RULE 1: MOMENTUM LOCK at Conflict Nodes
-                            # Do not pick up new threads at a known evolutionary junction!
-                            if any(curr_node_flags.get(flag) for flag in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]):
-                                new_momentum = momentum
-                            else:
-                                # Normal accumulation on safe backbone nodes
-                                new_momentum = momentum.union(original_edge_threads)
-                                
-                            stack.append((nxt, new_momentum))
+                    walk_all_threads.update(new_momentum)
+                    stack.append((nxt, new_momentum))
             
             # 3. Evaluate Block Size
             if len(current_nodes) >= min_nodes_req:
                 final_block_label = current_block
                 block_manifest.append(current_block)
+                block_threads[final_block_label] = walk_all_threads
                 block_id += 1
-            else:
-                final_block_label = "Fragment"
-                if "Fragment" not in block_manifest:
-                    block_manifest.append("Fragment")
-                    
-            # 4. Apply Labels to the DIRECTED graph
-            if final_block_label != "Fragment":
+                
+                # 4. Apply Major Block Labels to the DIRECTED graph
                 for u, v in current_edges:
                     if self.pg_graph.has_edge(u, v):
                         self.pg_graph.edges[u, v]['block_set'].add(final_block_label)
                     if self.pg_graph.has_edge(v, u):
                         self.pg_graph.edges[v, u]['block_set'].add(final_block_label)
-                        
-                # Nodes accumulate the blocks of their incident edges
                 for n in current_nodes:
                     self.pg_graph.nodes[n]['block'].add(final_block_label)
-
-        # 5. Clean up node and edge 'block' attributes for GEXF export
-        for n, d in self.pg_graph.nodes(data=True):
-            blocks = d.get('block', set())
-            if not blocks:
-                d['block'] = "Fragment"
             else:
-                # e.g., "Block_1,Block_2" for Paralog Hubs!
-                d['block'] = ",".join(sorted(list(blocks)))
+                small_walks.append((current_nodes, current_edges, walk_all_threads))
+
+        # 4.5 Cleanup Pass: Absorb intra-block variants into their host Block, classify cross-replicon hubs/bridges as 'Replicon Bridge'
+        def set_undirected_edge_block(u, v, label, replace=False):
+            for a, b in ((u, v), (v, u)):
+                if self.pg_graph.has_edge(a, b):
+                    if replace:
+                        self.pg_graph.edges[a, b]['block_set'] = {label}
+                    else:
+                        self.pg_graph.edges[a, b]['block_set'].add(label)
+
+        def get_undirected_edge_blocks(u, v):
+            bset = set()
+            if self.pg_graph.has_edge(u, v):
+                bset |= self.pg_graph.edges[u, v].get('block_set', set())
+            if self.pg_graph.has_edge(v, u):
+                bset |= self.pg_graph.edges[v, u].get('block_set', set())
+            return bset
+
+        node_major_blocks = {n: set(self.pg_graph.nodes[n]['block']) for n in self.pg_graph.nodes()}
+
+        # Step A: Evaluate small non-junction walks (< min_nodes_req)
+        for sw_nodes, sw_edges, sw_threads in small_walks:
+            boundary_major = set()
+            boundary_nodes = set()
+            for n in sw_nodes:
+                if node_major_blocks.get(n):
+                    boundary_major |= node_major_blocks[n]
+                    boundary_nodes.add(n)
+            # If the small walk is an internal branch of a single Major Block on that block's own contigs, absorb it
+            if len(boundary_major) == 1 and len(boundary_nodes) >= 2:
+                host_block = next(iter(boundary_major))
+                if sw_threads & block_threads.get(host_block, set()):
+                    for u, v in sw_edges:
+                        set_undirected_edge_block(u, v, host_block)
+                    for n in sw_nodes:
+                        if not node_major_blocks.get(n):
+                            self.pg_graph.nodes[n]['block'].add(host_block)
+                            node_major_blocks[n].add(host_block)
+                    continue
+            # Otherwise mark this small non-junction walk as Fragment
+            for u, v in sw_edges:
+                if not get_undirected_edge_blocks(u, v):
+                    set_undirected_edge_block(u, v, "Fragment")
+            for n in sw_nodes:
+                if not self.pg_graph.nodes[n]['block']:
+                    self.pg_graph.nodes[n]['block'].add("Fragment")
+
+        # Step B: Evaluate remaining unassigned edges (junctions, alternative_path bridges, cross-replicon links)
+        unassigned_adj = collections.defaultdict(list)
+        unassigned_edge_set = set()
+        for u, v in undirected_pg.edges():
+            if not get_undirected_edge_blocks(u, v):
+                e_tup = (min(u, v), max(u, v))
+                unassigned_edge_set.add(e_tup)
+                unassigned_adj[u].append((v, e_tup))
+                unassigned_adj[v].append((u, e_tup))
+
+        visited_unassigned_edges = set()
+        for start_e in list(unassigned_edge_set):
+            if start_e in visited_unassigned_edges:
+                continue
+            comp_edges = set([start_e])
+            visited_unassigned_edges.add(start_e)
+            comp_nodes = set([start_e[0], start_e[1]])
+            q = collections.deque([start_e[0], start_e[1]])
+            while q:
+                curr = q.popleft()
+                # Treat already-labeled nodes (Block_k or Fragment) as boundary terminals so distinct bridges don't fuse through an anchor
+                if self.pg_graph.nodes[curr]['block'] and curr not in (start_e[0], start_e[1]):
+                    continue
+                if self.pg_graph.nodes[curr]['block'] and curr in (start_e[0], start_e[1]):
+                    # Only expand out of start_e's endpoints if they are unlabeled internal nodes
+                    continue
+                for nbr, e_tup in unassigned_adj[curr]:
+                    if e_tup not in visited_unassigned_edges:
+                        visited_unassigned_edges.add(e_tup)
+                        comp_edges.add(e_tup)
+                        comp_nodes.add(nbr)
+                        q.append(nbr)
+
+            boundary_nodes = {n for n in comp_nodes if self.pg_graph.nodes[n]['block']}
+            internal_nodes = comp_nodes - boundary_nodes
+            touched_labels = set().union(*(self.pg_graph.nodes[b]['block'] for b in boundary_nodes)) if boundary_nodes else set()
+            touched_major = {lbl for lbl in touched_labels if lbl.startswith("Block_")}
+            comp_threads = set().union(*(undirected_pg.edges[u, v].get(momentum_key, set()) for u, v in comp_edges))
+
+            if len(touched_major) >= 2 or (len(touched_major) == 1 and "Fragment" in touched_labels):
+                target_label = "Replicon Bridge"
+            elif len(touched_major) == 1 and len(boundary_nodes) >= 2:
+                host_block = next(iter(touched_major))
+                if comp_threads & block_threads.get(host_block, set()):
+                    target_label = host_block
+                else:
+                    target_label = "Replicon Bridge"
+            else:
+                target_label = "Fragment"
+
+            for u, v in comp_edges:
+                set_undirected_edge_block(u, v, target_label)
+            for n in internal_nodes:
+                self.pg_graph.nodes[n]['block'].add(target_label)
+
+        # Step C: Any node or edge directly shared by >1 Major Block becomes 'Replicon Bridge'
+        has_replicon_bridge = False
+        has_fragment = False
 
         for u, v, d in self.pg_graph.edges(data=True):
             blocks = d.pop('block_set', set())
-            if not blocks:
-                d['block'] = "Fragment"
+            major_only = {b for b in blocks if b.startswith("Block_")}
+            if len(major_only) > 1 or "Replicon Bridge" in blocks:
+                d['block'] = "Replicon Bridge"
+                has_replicon_bridge = True
+            elif len(major_only) == 1:
+                d['block'] = next(iter(major_only))
             else:
-                d['block'] = ",".join(sorted(list(blocks)))
+                d['block'] = "Fragment"
+                has_fragment = True
+
+        for n, d in self.pg_graph.nodes(data=True):
+            blocks = d.get('block', set())
+            major_only = {b for b in blocks if b.startswith("Block_")}
+            if len(major_only) > 1 or "Replicon Bridge" in blocks:
+                d['block'] = "Replicon Bridge"
+                has_replicon_bridge = True
+            elif len(major_only) == 1:
+                d['block'] = next(iter(major_only))
+            else:
+                d['block'] = "Fragment"
+                has_fragment = True
+
+        if has_replicon_bridge and "Replicon Bridge" not in block_manifest:
+            block_manifest.append("Replicon Bridge")
+        if has_fragment and "Fragment" not in block_manifest:
+            block_manifest.append("Fragment")
 
         logging.warning(f"Block Detection (TFS Momentum): Found {block_id - 1} major blocks.")
         return block_manifest
