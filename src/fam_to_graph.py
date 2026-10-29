@@ -456,6 +456,7 @@ class GraphMaker():
             "breakpoint_junction",
             "inter_contig_rearrangement",
             "intra_contig_rearrangement",
+            "bridge_junction",
             "alt_path_junction",
             "repeat_fragmentation_junction",
             "repeat_ambiguity_detour"
@@ -907,8 +908,11 @@ class GraphMaker():
         # PASS 2: RESOLUTION (DOMINANCE SHIELDING)
         # ---------------------------------------------------------
         alt_path_count = 0
+        translocation_bridge_count = 0
         scaffold_count = 0
         alt_path_event_id = 1
+        bridge_event_id = 1
+        max_local_window = 50
 
         def normalize_path(path_tuple):
             # Normalize directional paths so Forward and Reverse count as the same Highway
@@ -985,7 +989,7 @@ class GraphMaker():
                             self.pg_graph.edges[direction]['scaffold_entities'] = target_str
 
             if non_terminal_targets:
-                #superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
+                # Superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
                 u_bubbles = set(self.pg_graph.nodes[u].get('superbubble_id', set()))
                 for _, _, ed in self.pg_graph.out_edges(u, data=True):
                     u_bubbles.update(ed.get('superbubble_id', set()))
@@ -999,54 +1003,141 @@ class GraphMaker():
                     w_bubbles.update(ed.get('superbubble_id', set()))
                 
                 # If U and W share a superbubble ID, this path forms a closed
-                # topological loop (a local detour/hotspot). It is NOT a translocation.
+                # topological loop (a local detour/hotspot).
                 if bool(u_bubbles & w_bubbles):
                     continue
 
-                # Node-Level Check: Only flag nodes unique to the bridge
+                # Node-Level Check: Identify nodes unique to the bridge/island
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
-                        self.pg_graph.nodes[n]['alternative_path'] = True
-                        self.pg_graph.nodes[n]['alt_path_event_id'] = alt_path_event_id  # <-- Added Event ID
-                # Edge-Level Check: Only flag edges unique to the dirt road
+
+                # Guardrail 1: An accessory island or bridge must contain >= 1 unique internal bridge node.
+                # Walks consisting solely of conserved backbone nodes (e.g., inversions) or 0-node jumps belong to tag_structural_variants.
+                if not true_bridge_nodes:
+                    continue
+
+                # Guardrail 2: Do not double-tag paths whose internal nodes are already classified as a superbubble.
+                if all(self.pg_graph.nodes[n].get('is_superbubble') for n in true_bridge_nodes):
+                    continue
+
+                # Edge-Level Check: Identify edges unique to the bridge/island
                 true_bridge_edges = []
                 for e in path_edges:
                     support = get_bidirectional_support(e[0], e[1])
                     if support <= shield_threshold:
                         true_bridge_edges.append(e)
-                        
-                        # Apply tags safely to whatever directional edges exist
+
+                # Distinguish Local Collinear Accessory Islands vs. Cross-Locus / Replicon Bridges
+                # based on where flanking anchors U and W sit in the reference target genomes (independent of major_block).
+                local_collinear_count = 0
+                cross_locus_count = 0
+                u_feat_all = self.pg_graph.nodes[u].get('features', {})
+                w_feat_all = self.pg_graph.nodes[w].get('features', {})
+                for t_gen in non_terminal_targets:
+                    u_cdict = u_feat_all.get(t_gen, {})
+                    w_cdict = w_feat_all.get(t_gen, {})
+                    if not isinstance(u_cdict, dict) or not isinstance(w_cdict, dict):
+                        continue
+                    shared_contigs = set(u_cdict.keys()) & set(w_cdict.keys())
+                    is_local_collinear = False
+                    for c_id in shared_contigs:
+                        for fu in u_cdict[c_id]:
+                            for fw in w_cdict[c_id]:
+                                if abs(int(fu) - int(fw)) <= max_local_window:
+                                    is_local_collinear = True
+                                    break
+                            if is_local_collinear:
+                                break
+                        if is_local_collinear:
+                            break
+                    if is_local_collinear:
+                        local_collinear_count += 1
+                    else:
+                        cross_locus_count += 1
+
+                is_translocation_bridge = (cross_locus_count > local_collinear_count)
+
+                if is_translocation_bridge:
+                    for n in true_bridge_nodes:
+                        self.pg_graph.nodes[n]['translocation_bridge'] = True
+                        ev_set = self.pg_graph.nodes[n].get('bridge_event_id')
+                        if not isinstance(ev_set, set):
+                            ev_set = {ev_set} if ev_set is not None else set()
+                        ev_set.add(bridge_event_id)
+                        self.pg_graph.nodes[n]['bridge_event_id'] = ev_set
+
+                    for e in true_bridge_edges:
                         for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                # Internal edges get the boolean overlay and the event ID
-                                self.pg_graph.edges[direction]['alternative_path'] = True
-                                self.pg_graph.edges[direction]['alt_path_event_id'] = alt_path_event_id
+                                ed = self.pg_graph.edges[direction]
+                                ed['translocation_bridge'] = True
+                                ev_set = ed.get('bridge_event_id')
+                                if not isinstance(ev_set, set):
+                                    ev_set = {ev_set} if ev_set is not None else set()
+                                ev_set.add(bridge_event_id)
+                                ed['bridge_event_id'] = ev_set
+                                ed.pop('intra_contig_rearrangement', None)
+                                ed.pop('inter_contig_rearrangement', None)
 
-                # Handle Entry and Exit classes (The actual junctions connecting to the backbone!)
-                if true_bridge_edges:
-                    alt_path_count += 1  # (Assuming you updated translocation_count to alt_path_count)
-                    
-                    # Tag the Entry Edge
-                    edge_in = true_bridge_edges[0]
-                    for direction in [(edge_in[0], edge_in[1]), (edge_in[1], edge_in[0])]:
-                        if self.pg_graph.has_edge(*direction):
-                            self.pg_graph.edges[direction]['alt_path_junction'] = True
-                    
-                    # Tag the Exit Edge
-                    if len(true_bridge_edges) > 1:
-                        edge_out = true_bridge_edges[-1]
-                        for direction in [(edge_out[0], edge_out[1]), (edge_out[1], edge_out[0])]:
+                    if true_bridge_edges:
+                        translocation_bridge_count += 1
+                        for j_edge in ([true_bridge_edges[0]] + ([true_bridge_edges[-1]] if len(true_bridge_edges) > 1 else [])):
+                            for direction in [(j_edge[0], j_edge[1]), (j_edge[1], j_edge[0])]:
+                                if self.pg_graph.has_edge(*direction):
+                                    ed = self.pg_graph.edges[direction]
+                                    ed['bridge_junction'] = True
+                                    ed.pop('intra_contig_rearrangement', None)
+                                    ed.pop('inter_contig_rearrangement', None)
+
+                    bridge_event_id += 1
+                else:
+                    for n in true_bridge_nodes:
+                        self.pg_graph.nodes[n]['alternative_path'] = True
+                        ev_set = self.pg_graph.nodes[n].get('alt_path_event_id')
+                        if not isinstance(ev_set, set):
+                            ev_set = {ev_set} if ev_set is not None else set()
+                        ev_set.add(alt_path_event_id)
+                        self.pg_graph.nodes[n]['alt_path_event_id'] = ev_set
+
+                    for e in true_bridge_edges:
+                        for direction in [(e[0], e[1]), (e[1], e[0])]:
                             if self.pg_graph.has_edge(*direction):
-                                self.pg_graph.edges[direction]['alt_path_junction'] = True
-                
-                # Increment the event ID only if we actually found unprotected elements
-                if true_bridge_nodes or true_bridge_edges:
+                                ed = self.pg_graph.edges[direction]
+                                ed['alternative_path'] = True
+                                ev_set = ed.get('alt_path_event_id')
+                                if not isinstance(ev_set, set):
+                                    ev_set = {ev_set} if ev_set is not None else set()
+                                ev_set.add(alt_path_event_id)
+                                ed['alt_path_event_id'] = ev_set
+                                ed.pop('intra_contig_rearrangement', None)
+                                ed.pop('inter_contig_rearrangement', None)
+
+                    if true_bridge_edges:
+                        alt_path_count += 1
+                        for j_edge in ([true_bridge_edges[0]] + ([true_bridge_edges[-1]] if len(true_bridge_edges) > 1 else [])):
+                            for direction in [(j_edge[0], j_edge[1]), (j_edge[1], j_edge[0])]:
+                                if self.pg_graph.has_edge(*direction):
+                                    ed = self.pg_graph.edges[direction]
+                                    ed['alt_path_junction'] = True
+                                    ed.pop('intra_contig_rearrangement', None)
+                                    ed.pop('inter_contig_rearrangement', None)
+                        # Also protect any direct empty-site bypass edge (u, w) between the island's flanking anchors from being flagged as a rearrangement junction
+                        if not hasattr(self, 'island_anchor_pairs'):
+                            self.island_anchor_pairs = set()
+                        self.island_anchor_pairs.add(frozenset((u, w)))
+                        for direction in [(u, w), (w, u)]:
+                            if self.pg_graph.has_edge(*direction):
+                                ed = self.pg_graph.edges[direction]
+                                ed.pop('intra_contig_rearrangement', None)
+                                ed.pop('inter_contig_rearrangement', None)
+
                     alt_path_event_id += 1
 
-        logging.warning(f"Alternative Path Detection: Tagged {alt_path_count} alternative paths and {scaffold_count} scaffolding gaps.")
+        self.translocation_bridges_count = translocation_bridge_count
+        logging.warning(f"Bridge & Island Detection: Tagged {alt_path_count} accessory islands, {translocation_bridge_count} translocation/replicon bridges, and {scaffold_count} scaffolding gaps.")
         return alt_path_count, scaffold_count   
 
     def compute_graph_metrics(self):
@@ -1208,6 +1299,7 @@ class GraphMaker():
         protecting against fragmented assemblies.
         """
         sv_edges = 0
+        rearrangement_junction_pairs = set()
         inv_graph = nx.Graph()
         UG = self.get_undirected_pg_graph()  # Needed for tracing precise CNV detours
 
@@ -1337,9 +1429,18 @@ class GraphMaker():
                     # Apply final tags based on precisely parsed dropouts
                     if true_rearrangements:
                         assigned_jct = False
-                        
-                        if u_node.get("alternative_path") or v_node.get("alternative_path"):
+                        is_sb_edge = bool(
+                            d.get("is_superbubble")
+                            or (self.pg_graph.has_edge(v, u) and self.pg_graph.edges[v, u].get("is_superbubble"))
+                            or u_node.get("is_superbubble")
+                            or v_node.get("is_superbubble")
+                        )
+
+                        if d.get("alternative_path") or d.get("alt_path_junction") or u_node.get("alternative_path") or v_node.get("alternative_path"):
                             d["alt_path_junction"] = True
+                            assigned_jct = True
+                        if d.get("translocation_bridge") or d.get("bridge_junction") or u_node.get("translocation_bridge") or v_node.get("translocation_bridge"):
+                            d["bridge_junction"] = True
                             assigned_jct = True
                         if u_node.get("synteny_breakpoint") or v_node.get("synteny_breakpoint"):
                             d["breakpoint_junction"] = True
@@ -1348,15 +1449,18 @@ class GraphMaker():
                             d["repeat_fragmentation_junction"] = True
                             assigned_jct = True
                             
-                        # If none of the above, apply our dynamic structural divergence flags!
-                        if not assigned_jct:
+                        is_island_empty_site = (frozenset((u, v)) in getattr(self, "island_anchor_pairs", set()))
+                        # Only apply Rearrangement Junction flags when the edge is not already a superbubble, island, bridge, or breakpoint/repeat junction!
+                        if not assigned_jct and not is_sb_edge and not is_island_empty_site:
                             if is_inter_contig:
                                 d["inter_contig_rearrangement"] = True
                             if is_intra_contig:
                                 d["intra_contig_rearrangement"] = True
-                            
-                        d["sv_entities"] = ",".join(sorted(edge_items))
-                        sv_edges += 1
+                            d["sv_entities"] = ",".join(sorted(edge_items))
+                            sv_edges += 1
+                            rearrangement_junction_pairs.add(frozenset((u, v)))
+                        elif assigned_jct:
+                            d["sv_entities"] = ",".join(sorted(edge_items))
                     elif cnv_detours:
                         d["repeat_ambiguity_detour"] = True
                         d["sv_entities"] = ",".join(sorted(edge_items))
@@ -1434,7 +1538,8 @@ class GraphMaker():
             self.pg_graph.nodes[n]["inverted_block"] = bool(n in inv_graph and inv_graph.degree(n) > 0)
 
         inversion_events = nx.number_connected_components(inv_graph) if len(inv_graph) > 0 else 0
-        logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {sv_edges} path drop-outs.")
+        self.rearrangement_junctions_count = len(rearrangement_junction_pairs)
+        logging.warning(f"SV Detection Context [{self.context}]: Tagged {inversion_events} inverted components and {self.rearrangement_junctions_count} rearrangement junctions.")
         return inversion_events, sv_edges
     
     def annotate_major_blocks_tfs(self, min_node_fraction=0.05):
@@ -1460,7 +1565,7 @@ class GraphMaker():
                 max_c = max((len(f_arr) for f_arr in contigs.values()), default=0)
                 tf_weight[g_id] = float(max_c) / float(g_total)
 
-        promiscuity_flags = {'inter_contig_rearrangement', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alt_path_junction'}
+        promiscuity_flags = {'inter_contig_rearrangement', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alt_path_junction', 'bridge_junction'}
         promiscuity_hits = collections.defaultdict(int)
         for u, v, d in undirected_pg.edges(data=True):
             if any(d.get(flag) for flag in promiscuity_flags):
@@ -1505,8 +1610,8 @@ class GraphMaker():
         total_nodes = self.pg_graph.number_of_nodes()
         min_nodes_req = total_nodes * min_node_fraction
         # Exclude intra_contig_rearrangement so intra-replicon rearrangements do not shatter a chromosome
-        junction_flags = {'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'alternative_path',
-                          'genomic_rearrangement', 'inter_contig_rearrangement'}
+        junction_flags = {'alt_path_junction', 'bridge_junction', 'breakpoint_junction', 'repeat_fragmentation_junction',
+                          'alternative_path', 'translocation_bridge', 'genomic_rearrangement', 'inter_contig_rearrangement'}
         
         while True:
             # 1. Find the heaviest unvisited edge that still has threads (and is not a structural junction) to seed a new Block
@@ -1578,7 +1683,7 @@ class GraphMaker():
                     current_nodes.add(nxt)
                     
                     # RULE 1: MOMENTUM LOCK at Conflict Nodes
-                    if any(curr_node_flags.get(flag) for flag in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path"]):
+                    if any(curr_node_flags.get(flag) for flag in ["synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "translocation_bridge"]):
                         new_momentum = momentum
                     elif momentum_key == 'sequences' and competing_w > 0.0 and not nxt_data.get('is_scaffold_path'):
                         overlap_genomes = {seq_to_genome.get(s) for s in actual_overlap}
@@ -1762,7 +1867,7 @@ class GraphMaker():
                 function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
 # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "is_scaffold_path", "inverted_block"] if d.get(k)]
+                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "translocation_bridge", "is_scaffold_path", "inverted_block"] if d.get(k)]
                 nc_tag = f"\tnc:Z:{','.join(node_bools)}" if node_bools else ""
                 al = d.get('alternate', 0)
                 cnv = d.get('cnv_cluster_id', 0)
@@ -1798,7 +1903,7 @@ class GraphMaker():
                     sv_tags += "\tib:i:1"
                 
                 # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                edge_bools = [k for k in ['inter_contig_rearrangement', 'intra_contig_rearrangement', "alt_path_junction", "breakpoint_junction", "repeat_fragmentation_junction", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path"] if d.get(k)]
+                edge_bools = [k for k in ['inter_contig_rearrangement', 'intra_contig_rearrangement', "alt_path_junction", "bridge_junction", "breakpoint_junction", "repeat_fragmentation_junction", "repeat_ambiguity_detour", "is_scaffold_path", "alternative_path", "translocation_bridge"] if d.get(k)]
                 if edge_bools:
                     sv_tags += f"\tjt:Z:{','.join(edge_bools)}"
                     
@@ -2440,13 +2545,18 @@ class GraphMaker():
                     existing['weight'] = len(gen_set) / num_genomes if num_genomes > 0 else 0.0
                 
                 # Merge SV Flags (if either direction was an inversion/translocation, the undirected edge is too)
-                edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement', 'inverted_block', 'alt_path_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path', 'is_superbubble']
+                edge_bool_flags = ['inter_contig_rearrangement', 'intra_contig_rearrangement', 'inverted_block', 'alt_path_junction', 'bridge_junction', 'breakpoint_junction', 'repeat_fragmentation_junction', 'repeat_ambiguity_detour', 'is_scaffold_path', 'alternative_path', 'translocation_bridge', 'is_superbubble']
                 for flag in edge_bool_flags:
                     existing[flag] = existing.get(flag, False) or d.get(flag, False)
-                if 'superbubble_id' in existing or 'superbubble_id' in d:
-                    existing['superbubble_id'] = set(existing.get('superbubble_id', set())) | set(d.get('superbubble_id', set()))
-                if 'strands' in existing or 'strands' in d:
-                    existing['strands'] = set(existing.get('strands', set())) | set(d.get('strands', set()))
+                for set_attr in ('superbubble_id', 'alt_path_event_id', 'bridge_event_id', 'strands'):
+                    if set_attr in existing or set_attr in d:
+                        s_ex = existing.get(set_attr, set())
+                        if not isinstance(s_ex, set):
+                            s_ex = {s_ex} if s_ex is not None else set()
+                        s_d = d.get(set_attr, set())
+                        if not isinstance(s_d, set):
+                            s_d = {s_d} if s_d is not None else set()
+                        existing[set_attr] = s_ex | s_d
                 
             else:
                 # Add new edge (make a copy of the dictionary to avoid mutating original)
@@ -3226,8 +3336,8 @@ def main():
     gmaker.compute_graph_metrics()
     gmaker.detect_and_annotate_superbubbles()
 
-    inversions_count, sv_edges_count = gmaker.tag_structural_variants()
     alt_paths_count, scaffolds_count = gmaker.flag_bridges()
+    inversions_count, sv_edges_count = gmaker.tag_structural_variants()
 
     block_ids = gmaker.annotate_major_blocks_tfs(min_node_fraction=0.05) # Any component < 5% of nodes is a "Fragment"
 
@@ -3265,6 +3375,9 @@ def main():
         if d.get("assembly_repeat_break"):
             assembly_repeat_breaks_count += 1
 
+    rearr_jct_count = getattr(gmaker, "rearrangement_junctions_count", sv_edges_count)
+    trans_bridge_count = getattr(gmaker, "translocation_bridges_count", 0)
+
     # Compile the strict event counts
     summary_dict = {
         "total_genomes": len(gmaker.replicon_map),
@@ -3273,8 +3386,10 @@ def main():
         "total_nodes": gmaker.pg_graph.number_of_nodes(),
         "superbubbles": len(superbubbles),
         "copy_number_variants": len(cnv_clusters),
-        "alternative_paths": alt_paths_count,                                    # 1 insertion = 1 event
-        "structural_rearrangements": synteny_breakpoints_count + sv_edges_count, # Breakpoint nodes + Path Dropouts
+        "alternative_paths": alt_paths_count,                                    # Local collinear accessory islands & indels
+        "translocation_bridges": trans_bridge_count,                             # Cross-locus & replicon bridges
+        "structural_rearrangements": synteny_breakpoints_count,                  # TFS anchor-collision synteny breakpoints
+        "rearrangement_junctions": rearr_jct_count,                              # Non-bubble rearrangement boundary edges
         "inverted_blocks": inversions_count,                                     # 1 block = 1 event
         "assembly_breaks": assembly_repeat_breaks_count + scaffolds_count,       # Shattered repeat nodes + Scaffold bridges
         "fragmented_cnv": len(fragmented_cnv_clusters),                          # Shattered / fragmented paralog clusters

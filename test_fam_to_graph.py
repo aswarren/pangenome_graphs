@@ -384,8 +384,8 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         gm_sb.RF_to_PG()
         gm_sb.compute_graph_metrics()
         gm_sb.detect_and_annotate_superbubbles()
-        gm_sb.tag_structural_variants()
         gm_sb.flag_bridges()
+        gm_sb.tag_structural_variants()
         sb_manifest = gm_sb.annotate_major_blocks_tfs()
 
         fam_to_node = {d.get("family"): n for n, d in gm_sb.pg_graph.nodes(data=True)}
@@ -395,10 +395,13 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["V2"]].get("alternative_path", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["A45"]].get("is_superbubble", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["M1"]].get("is_superbubble", False))
+        # Superbubble edges must NOT be tagged as intra_contig_rearrangement
+        self.assertEqual(gm_sb.rearrangement_junctions_count, 0)
 
-        # Option 3A check: 55-gene majority ICE (present in 2/3 genomes, empty site M45->B1 in 1/3) is flagged as alternative_path
+        # Option 3A check: 55-gene majority ICE (present in 2/3 genomes, empty site M45->B1 in 1/3) is flagged as alternative_path (not translocation_bridge)
         self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["ICE_1"]].get("alternative_path", False))
         self.assertTrue(gm_sb.pg_graph.nodes[fam_to_node["ICE_55"]].get("alternative_path", False))
+        self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["ICE_1"]].get("translocation_bridge", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["M45"]].get("alternative_path", False))
         self.assertFalse(gm_sb.pg_graph.nodes[fam_to_node["B1"]].get("alternative_path", False))
 
@@ -464,8 +467,8 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         gm_rep.RF_to_PG()
         gm_rep.compute_graph_metrics()
         gm_rep.detect_and_annotate_superbubbles()
-        gm_rep.tag_structural_variants()
         gm_rep.flag_bridges()
+        gm_rep.tag_structural_variants()
         rep_manifest = gm_rep.annotate_major_blocks_tfs(min_node_fraction=0.05)
 
         rep_fam_to_node = {d.get("family"): n for n, d in gm_rep.pg_graph.nodes(data=True)}
@@ -476,6 +479,11 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertNotEqual(b_c1, b_c2)
         self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_1"]].get("block"), "Replicon Bridge")
         self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_2"]].get("block"), "Replicon Bridge")
+        # Verify flag_bridges() independently tagged BR_1 and BR_2 as translocation_bridge (and NOT alternative_path)
+        self.assertTrue(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_1"]].get("translocation_bridge", False))
+        self.assertTrue(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_2"]].get("translocation_bridge", False))
+        self.assertFalse(gm_rep.pg_graph.nodes[rep_fam_to_node["BR_1"]].get("alternative_path", False))
+        self.assertEqual(gm_rep.translocation_bridges_count, 1)
         self.assertEqual(gm_rep.pg_graph.nodes[rep_fam_to_node["AMR_P1"]].get("block"), "Fragment")
         self.assertIn("Replicon Bridge", rep_manifest)
         self.assertIn("Fragment", rep_manifest)
