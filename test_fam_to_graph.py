@@ -152,7 +152,8 @@ g2\tOrg2\tchr2\tf4_10\t1000\t1100\tD3"""
         self.assertIsNotNone(summary_el)
         summary = json.loads(summary_el.text)
         self.assertEqual(summary["total_nodes"], 20)
-        self.assertEqual(summary["copy_number_variants"], 4)
+        self.assertEqual(summary["remote_cnv"], 4)
+        self.assertEqual(summary["copy_number_variants"], 0)
 
     def test_inversion_and_shift_repeat_ambiguity(self):
         """Verify opposite-direction contigs restore reference strand, true DNA inversions stay contiguous across k-mers, and shift splits preserve repeat_ambiguity."""

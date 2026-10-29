@@ -437,7 +437,7 @@ class GraphMaker():
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(["CNV_Cluster_ID", "Protein_Family", "Function", "Total_Copies", "Replicons_Involved"])
             for n, d in self.pg_graph.nodes(data=True):
-                if d.get("repeat_ambiguity_fragmentation"):
+                if d.get("repeat_ambiguity_fragmentation") or d.get("remote_cnv"):
                     cluster_id = d.get("cnv_cluster_id", 0)
                     fam = d.get("family", "")
                     func = d.get("label", "")
@@ -1192,28 +1192,75 @@ class GraphMaker():
                     alt_group[alt] = grp_id
                 grp_id += 1
                 
-        # 2. Macro-Node (CNV Cluster) Conflict Detection
+        # 2. Macro-Node (CNV Cluster) Conflict Detection (Local Tandem vs. Fragmented Localized vs. Remote CNV Clusters)
         clusters = {}
         for node, c_id in alt_group.items():
-            clusters.setdefault(c_id,[]).append(node)
-            
+            clusters.setdefault(c_id, []).append(node)
+
+        undir_nbrs = {
+            u: (set(self.pg_graph.predecessors(u)) | set(self.pg_graph.successors(u)))
+            for u in self.pg_graph.nodes()
+        }
+
         macro_conflicts = set()
         repeat_ambig_nodes = set()
+        remote_cnv_nodes = set()
+
         for c_id, nodes in clusters.items():
             cluster_genomes = {}
             cluster_gen_copies = collections.defaultdict(int)
             for node in nodes:
                 feat_dict = self.pg_graph.nodes[node].get("features", {})
                 for gen_id, seq_dict in feat_dict.items():
-                    if gen_id in ["info", "md5", "start", "end"]: continue
+                    if gen_id in ["info", "md5", "start", "end"]:
+                        continue
                     cluster_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
                     for f_list in seq_dict.values():
                         cluster_gen_copies[gen_id] += len(f_list)
-            
-            if any(copies > 1 for copies in cluster_gen_copies.values()):
-                repeat_ambig_nodes.update(nodes)
-            if any(len(contigs) > 1 for contigs in cluster_genomes.values()):
-                macro_conflicts.update(nodes)
+
+            if not any(copies > 1 for copies in cluster_gen_copies.values()):
+                continue
+
+            # Partition cluster nodes into spatially localized graph sub-components (distance <= 2 in pg_graph)
+            parent = {u: u for u in nodes}
+            def find_sc(x):
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+            for i in range(len(nodes)):
+                u = nodes[i]
+                nu = undir_nbrs.get(u, set())
+                for j in range(i + 1, len(nodes)):
+                    v = nodes[j]
+                    if v in nu or bool(nu & undir_nbrs.get(v, set())):
+                        ru, rv = find_sc(u), find_sc(v)
+                        if ru != rv:
+                            parent[ru] = rv
+
+            subcomps = collections.defaultdict(list)
+            for u in nodes:
+                subcomps[find_sc(u)].append(u)
+
+            if len(subcomps) > 1:
+                remote_cnv_nodes.update(nodes)
+
+            for sc_nodes in subcomps.values():
+                sc_genomes = {}
+                sc_gen_copies = collections.defaultdict(int)
+                for node in sc_nodes:
+                    feat_dict = self.pg_graph.nodes[node].get("features", {})
+                    for gen_id, seq_dict in feat_dict.items():
+                        if gen_id in ["info", "md5", "start", "end"]:
+                            continue
+                        sc_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
+                        for f_list in seq_dict.values():
+                            sc_gen_copies[gen_id] += len(f_list)
+
+                if any(copies > 1 for copies in sc_gen_copies.values()):
+                    repeat_ambig_nodes.update(sc_nodes)
+                if any(len(contigs) > 1 for contigs in sc_genomes.values()):
+                    macro_conflicts.update(sc_nodes)
 
         # 3. Compute Node Metrics
         for n, d in self.pg_graph.nodes(data=True):
@@ -1257,6 +1304,8 @@ class GraphMaker():
                 d["repeat_ambiguity"] = True
             if n in macro_conflicts:
                 d["repeat_ambiguity_fragmentation"] = True
+            if n in remote_cnv_nodes:
+                d["remote_cnv"] = True
                 
             d["cnv_cluster_id"] = alt_group.get(n, 0)
             
@@ -1879,7 +1928,7 @@ class GraphMaker():
                 function_desc = d.get('label', 'hypothetical protein')
                 dv = d.get('diversity', 0.0)
 # Dynamically bundle all active boolean flags into a single comma-separated GFA tag
-                node_bools = [k for k in ["repeat_ambiguity", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "translocation_bridge", "is_scaffold_path", "inverted_block"] if d.get(k)]
+                node_bools = [k for k in ["repeat_ambiguity", "remote_cnv", "assembly_repeat_break", "synteny_breakpoint", "repeat_ambiguity_fragmentation", "alternative_path", "translocation_bridge", "is_scaffold_path", "inverted_block"] if d.get(k)]
                 nc_tag = f"\tnc:Z:{','.join(node_bools)}" if node_bools else ""
                 al = d.get('alternate', 0)
                 cnv = d.get('cnv_cluster_id', 0)
@@ -3362,7 +3411,9 @@ def main():
 
     # Dynamically tally the biological ontology tags
     cnv_clusters = set()
+    local_cnv_clusters = set()
     fragmented_cnv_clusters = set()
+    remote_cnv_clusters = set()
     superbubbles = set()
     synteny_breakpoints_count = 0
     assembly_repeat_breaks_count = 0
@@ -3371,8 +3422,12 @@ def main():
         # Unique Paralogs
         if d.get("cnv_cluster_id", 0) > 0:
             cnv_clusters.add(d["cnv_cluster_id"])
+            if d.get("repeat_ambiguity"):
+                local_cnv_clusters.add(d["cnv_cluster_id"])
             if d.get("repeat_ambiguity_fragmentation"):
                 fragmented_cnv_clusters.add(d["cnv_cluster_id"])
+            if d.get("remote_cnv"):
+                remote_cnv_clusters.add(d["cnv_cluster_id"])
         
         # Unique Superbubbles
         sb_val = d.get("superbubble_id", set())
@@ -3398,13 +3453,15 @@ def main():
         "total_nodes": gmaker.pg_graph.number_of_nodes(),
         "superbubbles": len(superbubbles),
         "copy_number_variants": len(cnv_clusters),
+        "local_cnv": len(local_cnv_clusters),                                    # Localized / tandem CNV clusters
+        "remote_cnv": len(remote_cnv_clusters),                                  # Remote / multi-locus CNV clusters (segmental duplications)
         "alternative_paths": alt_paths_count,                                    # Local collinear accessory islands & indels
         "translocation_bridges": trans_bridge_count,                             # Cross-locus & replicon bridges
         "structural_rearrangements": synteny_breakpoints_count,                  # TFS anchor-collision synteny breakpoints
         "rearrangement_junctions": rearr_jct_count,                              # Non-bubble rearrangement boundary edges
         "inverted_blocks": inversions_count,                                     # 1 block = 1 event
         "assembly_breaks": assembly_repeat_breaks_count + scaffolds_count,       # Shattered repeat nodes + Scaffold bridges
-        "fragmented_cnv": len(fragmented_cnv_clusters),                          # Shattered / fragmented paralog clusters
+        "fragmented_cnv": len(fragmented_cnv_clusters),                          # Shattered / fragmented localized repeat clusters
         "parameters": {"k": pargs.ksize, "min": pargs.min},
         "block_manifest": list(block_ids),
         "contig_map": contig_map
