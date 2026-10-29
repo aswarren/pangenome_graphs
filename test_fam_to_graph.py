@@ -488,6 +488,28 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertIn("Replicon Bridge", rep_manifest)
         self.assertIn("Fragment", rep_manifest)
 
+        # 5. Open-ended spur test (simulating tandem-repeat-broken spur like nodes 877/4045/4044/2415):
+        # Remove the middle edge (ISL_1, ISL_2) from pg_graph on gm before running flag_bridges() and annotate_major_blocks_tfs()
+        gm_spur = self._build_graph(contigs, min_seq=1)
+        spur_fam_to_node = {d.get("family"): n for n, d in gm_spur.pg_graph.nodes(data=True)}
+        n_isl1 = spur_fam_to_node["ISL_1"]
+        n_isl2 = spur_fam_to_node["ISL_2"]
+        if gm_spur.pg_graph.has_edge(n_isl1, n_isl2):
+            gm_spur.pg_graph.remove_edge(n_isl1, n_isl2)
+        if gm_spur.pg_graph.has_edge(n_isl2, n_isl1):
+            gm_spur.pg_graph.remove_edge(n_isl2, n_isl1)
+        gm_spur.flag_bridges()
+        gm_spur.tag_structural_variants()
+        gm_spur.annotate_major_blocks_tfs(min_node_fraction=0.05)
+        # Neither open-ended spur node should be flagged as an accessory island (alternative_path) or translocation_bridge
+        self.assertFalse(gm_spur.pg_graph.nodes[n_isl1].get("alternative_path", False))
+        self.assertFalse(gm_spur.pg_graph.nodes[n_isl2].get("alternative_path", False))
+        self.assertFalse(gm_spur.pg_graph.nodes[n_isl1].get("translocation_bridge", False))
+        self.assertFalse(gm_spur.pg_graph.nodes[n_isl2].get("translocation_bridge", False))
+        # Both spur nodes are attached exclusively to Block_1 on Block_1's own contig and should inherit Block_1, not Fragment
+        self.assertEqual(gm_spur.pg_graph.nodes[n_isl1].get("block"), "Block_1")
+        self.assertEqual(gm_spur.pg_graph.nodes[n_isl2].get("block"), "Block_1")
+
 
 if __name__ == '__main__':
     unittest.main()

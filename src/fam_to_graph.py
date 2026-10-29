@@ -967,6 +967,11 @@ class GraphMaker():
             if not bridge_nodes:
                 continue
 
+            # Ensure every step of the candidate bridge/island path actually exists in pg_graph.
+            # Prevents open-ended spurs with unbridged gaps in pg_graph from being tagged as closed bridges/islands.
+            if not all(self.pg_graph.has_edge(e[0], e[1]) or self.pg_graph.has_edge(e[1], e[0]) for e in path_edges):
+                continue
+
             # Option 3A: If (U, W) also has a non-terminal direct adjacency path (empty integration site U -> W)
             # and this path is a bounded insertion (<= max_island_nodes), allow flagging the island even if >50% prevalence
             if norm_uw in has_direct_empty_site and len(bridge_nodes) <= max_island_nodes:
@@ -1008,8 +1013,15 @@ class GraphMaker():
                     continue
 
                 # Node-Level Check: Identify nodes unique to the bridge/island
+                # Exclude tandem repeat copies sharing a non-zero cnv_cluster_id with flanking anchors u or w
+                u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
+                w_cnv = self.pg_graph.nodes[w].get('cnv_cluster_id', 0)
+                flank_cnvs = {c for c in (u_cnv, w_cnv) if c and c != 0}
                 true_bridge_nodes = []
                 for n in bridge_nodes:
+                    n_cnv = self.pg_graph.nodes[n].get('cnv_cluster_id', 0)
+                    if n_cnv and n_cnv in flank_cnvs:
+                        continue
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
@@ -1740,8 +1752,8 @@ class GraphMaker():
                 if node_major_blocks.get(n):
                     boundary_major |= node_major_blocks[n]
                     boundary_nodes.add(n)
-            # If the small walk is an internal branch of a single Major Block on that block's own contigs, absorb it
-            if len(boundary_major) == 1 and len(boundary_nodes) >= 2:
+            # If the small walk is an internal branch or spur of a single Major Block on that block's own contigs, absorb it
+            if len(boundary_major) == 1 and len(boundary_nodes) >= 1:
                 host_block = next(iter(boundary_major))
                 if sw_threads & block_threads.get(host_block, set()):
                     for u, v in sw_edges:
@@ -1800,7 +1812,7 @@ class GraphMaker():
 
             if len(touched_major) >= 2 or (len(touched_major) == 1 and "Fragment" in touched_labels):
                 target_label = "Replicon Bridge"
-            elif len(touched_major) == 1 and len(boundary_nodes) >= 2:
+            elif len(touched_major) == 1 and len(boundary_nodes) >= 1:
                 host_block = next(iter(touched_major))
                 if comp_threads & block_threads.get(host_block, set()):
                     target_label = host_block
