@@ -1221,31 +1221,36 @@ class GraphMaker():
             if not any(copies > 1 for copies in cluster_gen_copies.values()):
                 continue
 
-            # Partition cluster nodes into spatially localized graph sub-components (distance <= 2 in pg_graph)
+            # Partition cluster nodes into spatially localized graph sub-components (distance <= 4 hops in pg_graph)
             parent = {u: u for u in nodes}
             def find_sc(x):
                 while parent[x] != x:
                     parent[x] = parent[parent[x]]
                     x = parent[x]
                 return x
-            for i in range(len(nodes)):
-                u = nodes[i]
-                nu = undir_nbrs.get(u, set())
-                for j in range(i + 1, len(nodes)):
-                    v = nodes[j]
-                    if v in nu or bool(nu & undir_nbrs.get(v, set())):
-                        ru, rv = find_sc(u), find_sc(v)
-                        if ru != rv:
-                            parent[ru] = rv
+            node_set = set(nodes)
+            for u in nodes:
+                q = collections.deque([(u, 0)])
+                seen = {u: 0}
+                while q:
+                    curr, dist = q.popleft()
+                    if dist >= 4:
+                        continue
+                    for nb in undir_nbrs.get(curr, set()):
+                        if nb not in seen:
+                            seen[nb] = dist + 1
+                            if nb in node_set:
+                                ru, rv = find_sc(u), find_sc(nb)
+                                if ru != rv:
+                                    parent[ru] = rv
+                            q.append((nb, dist + 1))
 
             subcomps = collections.defaultdict(list)
             for u in nodes:
                 subcomps[find_sc(u)].append(u)
 
-            if len(subcomps) > 1:
-                remote_cnv_nodes.update(nodes)
-
-            for sc_nodes in subcomps.values():
+            genome_subcomps = collections.defaultdict(set)
+            for sc_id, sc_nodes in subcomps.items():
                 sc_genomes = {}
                 sc_gen_copies = collections.defaultdict(int)
                 for node in sc_nodes:
@@ -1253,14 +1258,21 @@ class GraphMaker():
                     for gen_id, seq_dict in feat_dict.items():
                         if gen_id in ["info", "md5", "start", "end"]:
                             continue
+                        genome_subcomps[gen_id].add(sc_id)
                         sc_genomes.setdefault(gen_id, set()).update(seq_dict.keys())
                         for f_list in seq_dict.values():
                             sc_gen_copies[gen_id] += len(f_list)
 
                 if any(copies > 1 for copies in sc_gen_copies.values()):
                     repeat_ambig_nodes.update(sc_nodes)
-                if any(len(contigs) > 1 for contigs in sc_genomes.values()):
+                if (
+                    any(len(contigs) > 1 for contigs in sc_genomes.values())
+                    and any(len(contigs) == 1 for contigs in sc_genomes.values())
+                ):
                     macro_conflicts.update(sc_nodes)
+
+            if len(subcomps) > 1 and any(len(sc_set) > 1 for sc_set in genome_subcomps.values()):
+                remote_cnv_nodes.update(nodes)
 
         # 3. Compute Node Metrics
         for n, d in self.pg_graph.nodes(data=True):
@@ -1462,17 +1474,17 @@ class GraphMaker():
                         is_detour = False
                         if u_cnv != 0 and u_cnv == v_cnv:
                             is_detour = True
-                        if not is_detour and v_cnv != 0:
+                        if not is_detour and (u_cnv != 0 or v_cnv != 0):
+                            target_cnvs = {c for c in (u_cnv, v_cnv) if c != 0}
                             for neighbor in UG.neighbors(u):
-                                if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == v_cnv:
+                                if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) in target_cnvs:
                                     if drop_gen in get_edge_genomes(u, neighbor):
                                         is_detour = True; break
-                                        
-                        if not is_detour and u_cnv != 0:
-                            for neighbor in UG.neighbors(v):
-                                if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) == u_cnv:
-                                    if drop_gen in get_edge_genomes(v, neighbor):
-                                        is_detour = True; break
+                            if not is_detour:
+                                for neighbor in UG.neighbors(v):
+                                    if self.pg_graph.nodes[neighbor].get('cnv_cluster_id', 0) in target_cnvs:
+                                        if drop_gen in get_edge_genomes(v, neighbor):
+                                            is_detour = True; break
                         # -------------------------------------
                         
                         if is_detour:
@@ -1506,7 +1518,7 @@ class GraphMaker():
                         if u_node.get("synteny_breakpoint") or v_node.get("synteny_breakpoint"):
                             d["breakpoint_junction"] = True
                             assigned_jct = True
-                        if u_node.get("repeat_ambiguity_fragmentation") or v_node.get("repeat_ambiguity_fragmentation"):
+                        if is_inter_contig and (u_node.get("repeat_ambiguity_fragmentation") or v_node.get("repeat_ambiguity_fragmentation")):
                             d["repeat_fragmentation_junction"] = True
                             assigned_jct = True
                             
