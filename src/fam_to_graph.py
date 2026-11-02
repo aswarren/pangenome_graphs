@@ -602,6 +602,9 @@ class GraphMaker():
                             
                     writer.writerow([bid, entry_fam, exit_fam, len(paths), max_len, ",".join(internal_genes)])
 
+        # 6. Mauve-Viewer Compatible Whole-Genome Synteny Alignment JSON (_alignment.json)
+        self.export_mauve_alignment_json(f"{prefix}_alignment.json")
+
     def getTaxaIndicator(self, feature_id, mode="name"):
             if mode=="name":
                 string_part = 0
@@ -1737,7 +1740,560 @@ class GraphMaker():
             f"In-Line Contig Scaffolding: Identified {len(locus_to_event_id)} primary scaffold loci "
             f"({sum(1 for j in self.inline_scaffold_joins if j['status'] == 'PRIMARY')} primary contig joins)."
         )
-        return len(locus_to_event_id)   
+        return len(locus_to_event_id)
+
+    def export_mauve_alignment_json(self, output_path, max_anchor_gap=15, max_gene_gap=60):
+        """
+        Directly emits a BV-BRC Mauve-Viewer compatible whole-genome alignment file (`_alignment.json`)
+        from the Panaconda pan-synteny graph:
+          1. Extracts coalesced single-copy anchor LCBs across contigs, breaking cleanly at contig ends and inversions.
+          2. Orders and orients each genome's contigs using Panaconda's non-inverted synteny backbone anchors
+             against the consensus most-complete reference genome (with superscaffold fallback for unanchored contigs).
+          3. Seriates genome tracks vertically (lcb_idx = 1..K) to minimize inter-track LCB edge crossings.
+          4. Attaches `_contig_layout` and local contig coordinates so `GenomeAlignment.js` can align both
+             LCB ribbons and zoomed-in gene features / contig boundaries with zero coordinate drift.
+        """
+        if not hasattr(self, "genome_superscaffolds"):
+            self.detect_inline_scaffolds()
+
+        def flip_strand(s):
+            return "-" if s == "+" else "+"
+
+        # 1. Precompute feature walks, nucleotide spans, and single-copy anchor occurrences
+        contig_feats = {}
+        contig_max_bp = {}
+        node_genome_counts = collections.defaultdict(lambda: collections.defaultdict(int))
+
+        for g_id, contigs in self.replicon_map.items():
+            for c_id, feat_arr in contigs.items():
+                f_list = []
+                max_bp = 0
+                for f_id in feat_arr:
+                    f_obj = self.feature_index[f_id]
+                    s_bp = min(int(f_obj.start), int(f_obj.end)) if (f_obj.start is not None and f_obj.end is not None) else 1
+                    e_bp = max(int(f_obj.start), int(f_obj.end)) if (f_obj.start is not None and f_obj.end is not None) else 1000
+                    if e_bp > max_bp:
+                        max_bp = e_bp
+                    f_strand = str(f_obj.strand) if f_obj.strand in ("+", "-") else "+"
+                    nid = f_obj.pg_assignment
+                    f_list.append((f_id, nid, s_bp, e_bp, f_strand))
+                    if nid is not None and nid in self.pg_graph.nodes:
+                        node_genome_counts[nid][g_id] += 1
+                contig_feats[(g_id, c_id)] = f_list
+                contig_max_bp[(g_id, c_id)] = max(1, max_bp if max_bp > 0 else len(feat_arr) * 1000)
+
+        is_anchor = {
+            nid for nid, gcounts in node_genome_counts.items()
+            if len(gcounts) >= 2 and all(cnt == 1 for cnt in gcounts.values())
+        }
+
+        contig_anchors = {}
+        anchor_occ = collections.defaultdict(dict)
+        for (g_id, c_id), f_list in contig_feats.items():
+            aseq = []
+            for f_pos, (f_id, nid, s_bp, e_bp, f_strand) in enumerate(f_list):
+                if nid in is_anchor:
+                    a_idx = len(aseq)
+                    aseq.append((a_idx, f_pos, nid, s_bp, e_bp, f_strand))
+                    anchor_occ[nid][g_id] = (c_id, a_idx, f_pos, s_bp, e_bp, f_strand)
+            contig_anchors[(g_id, c_id)] = aseq
+
+        all_genomes = list(self.replicon_map.keys())
+        if len(all_genomes) < 2:
+            with open(output_path, "w") as fh:
+                json.dump([], fh)
+            return []
+
+        # 2. Choose Consensus Reference Genome:
+        #    Prefer fewest contigs with anchors, then fewest cross-genome intra-contig step-direction discordances
+        #    (so a consensus non-inverted chromosome is preferred over a strain carrying a large inversion),
+        #    then most anchors and largest total nucleotide span.
+        genome_discordance = collections.defaultdict(int)
+        for g1 in all_genomes:
+            for c1 in self.replicon_map[g1]:
+                aseq1 = contig_anchors[(g1, c1)]
+                if len(aseq1) < 4:
+                    continue
+                for g2 in all_genomes:
+                    if g2 == g1:
+                        continue
+                    prev_a2 = {}
+                    step_counts = collections.defaultdict(lambda: [0, 0])
+                    for _, _, nid, _, _, _ in aseq1:
+                        if g2 in anchor_occ[nid]:
+                            c2, a2, _, _, _, _ = anchor_occ[nid][g2]
+                            if c2 in prev_a2:
+                                da2 = a2 - prev_a2[c2]
+                                if da2 > 0:
+                                    step_counts[c2][0] += 1
+                                elif da2 < 0:
+                                    step_counts[c2][1] += 1
+                            prev_a2[c2] = a2
+                    for c2, (pos_steps, neg_steps) in step_counts.items():
+                        if pos_steps + neg_steps >= 4:
+                            genome_discordance[g1] += min(pos_steps, neg_steps)
+
+        def ref_sort_key(gid):
+            c_with_anchors = sum(1 for cid in self.replicon_map[gid] if len(contig_anchors[(gid, cid)]) > 0)
+            total_anchors = sum(len(contig_anchors[(gid, cid)]) for cid in self.replicon_map[gid])
+            total_bp = sum(contig_max_bp[(gid, cid)] for cid in self.replicon_map[gid])
+            return (
+                c_with_anchors if c_with_anchors > 0 else 999999,
+                genome_discordance[gid],
+                -total_anchors,
+                -total_bp,
+                gid
+            )
+
+        ref_gid = min(all_genomes, key=ref_sort_key)
+
+        # 3. Extract Coalesced Collinear Anchor LCBs
+        seed_contigs = []
+        for cid in sorted(self.replicon_map[ref_gid].keys(), key=lambda c: (-contig_max_bp[(ref_gid, c)], c)):
+            seed_contigs.append((ref_gid, cid))
+        other_contigs = [
+            (gid, cid)
+            for gid in all_genomes if gid != ref_gid
+            for cid in self.replicon_map[gid]
+        ]
+        other_contigs.sort(key=lambda gc: (-len(contig_anchors[gc]), gc[0], gc[1]))
+        seed_contigs.extend(other_contigs)
+
+        visited_anchors = set()
+        raw_lcbs = []
+
+        for seed_g, seed_c in seed_contigs:
+            aseq = contig_anchors[(seed_g, seed_c)]
+            i = 0
+            while i < len(aseq):
+                _, seed_fpos, seed_nid, _, _, _ = aseq[i]
+                if seed_nid in visited_anchors:
+                    i += 1
+                    continue
+                active_g = set(anchor_occ[seed_nid].keys())
+                if len(active_g) < 2:
+                    visited_anchors.add(seed_nid)
+                    i += 1
+                    continue
+
+                chain_nids = [seed_nid]
+                visited_anchors.add(seed_nid)
+                dir_map = {g: (1 if g == seed_g else 0) for g in active_g}
+                curr_i = i
+
+                while True:
+                    # Stop if the current anchor already sits at a physical contig boundary in any active genome
+                    at_contig_end = False
+                    if len(chain_nids) >= 2:
+                        last_nid = chain_nids[-1]
+                        for g in active_g:
+                            cg, ag_idx, _, _, _, _ = anchor_occ[last_nid][g]
+                            g_aseq_len = len(contig_anchors[(g, cg)])
+                            if (dir_map[g] == 1 and ag_idx == g_aseq_len - 1) or (dir_map[g] == -1 and ag_idx == 0):
+                                at_contig_end = True
+                                break
+                    if at_contig_end:
+                        break
+
+                    curr_nid = chain_nids[-1]
+                    _, curr_fpos, _, _, _, _ = aseq[curr_i]
+                    found_next = False
+
+                    for cand_i in range(curr_i + 1, min(len(aseq), curr_i + max_anchor_gap + 1)):
+                        _, cand_fpos, cand_nid, _, _, _ = aseq[cand_i]
+                        if cand_nid in visited_anchors:
+                            continue
+                        if cand_fpos - curr_fpos > max_gene_gap:
+                            break
+                        if set(anchor_occ[cand_nid].keys()) != active_g:
+                            continue
+
+                        step_ok = True
+                        proposed_dirs = {}
+                        for g in active_g:
+                            if g == seed_g:
+                                proposed_dirs[g] = 1
+                                continue
+                            cg_curr, ag_curr, fg_curr, _, _, _ = anchor_occ[curr_nid][g]
+                            cg_cand, ag_cand, fg_cand, _, _, _ = anchor_occ[cand_nid][g]
+                            if cg_curr != cg_cand:
+                                step_ok = False
+                                break
+                            da = ag_cand - ag_curr
+                            df = fg_cand - fg_curr
+                            if da == 0 or abs(da) > max_anchor_gap or abs(df) > max_gene_gap:
+                                step_ok = False
+                                break
+                            sdir = 1 if da > 0 else -1
+                            if dir_map[g] != 0 and dir_map[g] != sdir:
+                                step_ok = False
+                                break
+                            proposed_dirs[g] = sdir
+
+                        if step_ok:
+                            # Mark any skipped intermediate anchors inside this collinear step as visited
+                            # so they do not spawn nested micro-LCBs when scanning subsequent seed genomes
+                            for skip_i in range(curr_i + 1, cand_i):
+                                visited_anchors.add(aseq[skip_i][2])
+                            for g in active_g:
+                                cg_curr, ag_curr, _, _, _, _ = anchor_occ[curr_nid][g]
+                                _, ag_cand, _, _, _, _ = anchor_occ[cand_nid][g]
+                                g_aseq = contig_anchors[(g, cg_curr)]
+                                lo_a, hi_a = min(ag_curr, ag_cand), max(ag_curr, ag_cand)
+                                for mid_a in range(lo_a + 1, hi_a):
+                                    visited_anchors.add(g_aseq[mid_a][2])
+
+                            chain_nids.append(cand_nid)
+                            visited_anchors.add(cand_nid)
+                            for g, sdir in proposed_dirs.items():
+                                dir_map[g] = sdir
+                            curr_i = cand_i
+                            found_next = True
+                            break
+
+                    if not found_next:
+                        break
+
+                if len(chain_nids) >= 2 or (len(aseq) <= 2 and len(chain_nids) == 1):
+                    # Determine each genome's raw LCB span and strand relative to reference/seed genome
+                    base_g = ref_gid if ref_gid in active_g else seed_g
+                    base_dir = dir_map.get(base_g, 1) or 1
+                    base_first_strand = anchor_occ[chain_nids[0]][base_g][5]
+
+                    occ_map = {}
+                    max_span_bp = 0
+                    for g in active_g:
+                        cg = anchor_occ[chain_nids[0]][g][0]
+                        s_bp = min(anchor_occ[n][g][3] for n in chain_nids)
+                        e_bp = max(anchor_occ[n][g][4] for n in chain_nids)
+                        if e_bp - s_bp > max_span_bp:
+                            max_span_bp = e_bp - s_bp
+                        if len(chain_nids) >= 2:
+                            g_dir = dir_map.get(g, 1) or 1
+                            rel_strand = "+" if g_dir == base_dir else "-"
+                        else:
+                            g_first_strand = anchor_occ[chain_nids[0]][g][5]
+                            rel_strand = "+" if g_first_strand == base_first_strand else "-"
+                        occ_map[g] = {
+                            "contig": cg,
+                            "local_start": s_bp,
+                            "local_end": e_bp,
+                            "local_strand": rel_strand
+                        }
+
+                    non_inv_count = sum(
+                        1 for n in chain_nids
+                        if not self.pg_graph.nodes[n].get("inverted_block")
+                    )
+                    raw_lcbs.append({
+                        "nids": chain_nids,
+                        "weight": len(chain_nids),
+                        "non_inv_weight": non_inv_count,
+                        "max_span_bp": max_span_bp,
+                        "occ": occ_map
+                    })
+                i = curr_i + 1
+
+        # Filter out noisy 2-anchor micro-LCBs (< 2.5 kb and < 3 anchors) when substantial LCBs exist
+        substantial_lcbs = [
+            lcb for lcb in raw_lcbs
+            if lcb["weight"] >= 3 or lcb["max_span_bp"] >= 2500
+        ]
+        if len(substantial_lcbs) >= 5:
+            raw_lcbs = substantial_lcbs
+
+        # Filter to genomes that participate in at least one LCB
+        active_genomes_set = set()
+        for lcb in raw_lcbs:
+            if len(lcb["occ"]) >= 2:
+                active_genomes_set.update(lcb["occ"].keys())
+
+        if len(active_genomes_set) < 2 or not raw_lcbs:
+            with open(output_path, "w") as fh:
+                json.dump([], fh)
+            return []
+
+        if ref_gid not in active_genomes_set:
+            ref_gid = min(active_genomes_set, key=ref_sort_key)
+
+        # 4. Compute Optimal Contig Order & Orientation per Genome
+        contig_layout = OrderedDict()
+        contig_offsets = {}
+
+        # 4a. Reference genome contigs: ordered by decreasing nucleotide length (+ strand)
+        ref_contigs_sorted = sorted(
+            self.replicon_map[ref_gid].keys(),
+            key=lambda cid: (-contig_max_bp[(ref_gid, cid)], cid)
+        )
+        contig_layout[ref_gid] = []
+        contig_offsets[ref_gid] = {}
+        cur_off = 0
+        for cid in ref_contigs_sorted:
+            clen = contig_max_bp[(ref_gid, cid)]
+            contig_layout[ref_gid].append({
+                "sequence_id": cid,
+                "strand": "+",
+                "bp_length": clen
+            })
+            contig_offsets[ref_gid][cid] = (cur_off, "+", clen)
+            cur_off += clen
+
+        # Helper to compute global coordinate on ref_gid
+        def get_ref_mid(lcb):
+            rocc = lcb["occ"][ref_gid]
+            rcid = rocc["contig"]
+            roff, _, _ = contig_offsets[ref_gid][rcid]
+            return roff + 0.5 * (rocc["local_start"] + rocc["local_end"])
+
+        # 4b. Non-reference genomes: orient & order contigs directly by non-inverted synteny with ref_gid
+        #     (using superscaffold adjacency only as a fallback for contigs without direct ref_gid LCB hits)
+        for gid in all_genomes:
+            if gid == ref_gid or gid not in active_genomes_set:
+                continue
+
+            contig_votes = {}
+            for cid in self.replicon_map[gid]:
+                contig_votes[cid] = {
+                    "plus_non_inv": 0,
+                    "minus_non_inv": 0,
+                    "plus_all": 0,
+                    "minus_all": 0,
+                    "ref_pts": []
+                }
+
+            for lcb in raw_lcbs:
+                if ref_gid in lcb["occ"] and gid in lcb["occ"]:
+                    gocc = lcb["occ"][gid]
+                    cid = gocc["contig"]
+                    w_all = lcb["weight"]
+                    w_ni = lcb["non_inv_weight"]
+                    r_mid = get_ref_mid(lcb)
+                    l_mid = 0.5 * (gocc["local_start"] + gocc["local_end"])
+                    if gocc["local_strand"] == "+":
+                        contig_votes[cid]["plus_all"] += w_all
+                        contig_votes[cid]["plus_non_inv"] += w_ni
+                    else:
+                        contig_votes[cid]["minus_all"] += w_all
+                        contig_votes[cid]["minus_non_inv"] += w_ni
+                    contig_votes[cid]["ref_pts"].append((r_mid, l_mid, w_all, w_ni, gocc["local_strand"]))
+
+            best_contig_orient = {}
+            contig_target_ref_pos = {}
+            for cid, vinfo in contig_votes.items():
+                has_ni = (vinfo["plus_non_inv"] + vinfo["minus_non_inv"]) > 0
+                if has_ni:
+                    best_contig_orient[cid] = "+" if vinfo["plus_non_inv"] >= vinfo["minus_non_inv"] else "-"
+                elif (vinfo["plus_all"] + vinfo["minus_all"]) > 0:
+                    best_contig_orient[cid] = "+" if vinfo["plus_all"] >= vinfo["minus_all"] else "-"
+                else:
+                    best_contig_orient[cid] = "+"
+
+                if vinfo["ref_pts"]:
+                    # Weighted mean reference coordinate using non-inverted LCB weights when available
+                    tot_w = sum((x[3] if has_ni else x[2]) for x in vinfo["ref_pts"])
+                    if tot_w > 0:
+                        mean_r = sum(x[0] * (x[3] if has_ni else x[2]) for x in vinfo["ref_pts"]) / float(tot_w)
+                    else:
+                        mean_r = sum(x[0] for x in vinfo["ref_pts"]) / float(len(vinfo["ref_pts"]))
+                    contig_target_ref_pos[cid] = mean_r
+                else:
+                    contig_target_ref_pos[cid] = None
+
+            # Fallback propagation along Panaconda superscaffolds ONLY for contigs lacking direct ref_gid LCBs
+            scaf_data = getattr(self, "genome_superscaffolds", {}).get(gid, {})
+            for scaf in scaf_data.get("scaffolds", []):
+                chain = [item for item in scaf.get("chain", []) if item["contig"] in self.replicon_map[gid]]
+                if len(chain) < 2:
+                    continue
+                for idx_c, item in enumerate(chain):
+                    cid = item["contig"]
+                    if contig_target_ref_pos[cid] is not None:
+                        continue
+                    # Find nearest neighbor in the same superscaffold chain that has a known ref position
+                    for dist in range(1, len(chain)):
+                        for nbr_idx in (idx_c - dist, idx_c + dist):
+                            if 0 <= nbr_idx < len(chain):
+                                nbr_cid = chain[nbr_idx]["contig"]
+                                if contig_target_ref_pos[nbr_cid] is not None:
+                                    same_chain_orient = (item["orient"] == chain[nbr_idx]["orient"])
+                                    best_contig_orient[cid] = (
+                                        best_contig_orient[nbr_cid]
+                                        if same_chain_orient
+                                        else flip_strand(best_contig_orient[nbr_cid])
+                                    )
+                                    offset_dir = 1 if nbr_idx < idx_c else -1
+                                    if best_contig_orient[nbr_cid] == "-":
+                                        offset_dir = -offset_dir
+                                    contig_target_ref_pos[cid] = contig_target_ref_pos[nbr_cid] + offset_dir * 0.1 * dist
+                                    break
+                        if contig_target_ref_pos[cid] is not None:
+                            break
+
+            sorted_cids = sorted(
+                self.replicon_map[gid].keys(),
+                key=lambda cid: (
+                    0 if contig_target_ref_pos[cid] is not None else 1,
+                    contig_target_ref_pos[cid] if contig_target_ref_pos[cid] is not None else float("inf"),
+                    -contig_max_bp[(gid, cid)],
+                    cid
+                )
+            )
+
+            contig_layout[gid] = []
+            contig_offsets[gid] = {}
+            cur_off = 0
+            for cid in sorted_cids:
+                c_orient = best_contig_orient[cid]
+                clen = contig_max_bp[(gid, cid)]
+                contig_layout[gid].append({
+                    "sequence_id": cid,
+                    "strand": c_orient,
+                    "bp_length": clen
+                })
+                contig_offsets[gid][cid] = (cur_off, c_orient, clen)
+                cur_off += clen
+
+        # 5. Compute Global Coordinates per (LCB, Genome) and Seriate Genome Tracks Vertically
+        lcb_global_coords = []
+        for lcb in raw_lcbs:
+            g_coords = {}
+            for gid, gocc in lcb["occ"].items():
+                if gid not in contig_offsets:
+                    continue
+                cid = gocc["contig"]
+                c_off, c_orient, c_len = contig_offsets[gid][cid]
+                raw_s = gocc["local_start"]
+                raw_e = gocc["local_end"]
+                raw_str = gocc["local_strand"]
+                if c_orient == "+":
+                    g_s = c_off + raw_s
+                    g_e = c_off + raw_e
+                    g_str = raw_str
+                else:
+                    g_s = c_off + max(1, c_len - raw_e + 1)
+                    g_e = c_off + max(1, c_len - raw_s + 1)
+                    g_str = flip_strand(raw_str)
+                g_coords[gid] = {
+                    "start": int(g_s),
+                    "end": int(g_e),
+                    "mid": 0.5 * (g_s + g_e),
+                    "strand": g_str,
+                    "contig": cid,
+                    "contig_orient": c_orient,
+                    "local_start": int(raw_s),
+                    "local_end": int(raw_e),
+                    "local_strand": raw_str
+                }
+            if len(g_coords) >= 2:
+                # Normalize strands within each LCB so the reference/topmost genome is '+'
+                lcb_global_coords.append(g_coords)
+
+        active_genomes = [g for g in all_genomes if g in contig_offsets]
+        pair_crossings = collections.defaultdict(int)
+        for i_g in range(len(active_genomes)):
+            g1 = active_genomes[i_g]
+            for j_g in range(i_g + 1, len(active_genomes)):
+                g2 = active_genomes[j_g]
+                shared_pts = [
+                    (gc[g1]["mid"], gc[g2]["mid"])
+                    for gc in lcb_global_coords
+                    if g1 in gc and g2 in gc
+                ]
+                shared_pts.sort(key=lambda x: x[0])
+                # Count inversions in y
+                y_vals = [pt[1] for pt in shared_pts]
+                cross_cnt = 0
+                for idx1 in range(len(y_vals)):
+                    y1 = y_vals[idx1]
+                    for idx2 in range(idx1 + 1, len(y_vals)):
+                        if y1 > y_vals[idx2]:
+                            cross_cnt += 1
+                pair_crossings[(g1, g2)] = cross_cnt
+                pair_crossings[(g2, g1)] = cross_cnt
+
+        if len(active_genomes) <= 8:
+            import itertools
+            best_order = [ref_gid] + [g for g in active_genomes if g != ref_gid]
+            best_cost = sum(pair_crossings[(best_order[k], best_order[k + 1])] for k in range(len(best_order) - 1))
+            for perm in itertools.permutations(active_genomes):
+                cand = list(perm)
+                cost = sum(pair_crossings[(cand[k], cand[k + 1])] for k in range(len(cand) - 1))
+                if cost < best_cost or (cost == best_cost and cand.index(ref_gid) < best_order.index(ref_gid)):
+                    best_cost = cost
+                    best_order = cand
+            track_order = best_order
+        else:
+            # Greedy nearest-neighbor + 2-opt local search
+            other_active = [g for g in active_genomes if g != ref_gid]
+            rem = set(other_active)
+            track_order = [ref_gid]
+            while rem:
+                last_g = track_order[-1]
+                nxt_g = min(rem, key=lambda g: (pair_crossings[(last_g, g)], g))
+                track_order.append(nxt_g)
+                rem.remove(nxt_g)
+            improved = True
+            while improved:
+                improved = False
+                for i_idx in range(len(track_order) - 1):
+                    for j_idx in range(i_idx + 1, len(track_order)):
+                        cand = track_order[:i_idx] + list(reversed(track_order[i_idx:j_idx + 1])) + track_order[j_idx + 1:]
+                        cur_c = sum(pair_crossings[(track_order[k], track_order[k + 1])] for k in range(len(track_order) - 1))
+                        new_c = sum(pair_crossings[(cand[k], cand[k + 1])] for k in range(len(cand) - 1))
+                        if new_c < cur_c:
+                            track_order = cand
+                            improved = True
+
+        track_idx_map = {gid: idx + 1 for idx, gid in enumerate(track_order)}
+
+        # 6. Format Output LCB Array for MauveViewer & GenomeAlignment.js
+        def lcb_sort_key(gc):
+            min_t = min(track_idx_map[g] for g in gc)
+            top_g = track_order[min_t - 1]
+            return (min_t, gc[top_g]["start"], -len(gc))
+
+        lcb_global_coords.sort(key=lcb_sort_key)
+
+        formatted_lcbs = []
+        for gc in lcb_global_coords:
+            sorted_gids = sorted(gc.keys(), key=lambda g: track_idx_map[g])
+            top_g = sorted_gids[0]
+            flip_all = (gc[top_g]["strand"] == "-")
+            lcb_regions = []
+            for gid in sorted_gids:
+                info = gc[gid]
+                disp_strand = flip_strand(info["strand"]) if flip_all else info["strand"]
+                raw_strand = flip_strand(info["local_strand"]) if flip_all else info["local_strand"]
+                lcb_regions.append({
+                    "name": f"{gid}.fasta",
+                    "start": info["start"],
+                    "end": info["end"],
+                    "strand": disp_strand,
+                    "lcb_idx": track_idx_map[gid],
+                    "contig": info["contig"],
+                    "contig_orient": info["contig_orient"],
+                    "local_start": info["local_start"],
+                    "local_end": info["local_end"],
+                    "local_strand": raw_strand
+                })
+            formatted_lcbs.append(lcb_regions)
+
+        if formatted_lcbs and formatted_lcbs[0]:
+            ordered_layout_meta = OrderedDict()
+            for gid in track_order:
+                ordered_layout_meta[gid] = contig_layout[gid]
+            formatted_lcbs[0][0]["_contig_layout"] = ordered_layout_meta
+            formatted_lcbs[0][0]["_track_order"] = track_order
+
+        with open(output_path, "w") as fh:
+            json.dump(formatted_lcbs, fh, indent=2)
+
+        total_crossings = sum(pair_crossings[(track_order[k], track_order[k + 1])] for k in range(len(track_order) - 1))
+        logging.warning(
+            f"Mauve Alignment Export: Emitted {len(formatted_lcbs)} coalesced LCBs across {len(track_order)} genomes "
+            f"to {output_path} (total adjacent-track LCB crossings: {total_crossings})."
+        )
+        return formatted_lcbs
 
     def compute_graph_metrics(self):
         """

@@ -585,6 +585,32 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertIn("contig\tc1\tforward\t", mauve_text)
         self.assertIn("contig\tc3\treverse\t", mauve_text)
 
+        # Verify Mauve-Viewer compatible whole-genome alignment JSON (*_alignment.json)
+        align_json_path = base_out + "_alignment.json"
+        self.assertTrue(os.path.exists(align_json_path))
+        with open(align_json_path) as fh:
+            lcbs = json.load(fh)
+        self.assertGreaterEqual(len(lcbs), 4)
+        for lcb in lcbs:
+            self.assertGreaterEqual(len(lcb), 2)
+            lcb_indices = [r["lcb_idx"] for r in lcb]
+            self.assertEqual(lcb_indices, sorted(lcb_indices))
+            for r in lcb:
+                self.assertTrue(r["name"].endswith(".fasta"))
+                self.assertLessEqual(r["start"], r["end"])
+                self.assertIn(r["strand"], ("+", "-"))
+
+        # Check _contig_layout metadata on first LCB region and verify g3's c3 is oriented '-' so all g3 LCBs are '+' and monotonic
+        contig_layout = lcbs[0][0].get("_contig_layout", {})
+        self.assertIn("g3", contig_layout)
+        g3_layout_pairs = [(item["sequence_id"], item["strand"]) for item in contig_layout["g3"]]
+        self.assertEqual(g3_layout_pairs, [("c1", "+"), ("c2", "+"), ("c3", "-"), ("c4", "+")])
+        g3_regions = [r for lcb in lcbs for r in lcb if r["name"] == "g3.fasta"]
+        self.assertEqual(len(g3_regions), 4)
+        self.assertTrue(all(r["strand"] == "+" for r in g3_regions))
+        g3_starts = [r["start"] for r in g3_regions]
+        self.assertEqual(g3_starts, sorted(g3_starts))
+
 
 if __name__ == '__main__':
     unittest.main()
