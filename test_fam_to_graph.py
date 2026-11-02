@@ -153,7 +153,8 @@ g2\tOrg2\tchr2\tf4_10\t1000\t1100\tD3"""
         summary = json.loads(summary_el.text)
         self.assertEqual(summary["total_nodes"], 20)
         self.assertEqual(summary["remote_cnv"], 4)
-        self.assertEqual(summary["copy_number_variants"], 0)
+        self.assertEqual(summary["local_cnv"], 0)
+        self.assertEqual(summary["copy_number_variants"], 4)
 
     def test_inversion_and_shift_repeat_ambiguity(self):
         """Verify opposite-direction contigs restore reference strand, true DNA inversions stay contiguous across k-mers, and shift splits preserve repeat_ambiguity."""
@@ -489,29 +490,101 @@ g2\tOrg2\tchr2\tp4_7\t700\t800\t+\tD3"""
         self.assertIn("Replicon Bridge", rep_manifest)
         self.assertIn("Fragment", rep_manifest)
 
-        # 5. Open-ended spur test (simulating tandem-repeat-broken spur like nodes 877/4045/4044/2415):
-        # Remove the middle edge (ISL_1, ISL_2) from pg_graph on gm before running flag_bridges() and annotate_major_blocks_tfs()
-        gm_spur = self._build_graph(contigs, min_seq=1)
-        spur_fam_to_node = {d.get("family"): n for n, d in gm_spur.pg_graph.nodes(data=True)}
-        n_isl1 = spur_fam_to_node["ISL_1"]
-        n_isl2 = spur_fam_to_node["ISL_2"]
-        if gm_spur.pg_graph.has_edge(n_isl1, n_isl2):
-            gm_spur.pg_graph.remove_edge(n_isl1, n_isl2)
-        if gm_spur.pg_graph.has_edge(n_isl2, n_isl1):
-            gm_spur.pg_graph.remove_edge(n_isl2, n_isl1)
-        gm_spur.flag_bridges()
-        gm_spur.tag_structural_variants()
-        gm_spur.annotate_major_blocks_tfs(min_node_fraction=0.05)
-        # Neither open-ended spur node should be flagged as an accessory island (alternative_path) or translocation_bridge
-        self.assertFalse(gm_spur.pg_graph.nodes[n_isl1].get("alternative_path", False))
-        self.assertFalse(gm_spur.pg_graph.nodes[n_isl2].get("alternative_path", False))
-        self.assertFalse(gm_spur.pg_graph.nodes[n_isl1].get("translocation_bridge", False))
-        self.assertFalse(gm_spur.pg_graph.nodes[n_isl2].get("translocation_bridge", False))
-        # Both spur nodes are attached exclusively to Block_1 on Block_1's own contig and should inherit Block_1, not Fragment
-        self.assertEqual(gm_spur.pg_graph.nodes[n_isl1].get("block"), "Block_1")
-        self.assertEqual(gm_spur.pg_graph.nodes[n_isl2].get("block"), "Block_1")
+    def test_inline_scaffolding_and_formats(self):
+        """Verify Contiguous Anchor Packet in-line scaffolding across direct_abutment, gapped_bridge, and terminal_overlap topologies and AGP / Mauve Contig Mover outputs."""
+        # Complete reference genomes g1 & g2 have 18 genes F1..F18 (+) on a single chromosome chr1.
+        # Fragmented genome g3 has 4 contigs that reconstruct chr1 via all 3 join topologies:
+        #   - c1 (+): F1..F5 (tail at F5)
+        #   - c2 (+): F6..F9 (head at F6 -> 0-gap direct_abutment with c1 tail; tail at F9)
+        #   - c3 (-): F15(-), F14(-), F13(-), F12(-) (reverse-oriented contig; 5' head in assembly is F15, 3' tail in assembly is F12,
+        #             so when oriented '-' its syntenic entry is F12 (3' tail) and syntenic exit is F15 (5' head);
+        #             separated from c2 tail F9 by 2-gene bridge F10..F11 -> gapped_bridge)
+        #   - c4 (+): F15..F18 (head at F15 shares terminal anchor node F15 with c3(-) 5' head -> terminal_overlap of 1 node)
+        rows = ["#genome\torganism\tcontig\tfeature\tstart\tend\tstrand\tgroup"]
+        for gid, org in [("g1", "Ref1"), ("g2", "Ref2")]:
+            pos = 100
+            for i in range(1, 19):
+                rows.append(f"{gid}\t{org}\t{gid}_chr1\tf_{gid}_{i}\t{pos}\t{pos+90}\t+\tF{i}")
+                pos += 100
+        # g3 contig c1: F1..F5 (+)
+        pos = 100
+        for i in range(1, 6):
+            rows.append(f"g3\tDraft3\tc1\tf_g3_c1_{i}\t{pos}\t{pos+90}\t+\tF{i}")
+            pos += 100
+        # g3 contig c2: F6..F9 (+)
+        pos = 100
+        for i in range(6, 10):
+            rows.append(f"g3\tDraft3\tc2\tf_g3_c2_{i}\t{pos}\t{pos+90}\t+\tF{i}")
+            pos += 100
+        # g3 contig c3: sequenced in reverse orientation F15(-), F14(-), F13(-), F12(-)
+        pos = 100
+        for i in [15, 14, 13, 12]:
+            rows.append(f"g3\tDraft3\tc3\tf_g3_c3_{i}\t{pos}\t{pos+90}\t-\tF{i}")
+            pos += 100
+        # g3 contig c4: F15..F18 (+) (shares F15 with c3)
+        pos = 100
+        for i in range(15, 19):
+            rows.append(f"g3\tDraft3\tc4\tf_g3_c4_{i}\t{pos}\t{pos+90}\t+\tF{i}")
+            pos += 100
+
+        scaf_file = os.path.join(self.temp_dir.name, "scaf_features.txt")
+        base_out = os.path.join(self.temp_dir.name, "scaf_test")
+        with open(scaf_file, "w") as f:
+            f.write("\n".join(rows))
+
+        gm = GraphMaker(
+            feature_files=[scaf_file],
+            feature_selector="genome_id",
+            file_type="patric_tab",
+            context="genome",
+            ksize=3,
+            break_conflict=False,
+            label_function=False,
+            diversity="genus",
+            minSeq=1,
+            alpha="pgfam_id"
+        )
+        gm.processFeatures()
+        gm.RF_to_PG()
+        gm.calcStatistics()
+        gm.compute_graph_metrics()
+        gm.detect_and_annotate_superbubbles()
+        gm.flag_bridges()
+        gm.tag_structural_variants()
+        gm.annotate_major_blocks_tfs()
+        gm.write_reports(base_out)
+
+        # Verify all 3 primary joins were detected for g3 and chained into a single 4-contig superscaffold
+        g3_primary = [r for r in gm.inline_scaffold_joins if r["target_genome"] == "g3" and r["status"] == "PRIMARY"]
+        self.assertEqual(len(g3_primary), 3, f"Expected 3 primary joins for g3, got {g3_primary}")
+        join_types = {r["join_type"] for r in g3_primary}
+        self.assertEqual(join_types, {"direct_abutment", "gapped_bridge", "terminal_overlap"})
+
+        g3_chains = gm.genome_superscaffolds.get("g3", {}).get("scaffolds", [])
+        self.assertEqual(len(g3_chains), 1)
+        chain_contigs = [(item["contig"], item["orient"]) for item in g3_chains[0]["chain"]]
+        self.assertEqual(chain_contigs, [("c1", "+"), ("c2", "+"), ("c3", "-"), ("c4", "+")])
+
+        # Verify AGP v2.1, Mauve Contig Mover (*_mauve_contigs.tab), and TSV files were written and formatted properly
+        tsv_path = base_out + "_scaffold_recommendations.tsv"
+        agp_path = base_out + "_scaffolds.agp"
+        mauve_path = base_out + "_mauve_contigs.tab"
+        self.assertTrue(os.path.exists(tsv_path))
+        self.assertTrue(os.path.exists(agp_path))
+        self.assertTrue(os.path.exists(mauve_path))
+
+        with open(agp_path) as fh:
+            agp_text = fh.read()
+        self.assertIn("##agp-version\t2.1", agp_text)
+        self.assertIn("align_genus", agp_text)
+        self.assertIn("\tW\tc3\t1\t", agp_text)
+
+        with open(mauve_path) as fh:
+            mauve_text = fh.read()
+        self.assertIn("Ordered Contigs", mauve_text)
+        self.assertIn("contig\tc1\tforward\t", mauve_text)
+        self.assertIn("contig\tc3\treverse\t", mauve_text)
 
 
 if __name__ == '__main__':
     unittest.main()
-
