@@ -402,6 +402,187 @@ class GraphMaker():
                 for g in self.contig_unorder.keys():
                     ch.write("\t".join([g] + list(self.contig_unorder[g].keys())) + "\n")
 
+    def compute_synteny_tree(self):
+        """
+        Compute a midpoint-rooted Neighbor-Joining (NJ) pan-synteny tree (Newick string)
+        from pairwise shared syntenic adjacencies and pan-synteny nodes across genomes.
+        """
+        if hasattr(self, "synteny_tree_newick") and self.synteny_tree_newick:
+            return self.synteny_tree_newick
+
+        genomes = sorted(self.replicon_map.keys())
+        n_gen = len(genomes)
+        if n_gen == 0:
+            self.synteny_tree_newick = ";"
+            return self.synteny_tree_newick
+        if n_gen == 1:
+            self.synteny_tree_newick = f"({genomes[0]}:0.01);"
+            return self.synteny_tree_newick
+        if n_gen == 2:
+            self.synteny_tree_newick = f"({genomes[0]}:0.01,{genomes[1]}:0.01);"
+            return self.synteny_tree_newick
+
+        # Collect per-genome pan-synteny node sets and undirected syntenic adjacency sets
+        genome_nodes = {g: set() for g in genomes}
+        genome_edges = {g: set() for g in genomes}
+
+        for u, d in self.pg_graph.nodes(data=True):
+            feats = d.get("features", {})
+            if isinstance(feats, dict):
+                for g in feats.keys():
+                    if g in genome_nodes:
+                        genome_nodes[g].add(u)
+
+        for u, v, d in self.pg_graph.edges(data=True):
+            ekey = (u, v) if str(u) <= str(v) else (v, u)
+            egens = d.get("genomes", set())
+            if isinstance(egens, str):
+                egens = [x for x in egens.split(",") if x]
+            for g in egens:
+                if g in genome_edges:
+                    genome_edges[g].add(ekey)
+
+        # Pairwise synteny Dice distance matrix (70% syntenic adjacency conservation + 30% pan-synteny node sharing)
+        dist = {i: {} for i in range(n_gen)}
+        for i in range(n_gen):
+            dist[i][i] = 0.0
+            gi = genomes[i]
+            ei = genome_edges[gi]
+            ni = genome_nodes[gi]
+            for j in range(i + 1, n_gen):
+                gj = genomes[j]
+                ej = genome_edges[gj]
+                nj = genome_nodes[gj]
+                denom_e = len(ei) + len(ej)
+                d_edge = 1.0 - (2.0 * len(ei & ej) / denom_e) if denom_e > 0 else 1.0
+                denom_n = len(ni) + len(nj)
+                d_node = 1.0 - (2.0 * len(ni & nj) / denom_n) if denom_n > 0 else 1.0
+                d_ij = max(1e-5, 0.7 * d_edge + 0.3 * d_node)
+                dist[i][j] = d_ij
+                dist[j][i] = d_ij
+
+        # Build unrooted tree graph via Neighbor-Joining (Saitou & Nei 1987)
+        adj = {i: {} for i in range(n_gen)}
+        tip_labels = {i: genomes[i] for i in range(n_gen)}
+        active = list(range(n_gen))
+        next_node = n_gen
+
+        while len(active) > 2:
+            m = len(active)
+            r_sum = {u: sum(dist[u][v] for v in active if v != u) for u in active}
+            best_pair = None
+            best_q = float("inf")
+            for idx_a in range(m):
+                u = active[idx_a]
+                for idx_b in range(idx_a + 1, m):
+                    v = active[idx_b]
+                    q = (m - 2) * dist[u][v] - r_sum[u] - r_sum[v]
+                    if q < best_q:
+                        best_q = q
+                        best_pair = (u, v)
+
+            u, v = best_pair
+            d_uv = dist[u][v]
+            delta = (r_sum[u] - r_sum[v]) / float(m - 2)
+            lim_u = max(1e-5, 0.5 * (d_uv + delta))
+            lim_v = max(1e-5, 0.5 * (d_uv - delta))
+
+            w = next_node
+            next_node += 1
+            adj[w] = {u: lim_u, v: lim_v}
+            adj[u][w] = lim_u
+            adj[v][w] = lim_v
+
+            dist[w] = {w: 0.0}
+            for k in active:
+                if k in (u, v):
+                    continue
+                d_wk = max(1e-5, 0.5 * (dist[u][k] + dist[v][k] - d_uv))
+                dist[w][k] = d_wk
+                dist[k][w] = d_wk
+
+            active.remove(u)
+            active.remove(v)
+            active.append(w)
+
+        # Join final 2 active nodes
+        u, v = active[0], active[1]
+        d_uv = max(1e-5, dist[u][v])
+        adj[u][v] = d_uv
+        adj[v][u] = d_uv
+
+        # Midpoint rooting: find the pair of tips with maximum patristic distance
+        def bfs_patristic(start_node):
+            visited = {start_node: (0.0, None)}
+            stack = [start_node]
+            while stack:
+                curr = stack.pop()
+                cur_d, _ = visited[curr]
+                for nb, w_len in adj[curr].items():
+                    if nb not in visited:
+                        visited[nb] = (cur_d + w_len, curr)
+                        stack.append(nb)
+            return visited
+
+        max_span = -1.0
+        far_pair = (0, 1)
+        far_parents = None
+        for t1 in range(n_gen):
+            vis = bfs_patristic(t1)
+            for t2 in range(t1 + 1, n_gen):
+                d_12 = vis[t2][0]
+                if d_12 > max_span:
+                    max_span = d_12
+                    far_pair = (t1, t2)
+                    far_parents = vis
+
+        # Reconstruct path from far_pair[1] back to far_pair[0]
+        path = []
+        curr = far_pair[1]
+        while curr is not None:
+            path.append(curr)
+            curr = far_parents[curr][1]
+        path.reverse()
+
+        half_span = max_span / 2.0
+        accum = 0.0
+        root_edge = (path[0], path[1])
+        dist_from_a = adj[path[0]][path[1]] / 2.0
+        for idx_p in range(len(path) - 1):
+            a_n, b_n = path[idx_p], path[idx_p + 1]
+            e_len = adj[a_n][b_n]
+            if accum + e_len >= half_span:
+                root_edge = (a_n, b_n)
+                dist_from_a = half_span - accum
+                break
+            accum += e_len
+
+        a_n, b_n = root_edge
+        total_ab = adj[a_n][b_n]
+        len_a = max(1e-5, dist_from_a)
+        len_b = max(1e-5, total_ab - dist_from_a)
+
+        def format_label(lbl):
+            s = str(lbl)
+            if any(ch in s for ch in " (),:;[]'\""):
+                return "'" + s.replace("'", "_") + "'"
+            return s
+
+        def build_subtree(node, parent):
+            children = [nb for nb in adj[node].keys() if nb != parent]
+            if not children:
+                return format_label(tip_labels.get(node, node))
+            sub_strs = []
+            for ch in children:
+                ch_len = max(1e-5, adj[node][ch])
+                sub_strs.append(f"{build_subtree(ch, node)}:{ch_len:.5f}")
+            return "(" + ",".join(sub_strs) + ")"
+
+        left_nwk = build_subtree(a_n, b_n)
+        right_nwk = build_subtree(b_n, a_n)
+        self.synteny_tree_newick = f"({left_nwk}:{len_a:.5f},{right_nwk}:{len_b:.5f});"
+        return self.synteny_tree_newick
+
     def write_reports(self, base_path):
         import csv
         
@@ -412,6 +593,12 @@ class GraphMaker():
 
         if not hasattr(self, "inline_scaffold_joins"):
             self.detect_inline_scaffolds()
+
+        # 0. Pan-Synteny Neighbor-Joining Tree (.nwk)
+        synteny_nwk = self.compute_synteny_tree()
+        if synteny_nwk:
+            with open(f"{prefix}_synteny_tree.nwk", 'w') as f:
+                f.write(synteny_nwk + "\n")
 
         # 1. Synteny Similarity Matrix
         with open(f"{prefix}_synteny_similarity.tsv", 'w') as f:
@@ -1074,6 +1261,7 @@ class GraphMaker():
             
             norm_uw = tuple(sorted([u, w]))
             dominant_support = max_supports.get(norm_uw, 1)
+            this_path_support = path_supports.get(normalize_path(path_edges), len(data['walkers']))
             
             # The threshold is strictly less than the dominant path, unless the dominant path is just 1
             shield_threshold = dominant_support - 1 if dominant_support > 1 else 1
@@ -1090,7 +1278,6 @@ class GraphMaker():
             # Option 3A: If (U, W) also has a non-terminal direct adjacency path (empty integration site U -> W)
             # and this path is a bounded insertion (<= max_island_nodes), allow flagging the island even if >50% prevalence
             if norm_uw in has_direct_empty_site and len(bridge_nodes) <= max_island_nodes:
-                this_path_support = path_supports.get(normalize_path(path_edges), len(data['walkers']))
                 shield_threshold = max(shield_threshold, this_path_support)
 
             if broken_targets:
@@ -1112,6 +1299,10 @@ class GraphMaker():
                             self.pg_graph.edges[direction]['scaffold_entities'] = ",".join(sorted(merged_ent))
 
             if non_terminal_targets:
+                # Never cherry-pick contig dropouts inside the dominant highway as subordinate bridges/islands
+                if this_path_support > shield_threshold:
+                    continue
+
                 # Superbubble check: if u and w share a superbubble, this is a local detour, not a translocation
                 u_bubbles = set(self.pg_graph.nodes[u].get('superbubble_id', set()))
                 for _, _, ed in self.pg_graph.out_edges(u, data=True):
@@ -1135,18 +1326,20 @@ class GraphMaker():
                 u_cnv = self.pg_graph.nodes[u].get('cnv_cluster_id', 0)
                 w_cnv = self.pg_graph.nodes[w].get('cnv_cluster_id', 0)
                 flank_cnvs = {c for c in (u_cnv, w_cnv) if c and c != 0}
+                non_cnv_bridge_nodes = []
                 true_bridge_nodes = []
                 for n in bridge_nodes:
                     n_cnv = self.pg_graph.nodes[n].get('cnv_cluster_id', 0)
                     if n_cnv and n_cnv in flank_cnvs:
                         continue
+                    non_cnv_bridge_nodes.append(n)
                     n_gens = set(self.pg_graph.nodes[n].get('features', {}).keys()) - {'info', 'md5', 'start', 'end'}
                     if len(n_gens) <= shield_threshold:
                         true_bridge_nodes.append(n)
 
-                # Guardrail 1: An accessory island or bridge must contain >= 1 unique internal bridge node.
-                # Walks consisting solely of conserved backbone nodes (e.g., inversions) or 0-node jumps belong to tag_structural_variants.
-                if not true_bridge_nodes:
+                # Guardrail 1: An elementary accessory island or bridge must contain >= 1 unique internal bridge node
+                # and must not jump over intermediate conserved backbone nodes (which belong to separate elementary spans).
+                if not true_bridge_nodes or len(true_bridge_nodes) < len(non_cnv_bridge_nodes):
                     continue
 
                 # Guardrail 2: Do not double-tag paths whose internal nodes are already classified as a superbubble.
@@ -1162,6 +1355,22 @@ class GraphMaker():
 
                 # Distinguish Local Collinear Accessory Islands vs. Cross-Locus / Replicon Bridges
                 # based on where flanking anchors U and W sit in the reference target genomes (independent of major_block).
+                walkers = data['walkers']
+                path_edge_set = {(e[0], e[1]) for e in path_edges} | {(e[1], e[0]) for e in path_edges}
+
+                def shares_flank_with_walker(anchor_node, target_gen):
+                    for _, nbr, ed in self.pg_graph.out_edges(anchor_node, data=True):
+                        if (anchor_node, nbr) not in path_edge_set:
+                            eg = ed.get('genomes', set())
+                            if target_gen in eg and (eg & walkers):
+                                return True
+                    for nbr, _, ed in self.pg_graph.in_edges(anchor_node, data=True):
+                        if (nbr, anchor_node) not in path_edge_set:
+                            eg = ed.get('genomes', set())
+                            if target_gen in eg and (eg & walkers):
+                                return True
+                    return False
+
                 local_collinear_count = 0
                 cross_locus_count = 0
                 u_feat_all = self.pg_graph.nodes[u].get('features', {})
@@ -1187,11 +1396,17 @@ class GraphMaker():
                         if is_local_collinear:
                             break
                     if is_local_collinear:
-                        local_collinear_count += 1
-                    else:
+                        if len(bridge_nodes) <= max_island_nodes:
+                            local_collinear_count += 1
+                    elif len(bridge_nodes) <= max_local_window and shares_flank_with_walker(u, t_gen) and shares_flank_with_walker(w, t_gen):
                         cross_locus_count += 1
 
+                if local_collinear_count == 0 and cross_locus_count == 0:
+                    continue
+
                 is_translocation_bridge = (cross_locus_count > local_collinear_count)
+                if is_translocation_bridge and cross_locus_count <= this_path_support:
+                    continue
 
                 if is_translocation_bridge:
                     for n in true_bridge_nodes:
@@ -2833,15 +3048,16 @@ class GraphMaker():
             
         total_nodes = self.pg_graph.number_of_nodes()
         min_nodes_req = total_nodes * min_node_fraction
-        # Exclude intra_contig_rearrangement so intra-replicon rearrangements do not shatter a chromosome
-        junction_flags = {'alt_path_junction', 'bridge_junction', 'breakpoint_junction', 'repeat_fragmentation_junction',
-                          'alternative_path', 'translocation_bridge', 'genomic_rearrangement', 'inter_contig_rearrangement'}
+        # Exclude intra_contig_rearrangement and local collinear alternative_path islands so intra-replicon variants do not shatter a chromosome
+        junction_flags = {'bridge_junction', 'breakpoint_junction', 'repeat_fragmentation_junction',
+                          'translocation_bridge', 'genomic_rearrangement', 'inter_contig_rearrangement'}
+        seed_exclude_flags = junction_flags | {'alt_path_junction', 'alternative_path'}
         
         while True:
             # 1. Find the heaviest unvisited edge that still has threads (and is not a structural junction) to seed a new Block
             seed_edge = None
             for e, info in unvisited_edges.items():
-                if len(info['threads']) > 0 and not any(info['data'].get(flag) for flag in junction_flags):
+                if len(info['threads']) > 0 and not any(info['data'].get(flag) for flag in seed_exclude_flags):
                     seed_edge = e
                     break
             
@@ -3022,14 +3238,14 @@ class GraphMaker():
             touched_major = {lbl for lbl in touched_labels if lbl.startswith("Block_")}
             comp_threads = set().union(*(undirected_pg.edges[u, v].get(momentum_key, set()) for u, v in comp_edges))
 
-            if len(touched_major) >= 2 or (len(touched_major) == 1 and "Fragment" in touched_labels):
+            if len(touched_major) >= 2:
                 target_label = "Replicon Bridge"
-            elif len(touched_major) == 1 and len(boundary_nodes) >= 1:
+            elif len(touched_major) == 1 and "Fragment" not in touched_labels and len(boundary_nodes) >= 1:
                 host_block = next(iter(touched_major))
                 if comp_threads & block_threads.get(host_block, set()):
                     target_label = host_block
                 else:
-                    target_label = "Replicon Bridge"
+                    target_label = "Fragment"
             else:
                 target_label = "Fragment"
 
@@ -4633,7 +4849,8 @@ def main():
         "fragmented_cnv": len(fragmented_cnv_clusters),                          # Shattered / fragmented localized repeat clusters
         "parameters": {"k": pargs.ksize, "min": pargs.min},
         "block_manifest": list(block_ids),
-        "contig_map": contig_map
+        "contig_map": contig_map,
+        "synteny_tree": gmaker.compute_synteny_tree()
     }
 
     # Trigger the TSV exports alongside the main GEXF/GFA while pg_graph attributes are still native sets/dicts
